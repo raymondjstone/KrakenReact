@@ -111,7 +111,10 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
   };
 
   useEffect(() => {
-    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    // Double rAF ensures the flexbox layout has fully resolved before triggering resize
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    });
   }, [activeTab]);
 
   const allTabs = [...fixedTabs, ...chartTabs, { id: 'settings', label: 'Settings' }];
