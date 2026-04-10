@@ -17,17 +17,16 @@ public class DbMethods
 
     public async Task<T> UseDbContextAsync<T>(Func<KrakenDbContext, Task<T>> dbOperation, int maxRetries = 3, int delayMs = 500)
     {
-        KrakenDbContext? context = null;
         using var scope = new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled);
         int attempt = 0;
         while (true)
         {
+            KrakenDbContext? context = null;
             try
             {
                 context = await _factory.CreateDbContextAsync();
                 var result = await dbOperation(context);
                 scope.Complete();
-                if (context is not null) await context.DisposeAsync();
                 return result;
             }
             catch (SqlException ex) when (ex.Number == 1205)
@@ -43,8 +42,11 @@ public class DbMethods
             catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
-                if (context is not null) await context.DisposeAsync();
                 return default;
+            }
+            finally
+            {
+                if (context is not null) await context.DisposeAsync();
             }
         }
     }

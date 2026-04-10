@@ -50,10 +50,13 @@ public class KrakenWebSocketV2Service : BackgroundService
                 _logger.LogInformation("[WS V2] Reconnection: {Type}", info.Type);
                 _ = Task.Run(async () =>
                 {
-                    // Refresh token on reconnect - previous token may have expired
-                    var tokenResult = await _kraken.GetWebSocketAsyncToken();
-                    if (tokenResult != null) _wsToken = tokenResult.Token;
-                    await Subscribe();
+                    try
+                    {
+                        var freshToken = await _kraken.GetWebSocketAsyncToken();
+                        if (freshToken != null) _wsToken = freshToken.Token;
+                        await Subscribe();
+                    }
+                    catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error during reconnect subscribe"); }
                 });
             });
 
@@ -145,7 +148,8 @@ public class KrakenWebSocketV2Service : BackgroundService
                         if (status == "filled" || status == "partially_filled" || status == "closed")
                             hasFill = true;
                     }
-                    _ = _hub.Clients.All.SendAsync("ExecutionUpdate", execMsg.Data);
+                    _ = _hub.Clients.All.SendAsync("ExecutionUpdate", execMsg.Data)
+                        .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] ExecutionUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
 
                     // When a trade fills, fetch fresh trades+ledger from Kraken API so DB is up to date
                     if (hasFill)
@@ -202,7 +206,16 @@ public class KrakenWebSocketV2Service : BackgroundService
                             LatestValueGbp = valueGbp
                         };
                     }
-                    _ = _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+                    // Recalculate portfolio percentages
+                    var totalPortfolioValue = _state.Balances.Values.Sum(x => x.LatestValue);
+                    if (totalPortfolioValue > 0)
+                    {
+                        foreach (var bal in _state.Balances.Values)
+                            bal.PortfolioPercentage = Math.Round(bal.LatestValue / totalPortfolioValue * 100, 2);
+                    }
+
+                    _ = _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList())
+                        .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] BalanceUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
                 }
             }
             catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error parsing balances"); }

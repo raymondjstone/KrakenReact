@@ -10,29 +10,30 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 export default function BalancesPage() {
   const [rowData, setRowData] = useState([]);
   const [total, setTotal] = useState(0);
-  const [usdGbpRate, setUsdGbpRate] = useState(0);
+  const [totalGbp, setTotalGbp] = useState(0);
   const { gridTheme } = useTheme();
 
+  const updateFromBalances = (balances) => {
+    setRowData(balances);
+    setTotal(balances.reduce((sum, b) => sum + (b.latestValue || 0), 0));
+    setTotalGbp(balances.reduce((sum, b) => sum + (b.latestValueGbp || 0), 0));
+  };
+
   useEffect(() => {
+    let disposed = false;
     const loadBalances = () => {
-      api.get('/balances').then(r => {
-        setRowData(r.data.balances);
-        setTotal(r.data.balances.reduce((sum, b) => sum + b.latestValue, 0));
-        setUsdGbpRate(r.data.usdGbpRate || 0);
-      }).catch(console.error);
+      if (disposed) return;
+      api.get('/balances').then(r => { if (!disposed) updateFromBalances(r.data.balances || []); }).catch(console.error);
     };
     loadBalances();
 
     const refreshInterval = setInterval(loadBalances, 60000);
 
     const conn = getConnection();
-    const handler = (data, rate) => {
-      setRowData(data);
-      setTotal(data.reduce((sum, b) => sum + b.latestValue, 0));
-      if (rate != null) setUsdGbpRate(rate);
-    };
+    const handler = (data) => { if (!disposed) updateFromBalances(data); };
     conn.on('BalanceUpdate', handler);
     return () => {
+      disposed = true;
       clearInterval(refreshInterval);
       conn.off('BalanceUpdate', handler);
     };
@@ -47,7 +48,7 @@ export default function BalancesPage() {
     { field: 'latestValue', headerName: 'Value ($)', minWidth: 110, sort: 'desc',
       valueFormatter: p => Number(p.value).toFixed(2) },
     { field: 'latestValueGbp', headerName: 'Value (£)', minWidth: 110,
-      valueFormatter: p => p.value != null ? '\u00A3' + Number(p.value).toFixed(2) : '' },
+      valueFormatter: p => p.value ? '\u00A3' + Number(p.value).toFixed(2) : '' },
     { field: 'totalCostBasis', headerName: 'Cost Basis', minWidth: 110,
       valueFormatter: p => p.value != null ? '$' + Number(p.value).toFixed(2) : '' },
     { field: 'totalFees', headerName: 'Fees', minWidth: 90,
@@ -78,9 +79,9 @@ export default function BalancesPage() {
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '8px 16px', background: 'var(--bg-secondary)', color: 'var(--green)', fontWeight: 'bold', fontSize: 16, borderBottom: '1px solid var(--border)' }}>
         Total Portfolio Value: ${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-        {usdGbpRate > 0 && (
+        {totalGbp > 0 && (
           <span style={{ color: 'var(--text-muted)', fontSize: '0.85em', marginLeft: 8 }}>
-            ({'\u00A3'}{(total * usdGbpRate).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+            ({'\u00A3'}{totalGbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
           </span>
         )}
       </div>

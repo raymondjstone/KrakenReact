@@ -41,6 +41,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
   const [normalizations, setNormalizations] = useState('');
 
   const [saveStatus, setSaveStatus] = useState('');
+  const saveTimerRef = { current: null };
 
   const loadServerSettings = () => {
     api.get('/settings').then(r => {
@@ -68,6 +69,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
 
   useEffect(() => {
     loadServerSettings();
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, []);
 
   const handleThresholdChange = (val) => {
@@ -104,12 +106,14 @@ export default function SettingsPage({ settings, onSettingsChange }) {
     api.post('/settings', payload)
       .then(() => {
         setSaveStatus('Saved successfully!');
-        setTimeout(() => setSaveStatus(''), 3000);
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => setSaveStatus(''), 3000);
       })
       .catch(err => {
         setSaveStatus('Error saving settings');
         console.error(err);
-        setTimeout(() => setSaveStatus(''), 3000);
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => setSaveStatus(''), 3000);
       });
   };
 

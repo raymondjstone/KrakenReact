@@ -20,6 +20,7 @@ export default function ChartPage({ symbol }) {
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const orderLinesRef = useRef([]);
+  const resizeHandlerRef = useRef(null);
   const { theme } = useTheme();
 
   useEffect(() => {
@@ -153,6 +154,11 @@ export default function ChartPage({ symbol }) {
       conn.on('ExecutionUpdate', orderHandler);
     }
 
+    // Remove previous resize handler if any (from prior effect run)
+    if (resizeHandlerRef.current) {
+      window.removeEventListener('resize', resizeHandlerRef.current);
+    }
+
     const handleResize = () => {
       if (!chartRef.current) {
         tryCreate();
@@ -164,6 +170,7 @@ export default function ChartPage({ symbol }) {
         }
       }
     };
+    resizeHandlerRef.current = handleResize;
 
     const frameId = requestAnimationFrame(tryCreate);
     window.addEventListener('resize', handleResize);
@@ -172,6 +179,7 @@ export default function ChartPage({ symbol }) {
       disposed = true;
       cancelAnimationFrame(frameId);
       window.removeEventListener('resize', handleResize);
+      resizeHandlerRef.current = null;
       if (handler) conn.off('TickerUpdate', handler);
       if (orderHandler) {
         conn.off('OrderUpdate', orderHandler);

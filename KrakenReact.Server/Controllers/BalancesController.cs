@@ -64,6 +64,14 @@ public class BalancesController : ControllerBase
                 }
             }
 
+            // Recalculate portfolio percentages
+            var totalPortfolioValue = balances.Sum(b => b.LatestValue);
+            if (totalPortfolioValue > 0)
+            {
+                foreach (var b in balances)
+                    b.PortfolioPercentage = Math.Round(b.LatestValue / totalPortfolioValue * 100, 2);
+            }
+
             return Ok(new { balances, usdGbpRate });
         }
         catch (Exception ex)

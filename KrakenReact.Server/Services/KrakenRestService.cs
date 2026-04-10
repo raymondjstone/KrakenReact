@@ -23,8 +23,10 @@ public class KrakenRestService
     private ApiCredentials? _creds;
     private KrakenRestClient? _authClient;
     private DateTime _authClientWhen = DateTime.MinValue;
+    private readonly SemaphoreSlim _authLock = new(1, 1);
     private KrakenRestClient? _unauthClient;
     private DateTime _unauthWhen = DateTime.MinValue;
+    private readonly SemaphoreSlim _unauthLock = new(1, 1);
 
     public KrakenRestService(DbMethods db, TradingStateService state, ILogger<KrakenRestService> logger)
     {
@@ -66,34 +68,44 @@ public class KrakenRestService
     public async Task<KrakenRestClient> AuthenticatedClient()
     {
         ResetSleep();
-        if (_creds == null)
+        await _authLock.WaitAsync();
+        try
         {
-            var appcreds = await _db.GetCredentialsAsync();
-            _creds = new ApiCredentials(appcreds!.appkey, appcreds.appsecret);
-        }
-        if (_authClientWhen < DateTime.Now.AddHours(-1))
-        {
-            _authClient?.Dispose();
-            _authClient = new KrakenRestClient(options =>
+            if (_creds == null)
             {
-                options.ApiCredentials = _creds;
-                options.RequestTimeout = TimeSpan.FromSeconds(180);
-            });
-            _authClientWhen = DateTime.Now;
+                var appcreds = await _db.GetCredentialsAsync();
+                _creds = new ApiCredentials(appcreds!.appkey, appcreds.appsecret);
+            }
+            if (_authClientWhen < DateTime.Now.AddHours(-1))
+            {
+                _authClient?.Dispose();
+                _authClient = new KrakenRestClient(options =>
+                {
+                    options.ApiCredentials = _creds;
+                    options.RequestTimeout = TimeSpan.FromSeconds(180);
+                });
+                _authClientWhen = DateTime.Now;
+            }
+            return _authClient!;
         }
-        return _authClient!;
+        finally { _authLock.Release(); }
     }
 
     public async Task<KrakenRestClient> UnAuthenticatedClient()
     {
         await RateLimitUnAuthenticatedCalls();
-        if (DateTime.UtcNow.AddMinutes(-20) > _unauthWhen || _unauthClient == null)
+        await _unauthLock.WaitAsync();
+        try
         {
-            _unauthClient?.Dispose();
-            _unauthWhen = DateTime.UtcNow;
-            _unauthClient = new KrakenRestClient();
+            if (DateTime.UtcNow.AddMinutes(-20) > _unauthWhen || _unauthClient == null)
+            {
+                _unauthClient?.Dispose();
+                _unauthWhen = DateTime.UtcNow;
+                _unauthClient = new KrakenRestClient();
+            }
+            return _unauthClient;
         }
-        return _unauthClient;
+        finally { _unauthLock.Release(); }
     }
 
     public async Task GetInstrumentsAsync(bool initialLoad)

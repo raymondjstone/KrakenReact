@@ -15,12 +15,12 @@ public class KrakenWebSocketV1Service : BackgroundService
     private readonly IHubContext<TradingHub> _hub;
     private readonly ILogger<KrakenWebSocketV1Service> _logger;
     private WebsocketClient? _socket;
-    private bool _initialSubsCompleted;
+    private volatile bool _initialSubsCompleted;
     private System.Timers.Timer? _pingTimer;
-    private DateTime _lastBalanceBroadcast = DateTime.MinValue;
-    private DateTime _lastOrderBroadcast = DateTime.MinValue;
-    private bool _balancesDirty;
-    private bool _ordersDirty;
+    private long _lastBalanceBroadcastTicks = DateTime.MinValue.Ticks;
+    private long _lastOrderBroadcastTicks = DateTime.MinValue.Ticks;
+    private volatile bool _balancesDirty;
+    private volatile bool _ordersDirty;
 
     public KrakenWebSocketV1Service(TradingStateService state, AutoOrderService autoOrder, NotificationService notifications, IHubContext<TradingHub> hub, ILogger<KrakenWebSocketV1Service> logger)
     {
@@ -53,7 +53,11 @@ public class KrakenWebSocketV1Service : BackgroundService
             _socket.ReconnectionHappened.Subscribe(info =>
             {
                 _logger.LogInformation("[WS V1] Reconnection: {Type}", info.Type);
-                _ = Task.Run(() => SubscribeToAssets());
+                _ = Task.Run(async () =>
+                {
+                    try { await SubscribeToAssets(); }
+                    catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error during reconnect subscribe"); }
+                });
             });
 
             _socket.MessageReceived.Subscribe(msg =>
@@ -80,7 +84,11 @@ public class KrakenWebSocketV1Service : BackgroundService
                 {
                     try { await Task.Delay(120000, stoppingToken); }
                     catch (OperationCanceledException) { break; }
-                    if (_initialSubsCompleted) await ReSubscribeToAssets();
+                    try
+                    {
+                        if (_initialSubsCompleted) await ReSubscribeToAssets();
+                    }
+                    catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error in re-subscribe loop"); }
                 }
             }, stoppingToken);
 
@@ -97,7 +105,15 @@ public class KrakenWebSocketV1Service : BackgroundService
     {
         var pairs = _state.Symbols.Values
             .Where(s => TradingStateService.BaseCurrencies.Contains(s.QuoteAsset))
-            .Select(s => s.WebsocketName).OrderBy(x => x).ToList();
+            .Select(s => s.WebsocketName).ToList();
+
+        // Always include default + required pairs even if they aren't ZUSD-quoted
+        foreach (var dp in TradingStateService.DefaultPairs.Concat(TradingStateService.RequiredPairs))
+        {
+            if (!pairs.Contains(dp)) pairs.Add(dp);
+        }
+
+        pairs = pairs.OrderBy(x => x).ToList();
 
         foreach (var pair in pairs)
         {
@@ -190,14 +206,18 @@ public class KrakenWebSocketV1Service : BackgroundService
                 openTime = latest?.OpenTime,
                 bestAsk = tickerData.a?.FirstOrDefault(),
                 bestBid = tickerData.b?.FirstOrDefault()
-            });
+            }).ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V1] TickerUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
 
             // Run auto-order check
             _ = Task.Run(async () =>
             {
-                var result = await _autoOrder.CheckAsync(priceItem, "Default Rule");
-                _state.AutoOrders[result.Symbol] = result;
-                await _hub.Clients.All.SendAsync("AutoTradeUpdate", result);
+                try
+                {
+                    var result = await _autoOrder.CheckAsync(priceItem, "Default Rule");
+                    _state.AutoOrders[result.Symbol] = result;
+                    await _hub.Clients.All.SendAsync("AutoTradeUpdate", result);
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] Auto-order check failed for {Symbol}", pair); }
             });
 
             // Update order distances in memory
@@ -214,9 +234,9 @@ public class KrakenWebSocketV1Service : BackgroundService
                         _ordersDirty = true;
 
                         // Pushover notification when order is within 2% of current price
-                        if (Math.Abs(order.DistancePercentage) < 2 && !_state.NotifiedOrders.Contains(order.Id))
+                        if (Math.Abs(order.DistancePercentage) < 2 && !_state.HasNotified(order.Id))
                         {
-                            _state.NotifiedOrders.Add(order.Id);
+                            _state.AddNotified(order.Id);
                             _ = _notifications.Pushover(
                                 $"{order.Symbol} {latestPrice.Close} is <2% from order price",
                                 $"{order.Symbol} {order.Side} @{order.Price} near");
@@ -225,6 +245,7 @@ public class KrakenWebSocketV1Service : BackgroundService
                 }
 
                 // Recalculate balance values with updated price
+                var usdGbpRate = _state.GetUsdGbpRate();
                 foreach (var balance in _state.Balances.Values)
                 {
                     var latestPrice = _state.LatestPrice(balance.Asset);
@@ -232,23 +253,36 @@ public class KrakenWebSocketV1Service : BackgroundService
                     {
                         balance.LatestPrice = latestPrice.Close;
                         balance.LatestValue = Math.Round(balance.Total * latestPrice.Close, 2);
+                        balance.LatestValueGbp = usdGbpRate > 0 ? Math.Round(balance.LatestValue * usdGbpRate, 2) : 0;
                         _balancesDirty = true;
                     }
                 }
 
+                // Recalculate portfolio percentages
+                var totalPortfolioValue = _state.Balances.Values.Sum(b => b.LatestValue);
+                if (totalPortfolioValue > 0)
+                {
+                    foreach (var balance in _state.Balances.Values)
+                    {
+                        balance.PortfolioPercentage = Math.Round(balance.LatestValue / totalPortfolioValue * 100, 2);
+                    }
+                }
+
                 // Throttle broadcasts to at most every 5 seconds
-                var now = DateTime.UtcNow;
-                if (_ordersDirty && (now - _lastOrderBroadcast).TotalSeconds >= 5)
+                var nowTicks = DateTime.UtcNow.Ticks;
+                if (_ordersDirty && (nowTicks - Interlocked.Read(ref _lastOrderBroadcastTicks)) >= TimeSpan.FromSeconds(5).Ticks)
                 {
                     _ordersDirty = false;
-                    _lastOrderBroadcast = now;
-                    await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+                    Interlocked.Exchange(ref _lastOrderBroadcastTicks, nowTicks);
+                    try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] OrderUpdate broadcast failed"); }
                 }
-                if (_balancesDirty && (now - _lastBalanceBroadcast).TotalSeconds >= 5)
+                if (_balancesDirty && (nowTicks - Interlocked.Read(ref _lastBalanceBroadcastTicks)) >= TimeSpan.FromSeconds(5).Ticks)
                 {
                     _balancesDirty = false;
-                    _lastBalanceBroadcast = now;
-                    await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+                    Interlocked.Exchange(ref _lastBalanceBroadcastTicks, nowTicks);
+                    try { await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList()); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] BalanceUpdate broadcast failed"); }
                 }
             });
         }

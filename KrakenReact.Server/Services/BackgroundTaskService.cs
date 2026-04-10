@@ -18,7 +18,7 @@ public class BackgroundTaskService : BackgroundService
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly IHubContext<TradingHub> _hub;
     private readonly ILogger<BackgroundTaskService> _logger;
-    private bool _klinesDone = false;
+    private volatile bool _klinesDone = false;
 
     public BackgroundTaskService(
         KrakenRestService kraken, 
@@ -74,8 +74,12 @@ public class BackgroundTaskService : BackgroundService
         foreach (var s in _state.Symbols.Values.Where(s => TradingStateService.BaseCurrencies.Contains(s.QuoteAsset)))
             _state.GetOrAddPrice(s.WebsocketName);
 
-        // Ensure default pairs (including USD/GBP for currency conversion) are always loaded
+        // Ensure default pairs are loaded
         foreach (var pair in TradingStateService.DefaultPairs)
+            _state.GetOrAddPrice(pair);
+
+        // Ensure required pairs (e.g. GBP/USD for currency conversion) are always loaded
+        foreach (var pair in TradingStateService.RequiredPairs)
             _state.GetOrAddPrice(pair);
 
         // Phase 2: Fetch fresh trades, ledger, orders, balances from Kraken API immediately
@@ -90,15 +94,16 @@ public class BackgroundTaskService : BackgroundService
         _logger.LogInformation("[BG] Fresh transaction data loaded");
 
         // Notify frontend that fresh trade/ledger data is available
-        await _hub.Clients.All.SendAsync("TradesUpdated");
+        try { await _hub.Clients.All.SendAsync("TradesUpdated"); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[BG] TradesUpdated broadcast failed"); }
 
         // Phase 3: Slow kline loading in background (doesn't block trades/orders)
-        _ = Task.Run(async () => await LoadKlinesBackground(stoppingToken), stoppingToken);
+        _ = Task.Run(async () => { try { await LoadKlinesBackground(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] LoadKlinesBackground crashed"); } }, stoppingToken);
 
         // Phase 4: Start periodic timers
-        _ = Task.Run(async () => await OrderRefreshLoop(stoppingToken), stoppingToken);
-        _ = Task.Run(async () => await TransactionRefreshLoop(stoppingToken), stoppingToken);
-        _ = Task.Run(async () => await DailyTaskLoop(stoppingToken), stoppingToken);
+        _ = Task.Run(async () => { try { await OrderRefreshLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] OrderRefreshLoop crashed"); } }, stoppingToken);
+        _ = Task.Run(async () => { try { await TransactionRefreshLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] TransactionRefreshLoop crashed"); } }, stoppingToken);
+        _ = Task.Run(async () => { try { await DailyTaskLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] DailyTaskLoop crashed"); } }, stoppingToken);
 
         try { await Task.Delay(Timeout.Infinite, stoppingToken); }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -133,7 +138,8 @@ public class BackgroundTaskService : BackgroundService
         await LoadTrades(false);
         await LoadOrders(false);
         await LoadBalances();
-        await _hub.Clients.All.SendAsync("TradesUpdated");
+        try { await _hub.Clients.All.SendAsync("TradesUpdated"); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[BG] TradesUpdated broadcast failed"); }
     }
 
     private async Task LoadKlines(CancellationToken ct)
@@ -150,7 +156,8 @@ public class BackgroundTaskService : BackgroundService
                 if (TradingStateService.Blacklist.Contains(d.Base)) continue;
                 try
                 {
-                    await _hub.Clients.All.SendAsync("StatusUpdate", $"Loading prices for {d.Symbol} ({++loaded}/{total})");
+                    try { await _hub.Clients.All.SendAsync("StatusUpdate", $"Loading prices for {d.Symbol} ({++loaded}/{total})"); }
+                    catch { /* non-critical */ }
                     await LoadLatestPriceData(d);
                     var result = await _autoOrder.CheckAsync(d, "Default Rule");
                     _state.AutoOrders[result.Symbol] = result;
@@ -170,7 +177,8 @@ public class BackgroundTaskService : BackgroundService
         // Remaining
         await LoadKlinesForList(snapshot.Where(p => p.KrakenNewPricesLoaded == "no").ToList());
 
-        await _hub.Clients.All.SendAsync("StatusUpdate", $"All prices loaded ({loaded} symbols)");
+        try { await _hub.Clients.All.SendAsync("StatusUpdate", $"All prices loaded ({loaded} symbols)"); }
+        catch { /* non-critical */ }
         _logger.LogInformation("[BG] All klines loaded");
     }
 
@@ -300,7 +308,8 @@ public class BackgroundTaskService : BackgroundService
             _state.Balances[dto.Asset] = dto;
         }
 
-        await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList(), usdGbpRate);
+        try { await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList(), usdGbpRate); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[BG] BalanceUpdate broadcast failed"); }
     }
 
     private async Task OrderRefreshLoop(CancellationToken ct)
@@ -344,12 +353,14 @@ public class BackgroundTaskService : BackgroundService
             try
             {
                 _logger.LogInformation("[BG] Daily kline refresh starting at {Time}", DateTime.Now.ToString("HH:mm"));
-                await _hub.Clients.All.SendAsync("StatusUpdate", "Refreshing daily kline data...");
+                try { await _hub.Clients.All.SendAsync("StatusUpdate", "Refreshing daily kline data..."); }
+                catch { /* non-critical */ }
 
                 foreach (var p in _state.GetPriceSnapshot())
                     await LoadLatestPriceData(p);
 
-                await _hub.Clients.All.SendAsync("StatusUpdate", "Daily kline refresh complete");
+                try { await _hub.Clients.All.SendAsync("StatusUpdate", "Daily kline refresh complete"); }
+                catch { /* non-critical */ }
                 _logger.LogInformation("[BG] Daily kline refresh complete");
             }
             catch (Exception ex) { _logger.LogError(ex, "[BG] Daily task error"); }

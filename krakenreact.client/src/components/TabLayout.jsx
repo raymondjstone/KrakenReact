@@ -33,7 +33,7 @@ const fixedTabs = [
   { id: 'delisted', label: 'Delisted Pairs' },
 ];
 
-export default function TabLayout({ totalValue, usdGbpRate }) {
+export default function TabLayout({ totalValue, totalValueGbp }) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [chartTabs, setChartTabs] = useState([]);
   const [showConfig, setShowConfig] = useState(false);
@@ -159,9 +159,9 @@ export default function TabLayout({ totalValue, usdGbpRate }) {
           {totalValue > 0 && (
             <div className="portfolio-value">
               ${formatNum(totalValue)}
-              {usdGbpRate > 0 && (
+              {totalValueGbp > 0 && (
                 <span style={{ color: 'var(--text-muted)', fontSize: '0.85em', marginLeft: 6 }}>
-                  ({'\u00A3'}{formatNum(totalValue * usdGbpRate)})
+                  ({'\u00A3'}{formatNum(totalValueGbp)})
                 </span>
               )}
             </div>

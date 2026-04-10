@@ -1,6 +1,7 @@
 import * as signalR from '@microsoft/signalr';
 
 let connection = null;
+let connectionPromise = null;
 
 export function getConnection() {
   if (!connection) {
@@ -16,13 +17,12 @@ export function getConnection() {
 export async function startConnection() {
   const conn = getConnection();
   if (conn.state === signalR.HubConnectionState.Disconnected) {
-    try {
-      await conn.start();
-      console.log('SignalR connected');
-    } catch (err) {
-      console.error('SignalR connection error:', err);
-      setTimeout(() => startConnection(), 5000);
+    if (!connectionPromise) {
+      connectionPromise = conn.start()
+        .then(() => { console.log('SignalR connected'); connectionPromise = null; })
+        .catch(err => { console.error('SignalR connection error:', err); connectionPromise = null; setTimeout(() => startConnection(), 5000); });
     }
+    await connectionPromise;
   }
   return conn;
 }

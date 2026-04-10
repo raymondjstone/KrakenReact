@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api/apiClient';
-import { startConnection, getConnection } from '../api/signalRService';
+import { getConnection } from '../api/signalRService';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
 
@@ -18,13 +18,15 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
   const [bottomTab, setBottomTab] = useState('orders');
   const [orders, setOrders] = useState([]);
   const [balances, setBalances] = useState([]);
-  const [usdGbpRate, setUsdGbpRate] = useState(0);
   const [symbols, setSymbols] = useState([]);
   const { gridTheme } = useTheme();
 
   useEffect(() => {
+    let disposed = false;
     const loadPrices = () => {
+      if (disposed) return;
       api.get('/prices').then(r => {
+        if (disposed) return;
         setTickers(r.data);
         if (r.data.length > 0) {
           setSelectedSymbol(prev => {
@@ -35,16 +37,13 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
         }
       }).catch(() => {});
     };
-    const loadOrders = () => api.get('/orders').then(r => setOrders(r.data)).catch(() => {});
-    const loadBalances = () => api.get('/balances').then(r => {
-      setBalances(r.data.balances);
-      setUsdGbpRate(r.data.usdGbpRate || 0);
-    }).catch(() => {});
+    const loadOrders = () => { if (disposed) return; api.get('/orders').then(r => { if (!disposed) setOrders(r.data); }).catch(() => {}); };
+    const loadBalances = () => { if (disposed) return; api.get('/balances').then(r => { if (!disposed) setBalances(r.data.balances || []); }).catch(() => {}); };
 
     loadPrices();
     loadOrders();
     loadBalances();
-    api.get('/symbols').then(r => setSymbols(r.data.map(s => s.websocketName))).catch(() => {});
+    api.get('/symbols').then(r => { if (!disposed) setSymbols(r.data.map(s => s.websocketName)); }).catch(() => {});
 
     const refreshInterval = setInterval(() => {
       loadPrices();
@@ -52,6 +51,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       loadBalances();
     }, 60000);
 
+    const conn = getConnection();
     const tickerHandler = (data) => {
       setTickers(prev => {
         const idx = prev.findIndex(p => p.symbol === data.symbol);
@@ -67,23 +67,18 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
         return prev;
       });
     };
-    const balanceHandler = (data, rate) => {
-      setBalances(data);
-      if (rate != null) setUsdGbpRate(rate);
-    };
+    const balanceHandler = (data) => { if (!disposed) setBalances(data); };
     const executionHandler = () => loadOrders();
-    const orderHandler = (data) => setOrders(data);
+    const orderHandler = (data) => { if (!disposed) setOrders(data); };
 
-    startConnection().then(conn => {
-      conn.on('TickerUpdate', tickerHandler);
-      conn.on('BalanceUpdate', balanceHandler);
-      conn.on('ExecutionUpdate', executionHandler);
-      conn.on('OrderUpdate', orderHandler);
-    });
+    conn.on('TickerUpdate', tickerHandler);
+    conn.on('BalanceUpdate', balanceHandler);
+    conn.on('ExecutionUpdate', executionHandler);
+    conn.on('OrderUpdate', orderHandler);
 
     return () => {
+      disposed = true;
       clearInterval(refreshInterval);
-      const conn = getConnection();
       conn.off('TickerUpdate', tickerHandler);
       conn.off('BalanceUpdate', balanceHandler);
       conn.off('ExecutionUpdate', executionHandler);
@@ -121,7 +116,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       valueFormatter: p => p.value != null ? '$' + formatNumber(p.value) : '',
     },
     { field: 'latestValueGbp', headerName: 'Value (£)', minWidth: 100,
-      valueFormatter: p => p.value != null && usdGbpRate > 0 ? '\u00A3' + formatNumber(p.value) : '',
+      valueFormatter: p => p.value ? '\u00A3' + formatNumber(p.value) : '',
     },
     { field: 'portfolioPercentage', headerName: '%', minWidth: 70,
       valueFormatter: p => p.value != null ? Number(p.value).toFixed(1) + '%' : '',
@@ -133,7 +128,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       valueFormatter: p => p.value != null ? formatNumber(p.value, 4) : '',
       cellStyle: p => p.value > 0 ? { color: 'var(--yellow)' } : {},
     },
-  ], [usdGbpRate]);
+  ], []);
 
   const balanceDefaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 

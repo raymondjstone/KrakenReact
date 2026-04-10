@@ -21,6 +21,7 @@ public class PriceDataItem
 
     private readonly List<DerivedKline> _klineSnapshot = new(10000);
     private readonly object _klineLock = new();
+    private const int MaxKlines = 10000;
 
     public string CoinType
     {
@@ -47,14 +48,24 @@ public class PriceDataItem
     public void AddKline(DerivedKline kline)
     {
         if (kline == null) return;
-        lock (_klineLock) { _klineSnapshot.Add(kline); }
+        lock (_klineLock)
+        {
+            _klineSnapshot.Add(kline);
+            if (_klineSnapshot.Count > MaxKlines)
+                _klineSnapshot.RemoveRange(0, _klineSnapshot.Count - MaxKlines);
+        }
         KrakenNewPricesLoadedTime = DateTime.UtcNow;
     }
 
     public void AddKlineHistory(List<DerivedKline> klines)
     {
         if (!klines.Any()) return;
-        lock (_klineLock) { _klineSnapshot.InsertRange(0, klines); }
+        lock (_klineLock)
+        {
+            _klineSnapshot.InsertRange(0, klines);
+            if (_klineSnapshot.Count > MaxKlines)
+                _klineSnapshot.RemoveRange(0, _klineSnapshot.Count - MaxKlines);
+        }
     }
 
     public List<DerivedKline> GetKlineSnapshot()
@@ -173,7 +184,10 @@ public class TradingStateService
     public static readonly List<string> DefaultMajorCoin = new() { "BTC", "ETH", "SOL", "XRP", "XBT", "XXBT" };
     public static readonly List<string> DefaultCurrency = new() { "GBP", "ZGBP", "EUR", "ZEUR", "ZUSD", "USDT", "USDC", "USDQ", "USD" };
     public static readonly List<string> DefaultBadPairs = new() { "MATIC/USDT", "MATIC/GBP", "MATIC/USD", "XBT/USD", "TRUMP/USDT", "TRUMP/USD", "XDG/USD" };
-    public static readonly string[] DefaultDefaultPairs = { "SOL/USD", "XBT/USD", "ETH/USD", "USD/GBP" };
+    public static readonly string[] DefaultDefaultPairs = { "SOL/USD", "XBT/USD", "ETH/USD" };
+
+    /// <summary>Pairs that must always be loaded for internal use (e.g. currency conversion), regardless of user config.</summary>
+    public static readonly string[] RequiredPairs = { "GBP/USD" };
 
     // Runtime configuration - can be updated from database
     public static List<string> BaseCurrencies = new(DefaultBaseCurrencies);
@@ -220,9 +234,24 @@ public class TradingStateService
     public ConcurrentDictionary<string, BalanceDto> Balances { get; } = new();
     public ConcurrentDictionary<string, AutoTradeDto> AutoOrders { get; } = new();
     public ConcurrentDictionary<string, KrakenSymbol> Symbols { get; } = new();
-    public List<string> NotifiedOrders { get; } = new(4000);
+    private readonly HashSet<string> _notifiedOrders = new();
+    private readonly object _notifiedLock = new();
+    private const int MaxNotifiedOrders = 5000;
 
-    private readonly ReaderWriterLockSlim _symbolLock = new();
+    public bool HasNotified(string orderId)
+    {
+        lock (_notifiedLock) { return _notifiedOrders.Contains(orderId); }
+    }
+
+    public void AddNotified(string orderId)
+    {
+        lock (_notifiedLock)
+        {
+            if (_notifiedOrders.Count >= MaxNotifiedOrders)
+                _notifiedOrders.Clear();
+            _notifiedOrders.Add(orderId);
+        }
+    }
 
     public DerivedKline? LatestPrice(string asset)
     {
@@ -259,14 +288,21 @@ public class TradingStateService
         return null;
     }
 
-    /// <summary>Returns the latest USD/GBP exchange rate, or 0 if not available.</summary>
+    /// <summary>Returns the USD-to-GBP conversion rate (e.g. 0.78), or 0 if not available.</summary>
     public decimal GetUsdGbpRate()
     {
-        if (Prices.TryGetValue("USD/GBP", out var pi) && pi.LatestKline != null)
-            return pi.LatestKline.Close;
-        // Try ticker data
-        if (Prices.TryGetValue("USD/GBP", out var pi2) && pi2.TickerData != null)
-            return pi2.TickerData.LastTradePrice;
+        // Try GBP/USD pair (price = USD per GBP, e.g. 1.28) — invert to get GBP per USD
+        if (Prices.TryGetValue("GBP/USD", out var gbpUsd))
+        {
+            var price = gbpUsd.LatestKline?.Close ?? gbpUsd.TickerData?.LastTradePrice ?? 0;
+            if (price > 0) return Math.Round(1m / price, 6);
+        }
+        // Fallback: try USD/GBP pair directly (price = GBP per USD, e.g. 0.78)
+        if (Prices.TryGetValue("USD/GBP", out var usdGbp))
+        {
+            var price = usdGbp.LatestKline?.Close ?? usdGbp.TickerData?.LastTradePrice ?? 0;
+            if (price > 0) return price;
+        }
         return 0m;
     }
 

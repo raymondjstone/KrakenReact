@@ -19,9 +19,13 @@ export default function InfoPage({ onSymbolClick, pinnedSet, onPin, onUnpin }) {
   const { gridTheme } = useTheme();
 
   useEffect(() => {
-    const loadPrices = () => api.get('/prices').then(r => setRowData(r.data)).catch(console.error);
+    let disposed = false;
+    const loadPrices = () => {
+      if (disposed) return;
+      api.get('/prices').then(r => { if (!disposed) setRowData(r.data); }).catch(console.error);
+    };
     loadPrices();
-    api.get('/symbols').then(r => setSymbols(r.data.map(s => s.websocketName))).catch(console.error);
+    api.get('/symbols').then(r => { if (!disposed) setSymbols(r.data.map(s => s.websocketName)); }).catch(console.error);
 
     const refreshInterval = setInterval(loadPrices, 60000);
 
@@ -43,6 +47,7 @@ export default function InfoPage({ onSymbolClick, pinnedSet, onPin, onUnpin }) {
     };
     conn.on('TickerUpdate', handler);
     return () => {
+      disposed = true;
       clearInterval(refreshInterval);
       conn.off('TickerUpdate', handler);
     };
