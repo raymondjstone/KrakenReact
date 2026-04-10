@@ -58,6 +58,9 @@ public class BackgroundTaskService : BackgroundService
             _logger.LogInformation("[BG] Checking for credentials migration...");
             await _state.MigrateApiCredentials(dbContext);
 
+            // Sync asset normalizations with code defaults (adds new, updates changed, removes stale)
+            await _state.SyncAssetNormalizations(dbContext);
+
             // Load current configuration
             await _state.ReloadConfiguration(dbContext);
             _logger.LogInformation("[BG] Configuration loaded");

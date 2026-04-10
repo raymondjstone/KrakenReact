@@ -29,18 +29,20 @@ public class BalancesController : ControllerBase
             var balances = _state.Balances.Values.ToList();
             var usdGbpRate = _state.GetUsdGbpRate();
 
+            // Load all trades once for P/L calculation (client-side filtering since NormalizeAsset can't translate to SQL)
+            var allTrades = await _db.Trades.AsNoTracking().ToListAsync();
+
             // Calculate profit/loss for each balance
             foreach (var balance in balances)
             {
                 var normalizedAsset = TradingStateService.NormalizeAsset(balance.Asset);
 
-                // Get all trades for this asset
-                var trades = await _db.Trades
-                    .Where(t => t.Symbol == balance.Asset || 
-                                t.Symbol == normalizedAsset ||
-                                t.Symbol.Replace("/", "") == normalizedAsset ||
-                                TradingStateService.NormalizeAsset(t.Symbol) == normalizedAsset)
-                    .ToListAsync();
+                var trades = allTrades.Where(t =>
+                    t.Symbol == balance.Asset ||
+                    t.Symbol == normalizedAsset ||
+                    t.Symbol.Replace("/", "") == normalizedAsset ||
+                    TradingStateService.NormalizeAsset(t.Symbol) == normalizedAsset
+                ).ToList();
 
                 if (trades.Any())
                 {

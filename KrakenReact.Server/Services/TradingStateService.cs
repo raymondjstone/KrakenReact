@@ -181,8 +181,8 @@ public class TradingStateService
     // Default values - used as fallback if DB has no configuration
     public static readonly List<string> DefaultBaseCurrencies = new() { "ZUSD" };
     public static readonly List<string> DefaultBlacklist = new() { "TRUMP", "MELANIA", "MATIC", "K", "KILT", "MIRA", "MKR", "EOS", "XMR", "BCH" };
-    public static readonly List<string> DefaultMajorCoin = new() { "BTC", "ETH", "SOL", "XRP", "XBT", "XXBT" };
-    public static readonly List<string> DefaultCurrency = new() { "GBP", "ZGBP", "EUR", "ZEUR", "ZUSD", "USDT", "USDC", "USDQ", "USD" };
+    public static readonly List<string> DefaultMajorCoin = new() { "XBT", "ETH", "SOL", "XRP" };
+    public static readonly List<string> DefaultCurrency = new() { "GBP", "EUR", "USD", "USDT", "USDC", "USDQ" };
     public static readonly List<string> DefaultBadPairs = new() { "MATIC/USDT", "MATIC/GBP", "MATIC/USD", "XBT/USD", "TRUMP/USDT", "TRUMP/USD", "XDG/USD" };
     public static readonly string[] DefaultDefaultPairs = { "SOL/USD", "XBT/USD", "ETH/USD" };
 
@@ -201,7 +201,8 @@ public class TradingStateService
     // Balances can return either form, causing duplicate entries.
     private static Dictionary<string, string> AssetAliases = new(StringComparer.OrdinalIgnoreCase)
     {
-        { "XXBT", "XBT" }, { "XXRP", "XRP" }, { "XETH", "ETH" }, { "XXLM", "XLM" },
+        { "XXBT", "XBT" }, { "BTC", "XBT" },
+        { "XXRP", "XRP" }, { "XETH", "ETH" }, { "XXLM", "XLM" },
         { "XLTC", "LTC" }, { "XXMR", "XMR" }, { "XXDG", "XDG" }, { "XZEC", "ZEC" },
         { "XREP", "REP" }, { "XMLN", "MLN" }, { "XETC", "ETC" }, { "XDAO", "DAO" },
         { "XICN", "ICN" },
@@ -399,6 +400,44 @@ public class TradingStateService
         }
     }
 
+    /// <summary>Ensures all default asset normalizations exist in the database, adding any missing ones.</summary>
+    public async Task SyncAssetNormalizations(Data.KrakenDbContext db)
+    {
+        var existing = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a, StringComparer.OrdinalIgnoreCase);
+        var changed = false;
+
+        // Build the authoritative set from code defaults
+        var defaults = new Dictionary<string, string>(AssetAliases, StringComparer.OrdinalIgnoreCase);
+
+        // Add missing entries
+        foreach (var kvp in defaults)
+        {
+            if (!existing.ContainsKey(kvp.Key))
+            {
+                db.AssetNormalizations.Add(new AssetNormalization { KrakenName = kvp.Key, NormalizedName = kvp.Value });
+                changed = true;
+            }
+            else if (existing[kvp.Key].NormalizedName != kvp.Value)
+            {
+                // Update if the normalized name changed in code defaults
+                existing[kvp.Key].NormalizedName = kvp.Value;
+                changed = true;
+            }
+        }
+
+        // Remove DB entries that are no longer in code defaults
+        foreach (var kvp in existing)
+        {
+            if (!defaults.ContainsKey(kvp.Key))
+            {
+                db.AssetNormalizations.Remove(kvp.Value);
+                changed = true;
+            }
+        }
+
+        if (changed) await db.SaveChangesAsync();
+    }
+
     /// <summary>Reloads configuration from database</summary>
     public async Task ReloadConfiguration(Data.KrakenDbContext db)
     {
@@ -420,7 +459,7 @@ public class TradingStateService
         var defaultPairs = await GetSettingList(db, "DefaultPairs");
         if (defaultPairs != null && defaultPairs.Any()) DefaultPairs = defaultPairs.ToArray();
 
-        // Reload asset normalizations
+        // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
         if (normalizations.Any())
         {

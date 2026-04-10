@@ -228,7 +228,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
 
           <div style={cardStyle}>
             <div style={labelStyle}>Major Coins</div>
-            <input type="text" value={majorCoin} onChange={e => setMajorCoin(e.target.value)} style={inputStyle} placeholder="BTC, ETH, SOL" />
+            <input type="text" value={majorCoin} onChange={e => setMajorCoin(e.target.value)} style={inputStyle} placeholder="XBT, ETH, SOL" />
             <div style={hintStyle}>Major cryptocurrency assets</div>
           </div>
 
