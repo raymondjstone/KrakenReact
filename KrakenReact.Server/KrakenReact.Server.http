@@ -1,0 +1,6 @@
+@KrakenReact.Server_HostAddress = http://localhost:5157
+
+GET {{KrakenReact.Server_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

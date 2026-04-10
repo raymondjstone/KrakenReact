@@ -1,0 +1,401 @@
+using KrakenReact.Server.DTOs;
+using KrakenReact.Server.Models;
+using Kraken.Net.Objects.Models;
+using System.Collections.Concurrent;
+using Microsoft.EntityFrameworkCore;
+
+namespace KrakenReact.Server.Services;
+
+public class PriceDataItem
+{
+    public string Symbol { get; set; } = "";
+    public string SymbolNoSlash => TradingStateService.NormalizeAsset(Symbol.Replace("/", ""));
+    public string SymbolNoSlashNoStaking => TradingStateService.NormalizeAsset(Symbol.Replace("/", ""));
+    public string Base => (Symbol ?? "/").Split("/").FirstOrDefault() ?? "";
+    public string CCY => (Symbol ?? "/").Split("/").LastOrDefault() ?? "";
+    public bool SupportedPair { get; set; }
+    public bool KrakenNewPricesLoadedEver { get; set; }
+    public string KrakenNewPricesLoaded { get; set; } = "no";
+    public DateTime KrakenNewPricesLoadedTime { get; set; } = DateTime.MinValue;
+    public TickerDataItem? TickerData { get; set; }
+
+    private readonly List<DerivedKline> _klineSnapshot = new(10000);
+    private readonly object _klineLock = new();
+
+    public string CoinType
+    {
+        get
+        {
+            var b = TradingStateService.NormalizeAsset(Base);
+            if (TradingStateService.Blacklist.Contains(b)) return "Blacklist";
+            if (TradingStateService.MajorCoin.Contains(b)) return "Main Coin";
+            if (TradingStateService.Currency.Contains(b)) return "Currency";
+            return "Minor Coin";
+        }
+    }
+
+    public bool PriceOutdated
+    {
+        get
+        {
+            if (KrakenNewPricesLoaded == "loaded" && KrakenNewPricesLoadedTime > DateTime.UtcNow.AddMinutes(-20))
+                return false;
+            return !(SupportedPair && KrakenNewPricesLoadedEver);
+        }
+    }
+
+    public void AddKline(DerivedKline kline)
+    {
+        if (kline == null) return;
+        lock (_klineLock) { _klineSnapshot.Add(kline); }
+        KrakenNewPricesLoadedTime = DateTime.UtcNow;
+    }
+
+    public void AddKlineHistory(List<DerivedKline> klines)
+    {
+        if (!klines.Any()) return;
+        lock (_klineLock) { _klineSnapshot.InsertRange(0, klines); }
+    }
+
+    public List<DerivedKline> GetKlineSnapshot()
+    {
+        lock (_klineLock) { return _klineSnapshot.ToList(); }
+    }
+
+    public DerivedKline? LatestKline
+    {
+        get { lock (_klineLock) { return _klineSnapshot.LastOrDefault(); } }
+    }
+
+    public DerivedKline? MinKline
+    {
+        get { lock (_klineLock) { return _klineSnapshot.FirstOrDefault(l => l.OpenTime.Year > 1967); } }
+    }
+
+    public string Age
+    {
+        get
+        {
+            var min = MinKline;
+            if (min == null) return "Unknown";
+            var t = DateTime.Now - min.OpenTime;
+            if (t.TotalDays > 36500) return "Unknown";
+            if (t.TotalDays > 365) return "Old";
+            if (t.TotalDays > 180) return "SixMonths";
+            if (t.TotalDays > 90) return "ThreeMonths";
+            if (t.TotalDays > 28) return "OneMonth";
+            if (t.TotalDays > 13) return "TwoWeeks";
+            if (t.TotalDays > 6) return "OneWeek";
+            if (t.TotalDays > 2) return "FewDays";
+            return "New";
+        }
+    }
+
+    public decimal? ClosePriceDiff(int days)
+    {
+        var k = GetKlineSnapshot();
+        if (k.Count < 2) return null;
+        var last = k.LastOrDefault(l => l != null);
+        if (last == null || last.OpenTime <= DateTime.MinValue) return null;
+        var dayoldlist = k.Where(a => a.OpenTime > last.OpenTime.AddDays(-1 * days)).ToList();
+        return last.Close - (dayoldlist.Any() ? dayoldlist.First().Close : last.Close);
+    }
+
+    public decimal CloseMovementDiff(int days)
+    {
+        var x = ClosePriceDiff(days);
+        if (x == null) return 0m;
+        var close = LatestKline?.Close ?? 0m;
+        if (close == 0m) return 0m;
+        return Math.Round((x.Value / (close / 100m)), 6);
+    }
+
+    public decimal? ClosePriceAverage(int days)
+    {
+        var k = GetKlineSnapshot();
+        if (k.Count < 2) return null;
+        var last = k.LastOrDefault(a => a.OpenTime > DateTime.MinValue);
+        if (last == null) return null;
+        var dayoldlist = k.Where(a => a.OpenTime > last.OpenTime.AddDays(-1 * days)).ToList();
+        if (dayoldlist.Count <= 2) return null;
+        return Math.Round(dayoldlist.Sum(a => a.Close) / dayoldlist.Count, 6);
+    }
+
+    public decimal? WeightedPrice
+    {
+        get
+        {
+            decimal total = 0m; int weight = 0;
+            var avgDay = ClosePriceAverage(1);
+            var avgWeek = ClosePriceAverage(7);
+            var avgMonth = ClosePriceAverage(31);
+            var avgYear = ClosePriceAverage(365);
+            if (avgDay.HasValue) { total += avgDay.Value * 6; weight += 6; }
+            if (avgWeek.HasValue) { total += avgWeek.Value * 4; weight += 4; }
+            if (avgMonth.HasValue) { total += avgMonth.Value * 2; weight += 2; }
+            if (avgYear.HasValue) { total += avgYear.Value * 1; weight += 1; }
+            if (weight == 0) return null;
+            return Math.Round(total / weight, 6);
+        }
+    }
+
+    public decimal? WeightedPricePercentage
+    {
+        get
+        {
+            var close = LatestKline?.Close;
+            var wp = WeightedPrice;
+            if (!KrakenNewPricesLoadedEver || close == null || wp == null || close <= 0 || wp < 0) return null;
+            if (Age != "Old") return 200.0m;
+            return Math.Round((wp.Value / close.Value) * 100, 2);
+        }
+    }
+}
+
+public class TickerDataItem
+{
+    public decimal BestAskPrice { get; set; }
+    public decimal BestBidPrice { get; set; }
+    public decimal LastTradePrice { get; set; }
+    public decimal OpenPrice { get; set; }
+    public decimal HighPrice { get; set; }
+    public decimal LowPrice { get; set; }
+    public decimal Volume { get; set; }
+    public decimal VolumeWeightedAvgPrice { get; set; }
+    public int TradeCount { get; set; }
+}
+
+public class TradingStateService
+{
+    // Default values - used as fallback if DB has no configuration
+    public static readonly List<string> DefaultBaseCurrencies = new() { "ZUSD" };
+    public static readonly List<string> DefaultBlacklist = new() { "TRUMP", "MELANIA", "MATIC", "K", "KILT", "MIRA", "MKR", "EOS", "XMR", "BCH" };
+    public static readonly List<string> DefaultMajorCoin = new() { "BTC", "ETH", "SOL", "XRP", "XBT", "XXBT" };
+    public static readonly List<string> DefaultCurrency = new() { "GBP", "ZGBP", "EUR", "ZEUR", "ZUSD", "USDT", "USDC", "USDQ", "USD" };
+    public static readonly List<string> DefaultBadPairs = new() { "MATIC/USDT", "MATIC/GBP", "MATIC/USD", "XBT/USD", "TRUMP/USDT", "TRUMP/USD", "XDG/USD" };
+    public static readonly string[] DefaultDefaultPairs = { "SOL/USD", "XBT/USD", "ETH/USD", "USD/GBP" };
+
+    // Runtime configuration - can be updated from database
+    public static List<string> BaseCurrencies = new(DefaultBaseCurrencies);
+    public static List<string> Blacklist = new(DefaultBlacklist);
+    public static List<string> MajorCoin = new(DefaultMajorCoin);
+    public static List<string> Currency = new(DefaultCurrency);
+    public static List<string> BadPairs = new(DefaultBadPairs);
+    public static string[] DefaultPairs = DefaultDefaultPairs;
+
+    // Kraken uses X-prefix for legacy crypto and Z-prefix for fiat internally.
+    // Balances can return either form, causing duplicate entries.
+    private static Dictionary<string, string> AssetAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "XXBT", "XBT" }, { "XXRP", "XRP" }, { "XETH", "ETH" }, { "XXLM", "XLM" },
+        { "XLTC", "LTC" }, { "XXMR", "XMR" }, { "XXDG", "XDG" }, { "XZEC", "ZEC" },
+        { "XREP", "REP" }, { "XMLN", "MLN" }, { "XETC", "ETC" }, { "XDAO", "DAO" },
+        { "XICN", "ICN" },
+        { "ZUSD", "USD" }, { "ZEUR", "EUR" }, { "ZGBP", "GBP" },
+        { "ZCAD", "CAD" }, { "ZJPY", "JPY" }, { "ZAUD", "AUD" }, { "ZCHF", "CHF" },
+    };
+
+    /// <summary>
+    /// Normalizes a Kraken asset name by stripping staking suffixes (.F, .B)
+    /// and resolving X/Z-prefixed aliases to their canonical form.
+    /// </summary>
+    public static string NormalizeAsset(string asset)
+    {
+        if (string.IsNullOrEmpty(asset)) return asset ?? "";
+        var clean = asset.Replace(".F", "").Replace(".B", "").Replace(".S", "").Replace(".P", "");
+        return AssetAliases.TryGetValue(clean, out var canonical) ? canonical : clean;
+    }
+
+    private readonly DelistedPriceService _delisted;
+
+    public TradingStateService(DelistedPriceService delisted)
+    {
+        _delisted = delisted;
+    }
+
+    public bool InitialDataLoad { get; set; } = true;
+
+    public ConcurrentDictionary<string, PriceDataItem> Prices { get; } = new();
+    public ConcurrentDictionary<string, OrderDto> Orders { get; } = new();
+    public ConcurrentDictionary<string, BalanceDto> Balances { get; } = new();
+    public ConcurrentDictionary<string, AutoTradeDto> AutoOrders { get; } = new();
+    public ConcurrentDictionary<string, KrakenSymbol> Symbols { get; } = new();
+    public List<string> NotifiedOrders { get; } = new(4000);
+
+    private readonly ReaderWriterLockSlim _symbolLock = new();
+
+    public DerivedKline? LatestPrice(string asset)
+    {
+        var normalized = NormalizeAsset(asset);
+        if (normalized == "USD") return new DerivedKline { Asset = "USD", Close = 1.0m, OpenTime = DateTime.UtcNow };
+
+        var symbol = Symbols.Values.FirstOrDefault(a =>
+            normalized == a.AlternateName || normalized == NormalizeAsset(a.BaseAsset) ||
+            (a.QuoteAsset == "ZUSD" && (a.BaseAsset == normalized || a.AlternateName == normalized || a.WebsocketName == normalized + "/USD")));
+
+        if (symbol != null && Prices.TryGetValue(symbol.WebsocketName, out var priceItem) && priceItem.LatestKline != null)
+            return priceItem.LatestKline;
+
+        var p = Prices.Values.FirstOrDefault(p => p.SymbolNoSlashNoStaking == normalized + "USD");
+        if (p != null)
+        {
+            var k = p.GetKlineSnapshot();
+            if (k.Any()) return k.Last();
+        }
+
+        // Fallback: try delisted CSV for this asset
+        var pairNoSlash = normalized + "USD";
+        var symbolWithSlash = normalized + "/USD";
+        var csvKlines = _delisted.GetKlines(pairNoSlash, symbolWithSlash);
+        if (csvKlines != null && csvKlines.Any())
+        {
+            var pi = GetOrAddPrice(symbolWithSlash);
+            pi.AddKlineHistory(csvKlines);
+            pi.KrakenNewPricesLoaded = "loaded";
+            pi.KrakenNewPricesLoadedEver = true;
+            return csvKlines.Last();
+        }
+
+        return null;
+    }
+
+    /// <summary>Returns the latest USD/GBP exchange rate, or 0 if not available.</summary>
+    public decimal GetUsdGbpRate()
+    {
+        if (Prices.TryGetValue("USD/GBP", out var pi) && pi.LatestKline != null)
+            return pi.LatestKline.Close;
+        // Try ticker data
+        if (Prices.TryGetValue("USD/GBP", out var pi2) && pi2.TickerData != null)
+            return pi2.TickerData.LastTradePrice;
+        return 0m;
+    }
+
+    public PriceDataItem GetOrAddPrice(string symbol)
+    {
+        return Prices.GetOrAdd(symbol, s => new PriceDataItem { Symbol = s });
+    }
+
+    public List<PriceDataItem> GetPriceSnapshot() => Prices.Values.ToList();
+
+    /// <summary>Seeds database with default settings on first run</summary>
+    public async Task InitializeDefaultSettings(Data.KrakenDbContext db)
+    {
+        // Check if any settings exist
+        var hasSettings = await db.AppSettings.AnyAsync();
+        if (hasSettings) return; // Already initialized
+
+        // Seed all default settings as actual database records
+        var defaultSettings = new List<AppSettings>
+        {
+            new() { Key = "BaseCurrencies", Value = string.Join(",", DefaultBaseCurrencies), Description = "Base currencies for trading pairs" },
+            new() { Key = "Blacklist", Value = string.Join(",", DefaultBlacklist), Description = "Blacklisted assets" },
+            new() { Key = "MajorCoin", Value = string.Join(",", DefaultMajorCoin), Description = "Major coins" },
+            new() { Key = "Currency", Value = string.Join(",", DefaultCurrency), Description = "Fiat currencies" },
+            new() { Key = "BadPairs", Value = string.Join(",", DefaultBadPairs), Description = "Excluded trading pairs" },
+            new() { Key = "DefaultPairs", Value = string.Join(",", DefaultDefaultPairs), Description = "Default trading pairs to load" },
+            new() { Key = "KrakenApiKey", Value = "", Description = "Kraken API Key" },
+            new() { Key = "KrakenApiSecret", Value = "", Description = "Kraken API Secret" },
+            new() { Key = "PushoverUserKey", Value = "", Description = "Pushover User Key" },
+            new() { Key = "PushoverAppToken", Value = "", Description = "Pushover App Token" }
+        };
+
+        await db.AppSettings.AddRangeAsync(defaultSettings);
+
+        // Seed asset normalizations
+        var normalizations = AssetAliases.Select(kvp => new AssetNormalization
+        {
+            KrakenName = kvp.Key,
+            NormalizedName = kvp.Value
+        }).ToList();
+
+        await db.AssetNormalizations.AddRangeAsync(normalizations);
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Migrates API credentials from old EFAppCreds table to new AppSettings table on first run</summary>
+    public async Task MigrateApiCredentials(Data.KrakenDbContext db)
+    {
+        // Get existing keys (they should exist after InitializeDefaultSettings)
+        var krakenKey = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "KrakenApiKey");
+        var krakenSecret = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "KrakenApiSecret");
+        var pushoverUser = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PushoverUserKey");
+        var pushoverToken = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PushoverAppToken");
+
+        // If keys already have values, don't overwrite
+        if (!string.IsNullOrEmpty(krakenKey?.Value) && !string.IsNullOrEmpty(pushoverUser?.Value))
+            return;
+
+        // Try to get credentials from old EFAppCreds table
+        var krakenCreds = await db.AppCreds.FirstOrDefaultAsync(c => c.id == "kraken");
+        var pushoverCreds = await db.AppCreds.FirstOrDefaultAsync(c => c.id == "pushover");
+
+        // Migrate Kraken credentials if they exist and current values are empty
+        if (krakenCreds != null && krakenKey != null && string.IsNullOrEmpty(krakenKey.Value))
+        {
+            krakenKey.Value = krakenCreds.appkey;
+            krakenKey.Description = "Kraken API Key (migrated from EFAppCreds)";
+
+            if (krakenSecret != null)
+            {
+                krakenSecret.Value = krakenCreds.appsecret;
+                krakenSecret.Description = "Kraken API Secret (migrated from EFAppCreds)";
+            }
+        }
+
+        // Migrate Pushover credentials if they exist and current values are empty
+        if (pushoverCreds != null && pushoverUser != null && string.IsNullOrEmpty(pushoverUser.Value))
+        {
+            pushoverUser.Value = pushoverCreds.appkey;
+            pushoverUser.Description = "Pushover User Key (migrated from EFAppCreds)";
+
+            if (pushoverToken != null)
+            {
+                pushoverToken.Value = pushoverCreds.appsecret;
+                pushoverToken.Description = "Pushover App Token (migrated from EFAppCreds)";
+            }
+        }
+
+        // Save changes if any credentials were migrated
+        if (db.ChangeTracker.HasChanges())
+        {
+            await db.SaveChangesAsync();
+        }
+    }
+
+    /// <summary>Reloads configuration from database</summary>
+    public async Task ReloadConfiguration(Data.KrakenDbContext db)
+    {
+        var baseCurrencies = await GetSettingList(db, "BaseCurrencies");
+        if (baseCurrencies != null && baseCurrencies.Any()) BaseCurrencies = baseCurrencies;
+
+        var blacklist = await GetSettingList(db, "Blacklist");
+        if (blacklist != null && blacklist.Any()) Blacklist = blacklist;
+
+        var majorCoin = await GetSettingList(db, "MajorCoin");
+        if (majorCoin != null && majorCoin.Any()) MajorCoin = majorCoin;
+
+        var currency = await GetSettingList(db, "Currency");
+        if (currency != null && currency.Any()) Currency = currency;
+
+        var badPairs = await GetSettingList(db, "BadPairs");
+        if (badPairs != null && badPairs.Any()) BadPairs = badPairs;
+
+        var defaultPairs = await GetSettingList(db, "DefaultPairs");
+        if (defaultPairs != null && defaultPairs.Any()) DefaultPairs = defaultPairs.ToArray();
+
+        // Reload asset normalizations
+        var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
+        if (normalizations.Any())
+        {
+            AssetAliases = new Dictionary<string, string>(normalizations, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static async Task<List<string>?> GetSettingList(Data.KrakenDbContext db, string key)
+    {
+        var setting = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == key);
+        if (setting == null) return null;
+        return setting.Value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToList();
+    }
+}
