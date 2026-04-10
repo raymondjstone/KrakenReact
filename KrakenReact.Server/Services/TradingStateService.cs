@@ -229,6 +229,7 @@ public class TradingStateService
     }
 
     public bool InitialDataLoad { get; set; } = true;
+    public string LastStatusMessage { get; set; } = "";
 
     public ConcurrentDictionary<string, PriceDataItem> Prices { get; } = new();
     public ConcurrentDictionary<string, OrderDto> Orders { get; } = new();

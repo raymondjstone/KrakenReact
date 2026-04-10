@@ -159,7 +159,9 @@ public class BackgroundTaskService : BackgroundService
                 if (TradingStateService.Blacklist.Contains(d.Base)) continue;
                 try
                 {
-                    try { await _hub.Clients.All.SendAsync("StatusUpdate", $"Loading prices for {d.Symbol} ({++loaded}/{total})"); }
+                    var statusMsg = $"Loading prices for {d.Symbol} ({++loaded}/{total})";
+                    _state.LastStatusMessage = statusMsg;
+                    try { await _hub.Clients.All.SendAsync("StatusUpdate", statusMsg); }
                     catch { /* non-critical */ }
                     await LoadLatestPriceData(d);
                     var result = await _autoOrder.CheckAsync(d, "Default Rule");
@@ -180,9 +182,11 @@ public class BackgroundTaskService : BackgroundService
         // Remaining
         await LoadKlinesForList(snapshot.Where(p => p.KrakenNewPricesLoaded == "no").ToList());
 
-        try { await _hub.Clients.All.SendAsync("StatusUpdate", $"All prices loaded ({loaded} symbols)"); }
-        catch { /* non-critical */ }
-        _logger.LogInformation("[BG] All klines loaded");
+        var doneMsg = $"Full price load done at {DateTime.Now:HH:mm}";
+        _state.LastStatusMessage = doneMsg;
+        _logger.LogInformation("[BG] {Status}", doneMsg);
+        try { await _hub.Clients.All.SendAsync("StatusUpdate", doneMsg); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[BG] Failed to send final status update"); }
     }
 
     private async Task LoadLatestPriceData(PriceDataItem priceItem)
