@@ -218,7 +218,7 @@ public class PricesController : ControllerBase
             KlineInterval.ThirtyMinutes => DateTime.UtcNow.AddDays(-14),
             KlineInterval.OneHour => DateTime.UtcNow.AddDays(-30),
             KlineInterval.FourHour => DateTime.UtcNow.AddDays(-90),
-            KlineInterval.OneWeek => DateTime.UtcNow.AddYears(-3),
+            KlineInterval.OneWeek => DateTime.UtcNow.AddYears(-14),
             _ => DateTime.UtcNow.AddYears(-3),
         };
     }

@@ -41,8 +41,8 @@ public class OrdersController : ControllerBase
         // Find the order to get symbol
         var order = _state.Orders.Values.FirstOrDefault(o => o.Id == id);
         if (order == null) return NotFound();
-        var success = await _kraken.AmendOrderValues(id, order.Symbol, req.Price, req.Quantity);
-        return success ? Ok() : BadRequest(new { error = "Failed to amend order" });
+        var orderResult = await _kraken.AmendOrderValues(id, order.Symbol, req.Price, req.Quantity);
+        return orderResult.Success ? Ok() : BadRequest(new { error = $"Failed to amend order {orderResult.Error?.ErrorDescription}" });
     }
 
     [HttpDelete("{id}")]

@@ -371,11 +371,11 @@ public class KrakenRestService
         return dbItems;
     }
 
-    public async Task<bool> AmendOrderValues(string orderId, string symbol, decimal newPrice, decimal newQty)
+    public async Task<WebCallResult<KrakenEditOrder>> AmendOrderValues(string orderId, string symbol, decimal newPrice, decimal newQty)
     {
         var krakenClient = await AuthenticatedClient();
         var x = await krakenClient.SpotApi.Trading.EditOrderAsync(symbol, orderId, newQty, null, newPrice);
-        return x.Success;
+        return x;
     }
 
     public async Task<bool> CancelOrderAsync(string orderId)
