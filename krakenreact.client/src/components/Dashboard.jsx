@@ -8,6 +8,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 import TickerCard from './TickerCard';
 import Watchlist from './Watchlist';
 import OpenOrdersGrid from './OpenOrdersGrid';
+import OrderDialog from './OrderDialog';
 import ChartPage from '../pages/ChartPage';
 import { formatPrice, formatNumber } from '../utils/formatters';
 import { useTheme } from '../context/ThemeContext';
@@ -19,6 +20,8 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
   const [orders, setOrders] = useState([]);
   const [balances, setBalances] = useState([]);
   const [symbols, setSymbols] = useState([]);
+  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
+  const [orderBalanceCtx, setOrderBalanceCtx] = useState(null);
   const { gridTheme } = useTheme();
 
   useEffect(() => {
@@ -107,6 +110,19 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
 
   const loadOrders2 = () => api.get('/orders').then(r => setOrders(r.data)).catch(() => {});
 
+  const openBalanceOrder = (balanceRow) => {
+    // Find the matching ticker to get the websocket symbol for order placement
+    const ticker = tickers.find(t => t.base === balanceRow.asset && t.ccy === 'USD');
+    if (!ticker) return;
+    setOrderBalanceCtx({
+      symbol: ticker.symbol.replace('/', ''),
+      price: ticker.closePrice || balanceRow.latestPrice,
+      available: balanceRow.available,
+      uncoveredQty: balanceRow.orderUncoveredQty || 0,
+    });
+    setOrderDialogOpen(true);
+  };
+
   // Map an order symbol (e.g. "XBTUSD") to a ticker symbol (e.g. "XBT/USD")
   const selectOrderSymbol = (orderSymbol) => {
     // Try direct match with slash inserted (orders strip the slash)
@@ -126,7 +142,13 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
     if (fallback) selectSymbol(fallback.symbol);
   };
 
+  const fiatAssets = new Set(['USD', 'USDT', 'USDC', 'GBP', 'EUR', 'CAD', 'AUD', 'JPY', 'CHF']);
+
   const balanceCols = useMemo(() => [
+    { headerName: '', flex: 0, width: 65, cellRenderer: p => {
+      if (!p.data || fiatAssets.has(p.data.asset)) return null;
+      return <button onClick={() => openBalanceOrder(p.data)} style={{ padding: '2px 6px', fontSize: 10, cursor: 'pointer', fontWeight: 600 }}>Order</button>;
+    }},
     { field: 'asset', minWidth: 80, cellRenderer: p => (
       <span style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--yellow)', textDecoration: 'underline' }} onClick={() => selectBalanceAsset(p.value)}>{p.value}</span>
     )},
@@ -160,7 +182,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       valueFormatter: p => p.value != null ? formatNumber(p.value, 4) : '',
       cellStyle: p => p.value > 0 ? { color: 'var(--yellow)' } : {},
     },
-  ], [selectBalanceAsset]);
+  ], [selectBalanceAsset, openBalanceOrder]);
 
   const balanceDefaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 
@@ -253,6 +275,12 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
           </div>
         )}
       </div>
+      <OrderDialog
+        isOpen={orderDialogOpen}
+        onClose={(ok) => { setOrderDialogOpen(false); setOrderBalanceCtx(null); if (ok) loadOrders2(); }}
+        symbols={symbols}
+        balanceContext={orderBalanceCtx}
+      />
     </div>
   );
 }

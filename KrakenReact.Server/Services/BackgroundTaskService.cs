@@ -314,14 +314,16 @@ public class BackgroundTaskService : BackgroundService
 
         // First pass: compute values
         var balanceDtos = new List<BalanceDto>();
+        var newAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var b in grouped)
         {
+            newAssets.Add(b.Asset);
             var latestPrice = _state.LatestPrice(b.Asset);
             var price = latestPrice?.Close ?? 0;
             var valueUsd = Math.Round(b.Total * price, 2);
             var valueGbp = usdGbpRate > 0 ? Math.Round(valueUsd * usdGbpRate, 2) : 0;
 
-            // Order coverage: for non-USD assets, sum sell order quantities; for USD, sum buy order values
+            // Order coverage: for non-USD assets, sum sell order quantities matching this asset
             decimal coveredQty;
             if (TradingStateService.Currency.Contains(b.Asset))
             {
@@ -332,7 +334,7 @@ public class BackgroundTaskService : BackgroundService
             else
             {
                 coveredQty = openOrders
-                    .Where(o => o.Side == "Sell" && TradingStateService.NormalizeAsset(o.Symbol.Replace("/", "").Replace("USD", "")) == b.Asset)
+                    .Where(o => o.Side == "Sell" && _state.NormalizeOrderSymbolBase(o.Symbol) == b.Asset)
                     .Sum(o => o.Quantity);
             }
 
@@ -349,6 +351,13 @@ public class BackgroundTaskService : BackgroundService
                 OrderUncoveredValue = Math.Round(uncoveredQty * price, 2),
             };
             balanceDtos.Add(dto);
+        }
+
+        // Clear stale balance entries (e.g. un-normalized keys like XBT when BTC exists)
+        foreach (var key in _state.Balances.Keys.ToList())
+        {
+            if (!newAssets.Contains(key))
+                _state.Balances.TryRemove(key, out _);
         }
 
         // Second pass: compute portfolio percentages

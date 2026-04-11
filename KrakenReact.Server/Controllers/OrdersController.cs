@@ -2,6 +2,8 @@ using KrakenReact.Server.DTOs;
 using KrakenReact.Server.Services;
 using Kraken.Net.Enums;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
+using KrakenReact.Server.Hubs;
 
 namespace KrakenReact.Server.Controllers;
 
@@ -11,11 +13,13 @@ public class OrdersController : ControllerBase
 {
     private readonly TradingStateService _state;
     private readonly KrakenRestService _kraken;
+    private readonly IHubContext<TradingHub> _hub;
 
-    public OrdersController(TradingStateService state, KrakenRestService kraken)
+    public OrdersController(TradingStateService state, KrakenRestService kraken, IHubContext<TradingHub> hub)
     {
         _state = state;
         _kraken = kraken;
+        _hub = hub;
     }
 
     [HttpGet]
@@ -30,9 +34,26 @@ public class OrdersController : ControllerBase
         var side = req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell;
         var clientOrderId = $"UI{DateTime.Now:yyyyMMddHHmmss}";
         var result = await _kraken.PlaceOrderAsync(req.Symbol.Replace("/", ""), side, OrderType.Limit, req.Quantity, req.Price, clientOrderId);
-        if (result.Success)
-            return Ok(new { orderIds = result.Data.OrderIds });
-        return BadRequest(new { error = result.Error?.Message ?? "Failed to place order" });
+        if (!result.Success)
+            return BadRequest(new { error = result.Error?.Message ?? "Failed to place order" });
+
+        // If this is a sell order, recalculate balance covered/uncovered amounts
+        if (side == OrderSide.Sell)
+        {
+            _state.RecalculateBalanceCoveredAmounts();
+
+            // Broadcast balance updates
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+                }
+                catch { /* Ignore broadcast errors */ }
+            });
+        }
+
+        return Ok(new { orderIds = result.Data.OrderIds });
     }
 
     [HttpPut("{id}")]
@@ -41,14 +62,55 @@ public class OrdersController : ControllerBase
         // Find the order to get symbol
         var order = _state.Orders.Values.FirstOrDefault(o => o.Id == id);
         if (order == null) return NotFound();
+
         var orderResult = await _kraken.AmendOrderValues(id, order.Symbol, req.Price, req.Quantity);
-        return orderResult.Success ? Ok() : BadRequest(new { error = $"Failed to amend order {orderResult.Error?.ErrorDescription}" });
+        if (!orderResult.Success)
+            return BadRequest(new { error = $"Failed to amend order {orderResult.Error?.ErrorDescription}" });
+
+        // Update the order with new values
+        order.Price = req.Price;
+        order.Quantity = req.Quantity;
+
+        // Recalculate all derived fields
+        _state.RecalculateOrderFields(order);
+
+        // Recalculate balance covered/uncovered amounts
+        _state.RecalculateBalanceCoveredAmounts();
+
+        // Broadcast updates to all clients
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+                await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+            }
+            catch { /* Ignore broadcast errors */ }
+        });
+
+        return Ok();
     }
 
     [HttpDelete("{id}")]
     public async Task<ActionResult> Cancel(string id)
     {
         var success = await _kraken.CancelOrderAsync(id);
-        return success ? Ok() : BadRequest(new { error = "Failed to cancel order" });
+        if (!success)
+            return BadRequest(new { error = "Failed to cancel order" });
+
+        // Recalculate balance covered/uncovered amounts after order cancellation
+        _state.RecalculateBalanceCoveredAmounts();
+
+        // Broadcast balance updates to all clients
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+            }
+            catch { /* Ignore broadcast errors */ }
+        });
+
+        return Ok();
     }
 }

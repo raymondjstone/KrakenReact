@@ -311,6 +311,35 @@ public class TradingStateService
 
     /// <summary>
     /// Resolves a symbol (which may use normalized names like "BTC/USD") to the
+    /// <summary>
+    /// Extracts and normalizes the base asset from an order symbol (e.g. "XBTUSD" → "BTC", "SOLUSD" → "SOL").
+    /// Uses the Symbols table to find the correct base asset, falling back to heuristic extraction.
+    /// </summary>
+    public string NormalizeOrderSymbolBase(string orderSymbol)
+    {
+        if (string.IsNullOrEmpty(orderSymbol)) return "";
+
+        // If it contains a slash, just split
+        if (orderSymbol.Contains('/'))
+            return NormalizeAsset(orderSymbol.Split('/')[0]);
+
+        // Try to match against known symbols (websocket names have slashes, order symbols don't)
+        var match = Symbols.Values.FirstOrDefault(s =>
+            s.WebsocketName.Replace("/", "") == orderSymbol ||
+            (s.AlternateName != null && s.AlternateName.Replace(".", "") == orderSymbol));
+        if (match != null)
+            return NormalizeAsset(match.BaseAsset);
+
+        // Heuristic: strip known quote suffixes
+        foreach (var suffix in new[] { "ZUSD", "USDT", "USDC", "USD", "ZEUR", "EUR", "ZGBP", "GBP" })
+        {
+            if (orderSymbol.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && orderSymbol.Length > suffix.Length)
+                return NormalizeAsset(orderSymbol[..^suffix.Length]);
+        }
+
+        return NormalizeAsset(orderSymbol);
+    }
+
     /// raw Kraken websocket key (e.g. "XBT/USD") used in the Prices dictionary.
     /// Returns the input unchanged if already a valid key or no match found.
     /// </summary>
@@ -435,7 +464,8 @@ public class TradingStateService
             new() { Key = "StakingNotifications", Value = "false", Description = "Send Pushover notifications for staking reward payments" },
             new() { Key = "HideAlmostZeroBalances", Value = "false", Description = "Hide balance rows with less than 0.0001 units or less than $0.01 value" },
             new() { Key = "OrderProximityNotifications", Value = "true", Description = "Send Pushover notifications when an order is near the current price" },
-            new() { Key = "OrderProximityThreshold", Value = "2.0", Description = "Percentage threshold for order proximity notifications (0.1 to 20.0)" }
+            new() { Key = "OrderProximityThreshold", Value = "2.0", Description = "Percentage threshold for order proximity notifications (0.1 to 20.0)" },
+            new() { Key = "Theme", Value = "dark", Description = "UI theme (dark or light)" }
         };
 
         await db.AppSettings.AddRangeAsync(defaultSettings);
@@ -578,6 +608,7 @@ public class TradingStateService
             ["HideAlmostZeroBalances"] = ("false", "Hide balance rows with less than 0.0001 units or less than $0.01 value"),
             ["OrderProximityNotifications"] = ("true", "Send Pushover notifications when an order is near the current price"),
             ["OrderProximityThreshold"] = ("2.0", "Percentage threshold for order proximity notifications (0.1 to 20.0)"),
+            ["Theme"] = ("dark", "UI theme (dark or light)"),
         };
 
         var changed = false;
@@ -597,5 +628,54 @@ public class TradingStateService
         var setting = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == key);
         if (setting == null) return null;
         return setting.Value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToList();
+    }
+
+    /// <summary>Recalculates all calculated fields for a single order (LatestPrice, Distance, DistancePercentage, OrderValue)</summary>
+    public void RecalculateOrderFields(OrderDto order)
+    {
+        // Get latest price for the order's symbol
+        var latestPrice = LatestPrice(order.Symbol);
+        if (latestPrice != null)
+        {
+            order.LatestPrice = latestPrice.Close;
+            order.Distance = order.Price - latestPrice.Close;
+            order.DistancePercentage = latestPrice.Close != 0 
+                ? Math.Round((order.Price - latestPrice.Close) / (latestPrice.Close / 100), 2) 
+                : 100;
+        }
+
+        // Recalculate order value (price * quantity)
+        order.OrderValue = order.Price * order.Quantity;
+    }
+
+    /// <summary>Recalculates covered/uncovered quantities for all balances based on current open sell orders</summary>
+    public void RecalculateBalanceCoveredAmounts()
+    {
+        foreach (var balance in Balances.Values)
+        {
+            balance.OrderCoveredQty = 0;
+            balance.OrderUncoveredQty = 0;
+            balance.OrderCoveredValue = 0;
+            balance.OrderUncoveredValue = 0;
+        }
+
+        var openSellOrders = Orders.Values
+            .Where(o => o.Side == "Sell" && (o.Status == "Open" || o.Status == "New" || o.Status == "PendingNew"))
+            .ToList();
+
+        foreach (var order in openSellOrders)
+        {
+            var normalizedBase = NormalizeOrderSymbolBase(order.Symbol);
+            if (string.IsNullOrEmpty(normalizedBase)) continue;
+
+            var balance = Balances.Values.FirstOrDefault(b => b.Asset == normalizedBase);
+            if (balance == null) continue;
+
+            var orderQty = order.Quantity - order.QuantityFilled;
+            balance.OrderCoveredQty += Math.Min(orderQty, balance.Total);
+            balance.OrderUncoveredQty = Math.Max(balance.Total - balance.OrderCoveredQty, 0);
+            balance.OrderCoveredValue += Math.Min(orderQty, balance.Total) * order.Price;
+            balance.OrderUncoveredValue = balance.OrderUncoveredQty * (balance.LatestPrice > 0 ? balance.LatestPrice : order.Price);
+        }
     }
 }

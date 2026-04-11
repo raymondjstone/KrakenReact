@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { themeAlpine, colorSchemeDark, colorSchemeLight } from 'ag-grid-community';
+import api from '../api/apiClient';
 
 const ThemeContext = createContext();
 
@@ -33,14 +34,30 @@ export function useTheme() {
 }
 
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem('kraken_theme') || 'light');
+  const [theme, setTheme] = useState(() => localStorage.getItem('kraken_theme') || 'dark');
+
+  // Sync from DB on mount (DB is source of truth, localStorage is just a fast cache)
+  useEffect(() => {
+    api.get('/settings').then(r => {
+      const dbTheme = r.data.theme;
+      if (dbTheme && dbTheme !== theme) {
+        setTheme(dbTheme);
+      }
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('kraken_theme', theme);
   }, [theme]);
 
-  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  const toggleTheme = () => {
+    setTheme(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      api.post('/settings', { theme: next }).catch(() => {});
+      return next;
+    });
+  };
   const isDark = theme === 'dark';
   const gridTheme = useMemo(() => isDark ? darkGridTheme : lightGridTheme, [isDark]);
 

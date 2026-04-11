@@ -10,6 +10,7 @@ public class AppSettingsDto
     public bool HideAlmostZeroBalances { get; set; }
     public bool OrderProximityNotifications { get; set; }
     public decimal OrderProximityThreshold { get; set; }
+    public string Theme { get; set; } = "dark";
     public List<string> BaseCurrencies { get; set; } = new();
     public List<string> Blacklist { get; set; } = new();
     public List<string> MajorCoin { get; set; } = new();
@@ -29,6 +30,7 @@ public class SaveSettingsRequest
     public bool? HideAlmostZeroBalances { get; set; }
     public bool? OrderProximityNotifications { get; set; }
     public decimal? OrderProximityThreshold { get; set; }
+    public string? Theme { get; set; }
     public List<string>? BaseCurrencies { get; set; }
     public List<string>? Blacklist { get; set; }
     public List<string>? MajorCoin { get; set; }

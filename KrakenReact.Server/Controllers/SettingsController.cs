@@ -65,6 +65,9 @@ public class SettingsController : ControllerBase
             settings.OrderProximityThreshold = orderProxThreshold != null && decimal.TryParse(orderProxThreshold.Value, System.Globalization.CultureInfo.InvariantCulture, out var threshold)
                 ? Math.Clamp(threshold, 0.1m, 20.0m) : 2.0m;
 
+            var themeSetting = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "Theme");
+            settings.Theme = themeSetting?.Value ?? "dark";
+
             return Ok(settings);
         }
         catch (Exception ex)
@@ -130,6 +133,11 @@ public class SettingsController : ControllerBase
             {
                 var clamped = Math.Clamp(request.OrderProximityThreshold.Value, 0.1m, 20.0m);
                 await SaveOrUpdateSetting("OrderProximityThreshold", clamped.ToString(System.Globalization.CultureInfo.InvariantCulture), "Percentage threshold for order proximity notifications (0.1 to 20.0)");
+            }
+            if (!string.IsNullOrEmpty(request.Theme))
+            {
+                var validTheme = request.Theme == "light" ? "light" : "dark";
+                await SaveOrUpdateSetting("Theme", validTheme, "UI theme (dark or light)");
             }
 
             // Save asset normalizations

@@ -131,18 +131,33 @@ public class KrakenWebSocketV2Service : BackgroundService
                     foreach (var exec in execMsg.Data)
                     {
                         if (string.IsNullOrEmpty(exec.OrderId)) continue;
-                        var orderDto = new OrderDto
+
+                        // Merge into existing order if available, so we don't lose fields
+                        // that the execution update doesn't include
+                        if (_state.Orders.TryGetValue(exec.OrderId, out var existing))
                         {
-                            Id = exec.OrderId,
-                            Symbol = exec.Symbol ?? "",
-                            Side = exec.Side ?? "Buy",
-                            Type = exec.OrderType ?? "Limit",
-                            Status = exec.OrderStatus ?? "Open",
-                            Price = exec.LimitPrice,
-                            Quantity = exec.OrderQty,
-                            CreateTime = exec.Timestamp
-                        };
-                        _state.Orders[exec.OrderId] = orderDto;
+                            if (!string.IsNullOrEmpty(exec.Symbol)) existing.Symbol = exec.Symbol;
+                            if (!string.IsNullOrEmpty(exec.Side)) existing.Side = exec.Side;
+                            if (!string.IsNullOrEmpty(exec.OrderType)) existing.Type = exec.OrderType;
+                            if (!string.IsNullOrEmpty(exec.OrderStatus)) existing.Status = exec.OrderStatus;
+                            if (exec.LimitPrice != 0) existing.Price = exec.LimitPrice;
+                            if (exec.OrderQty != 0) existing.Quantity = exec.OrderQty;
+                            if (exec.Timestamp != default) existing.CreateTime = exec.Timestamp;
+                        }
+                        else
+                        {
+                            _state.Orders[exec.OrderId] = new OrderDto
+                            {
+                                Id = exec.OrderId,
+                                Symbol = exec.Symbol ?? "",
+                                Side = exec.Side ?? "Buy",
+                                Type = exec.OrderType ?? "Limit",
+                                Status = exec.OrderStatus ?? "Open",
+                                Price = exec.LimitPrice,
+                                Quantity = exec.OrderQty,
+                                CreateTime = exec.Timestamp
+                            };
+                        }
                         // Detect fills (status changes that indicate a trade occurred)
                         var status = (exec.OrderStatus ?? "").ToLower();
                         if (status == "filled" || status == "partially_filled" || status == "closed")
