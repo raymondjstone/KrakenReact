@@ -231,6 +231,7 @@ public class TradingStateService
     public bool InitialDataLoad { get; set; } = true;
     public string LastStatusMessage { get; set; } = "";
     public bool StakingNotifications { get; set; }
+    public bool HideAlmostZeroBalances { get; set; }
     public HashSet<string> SeenLedgerIds { get; } = new();
 
     public ConcurrentDictionary<string, PriceDataItem> Prices { get; } = new();
@@ -348,7 +349,8 @@ public class TradingStateService
             new() { Key = "KrakenApiSecret", Value = "", Description = "Kraken API Secret" },
             new() { Key = "PushoverUserKey", Value = "", Description = "Pushover User Key" },
             new() { Key = "PushoverAppToken", Value = "", Description = "Pushover App Token" },
-            new() { Key = "StakingNotifications", Value = "false", Description = "Send Pushover notifications for staking reward payments" }
+            new() { Key = "StakingNotifications", Value = "false", Description = "Send Pushover notifications for staking reward payments" },
+            new() { Key = "HideAlmostZeroBalances", Value = "false", Description = "Hide balance rows with less than 0.0001 units or less than $0.01 value" }
         };
 
         await db.AppSettings.AddRangeAsync(defaultSettings);
@@ -478,6 +480,9 @@ public class TradingStateService
         var stakingNotif = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StakingNotifications");
         StakingNotifications = stakingNotif != null && string.Equals(stakingNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
 
+        var hideAlmostZero = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "HideAlmostZeroBalances");
+        HideAlmostZeroBalances = hideAlmostZero != null && string.Equals(hideAlmostZero.Value, "true", StringComparison.OrdinalIgnoreCase);
+
         // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
         if (normalizations.Any())
@@ -492,6 +497,7 @@ public class TradingStateService
         var requiredSettings = new Dictionary<string, (string Value, string Description)>
         {
             ["StakingNotifications"] = ("false", "Send Pushover notifications for staking reward payments"),
+            ["HideAlmostZeroBalances"] = ("false", "Hide balance rows with less than 0.0001 units or less than $0.01 value"),
         };
 
         var changed = false;

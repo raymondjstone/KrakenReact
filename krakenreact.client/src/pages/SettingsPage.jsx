@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../api/apiClient';
 
 const SETTINGS_KEY = 'kraken_app_settings';
@@ -45,7 +45,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
   const [normalizations, setNormalizations] = useState('');
 
   const [saveStatus, setSaveStatus] = useState('');
-  const saveTimerRef = { current: null };
+  const saveTimerRef = useRef(null);
 
   const loadServerSettings = () => {
     api.get('/settings').then(r => {
@@ -114,6 +114,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
     api.post('/settings', payload)
       .then(() => {
         setSaveStatus('Saved successfully!');
+        loadServerSettings();
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => setSaveStatus(''), 3000);
       })
