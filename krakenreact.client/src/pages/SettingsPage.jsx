@@ -39,6 +39,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
 
   // Boolean settings
   const [stakingNotifications, setStakingNotifications] = useState(false);
+  const [hideAlmostZeroBalances, setHideAlmostZeroBalances] = useState(false);
 
   // Asset Normalizations
   const [normalizations, setNormalizations] = useState('');
@@ -54,6 +55,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
       setPushoverUserKey(data.pushoverUserKey || '');
       setPushoverApiToken(data.pushoverApiToken || '');
       setStakingNotifications(!!data.stakingNotifications);
+      setHideAlmostZeroBalances(!!data.hideAlmostZeroBalances);
       setBaseCurrencies((data.baseCurrencies || []).join(', '));
       setBlacklist((data.blacklist || []).join(', '));
       setMajorCoin((data.majorCoin || []).join(', '));
@@ -92,6 +94,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
       pushoverUserKey: pushoverUserKey || undefined,
       pushoverApiToken: pushoverApiToken || undefined,
       stakingNotifications: stakingNotifications,
+      hideAlmostZeroBalances: hideAlmostZeroBalances,
       baseCurrencies: baseCurrencies.split(',').map(s => s.trim()).filter(Boolean),
       blacklist: blacklist.split(',').map(s => s.trim()).filter(Boolean),
       majorCoin: majorCoin.split(',').map(s => s.trim()).filter(Boolean),
@@ -199,6 +202,25 @@ export default function SettingsPage({ settings, onSettingsChange }) {
                   type="checkbox"
                   checked={stakingNotifications}
                   onChange={e => setStakingNotifications(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={labelStyle}>Hide Almost Zero Balances</div>
+                <div style={hintStyle}>
+                  Hide balance rows with less than 0.0001 units or less than $0.01 value from the Dashboard and Balances grids. These balances still count towards portfolio totals.
+                </div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={hideAlmostZeroBalances}
+                  onChange={e => setHideAlmostZeroBalances(e.target.checked)}
                 />
                 <span className="toggle-slider" />
               </label>

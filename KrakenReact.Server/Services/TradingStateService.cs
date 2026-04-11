@@ -9,8 +9,8 @@ namespace KrakenReact.Server.Services;
 public class PriceDataItem
 {
     public string Symbol { get; set; } = "";
-    public string SymbolNoSlash => TradingStateService.NormalizeAsset(Symbol.Replace("/", ""));
-    public string SymbolNoSlashNoStaking => TradingStateService.NormalizeAsset(Symbol.Replace("/", ""));
+    public string SymbolNoSlash => TradingStateService.NormalizeAsset(Base) + TradingStateService.NormalizeAsset(CCY);
+    public string SymbolNoSlashNoStaking => TradingStateService.NormalizeAsset(Base) + TradingStateService.NormalizeAsset(CCY);
     public string Base => (Symbol ?? "/").Split("/").FirstOrDefault() ?? "";
     public string CCY => (Symbol ?? "/").Split("/").LastOrDefault() ?? "";
     public bool SupportedPair { get; set; }
@@ -262,19 +262,30 @@ public class TradingStateService
         var normalized = NormalizeAsset(asset);
         if (normalized == "USD") return new DerivedKline { Asset = "USD", Close = 1.0m, OpenTime = DateTime.UtcNow };
 
-        var symbol = Symbols.Values.FirstOrDefault(a =>
+        // Try all matching symbols (there may be multiple, e.g. XBT/USD and BTC/USD for Bitcoin)
+        var matchingSymbols = Symbols.Values.Where(a =>
             normalized == a.AlternateName || normalized == NormalizeAsset(a.BaseAsset) ||
             (a.QuoteAsset == "ZUSD" && (a.BaseAsset == normalized || a.AlternateName == normalized || a.WebsocketName == normalized + "/USD")));
 
-        if (symbol != null && Prices.TryGetValue(symbol.WebsocketName, out var priceItem) && priceItem.LatestKline != null)
-            return priceItem.LatestKline;
+        foreach (var symbol in matchingSymbols)
+        {
+            if (Prices.TryGetValue(symbol.WebsocketName, out var priceItem) && priceItem.LatestKline != null)
+                return priceItem.LatestKline;
+        }
 
-        var p = Prices.Values.FirstOrDefault(p => p.SymbolNoSlashNoStaking == normalized + "USD");
+        // Fallback: search Prices by normalizing the base part of each price entry's symbol
+        var p = Prices.Values.FirstOrDefault(p =>
+            p.SymbolNoSlashNoStaking == normalized + "USD" ||
+            (NormalizeAsset(p.Base) == normalized && (p.CCY == "USD" || NormalizeAsset(p.CCY) == "USD")));
         if (p != null)
         {
             var k = p.GetKlineSnapshot();
             if (k.Any()) return k.Last();
         }
+
+        // Also try direct key lookups with the normalized name
+        if (Prices.TryGetValue(normalized + "/USD", out var directPrice) && directPrice.LatestKline != null)
+            return directPrice.LatestKline;
 
         // Fallback: try delisted CSV for this asset
         var pairNoSlash = normalized + "USD";

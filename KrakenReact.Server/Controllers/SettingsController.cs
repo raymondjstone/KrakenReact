@@ -55,6 +55,9 @@ public class SettingsController : ControllerBase
             var stakingNotif = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StakingNotifications");
             settings.StakingNotifications = stakingNotif != null && string.Equals(stakingNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
 
+            var hideAlmostZero = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "HideAlmostZeroBalances");
+            settings.HideAlmostZeroBalances = hideAlmostZero != null && string.Equals(hideAlmostZero.Value, "true", StringComparison.OrdinalIgnoreCase);
+
             return Ok(settings);
         }
         catch (Exception ex)
@@ -107,6 +110,10 @@ public class SettingsController : ControllerBase
             if (request.StakingNotifications.HasValue)
             {
                 await SaveOrUpdateSetting("StakingNotifications", request.StakingNotifications.Value.ToString().ToLower(), "Send Pushover notifications for staking reward payments");
+            }
+            if (request.HideAlmostZeroBalances.HasValue)
+            {
+                await SaveOrUpdateSetting("HideAlmostZeroBalances", request.HideAlmostZeroBalances.Value.ToString().ToLower(), "Hide balance rows with less than 0.0001 units");
             }
 
             // Save asset normalizations

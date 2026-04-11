@@ -215,7 +215,10 @@ public class BalancesController : ControllerBase
                     b.PortfolioPercentage = Math.Round(b.LatestValue / totalPortfolioValue * 100, 2);
             }
 
-            return Ok(new { balances, usdGbpRate, diagnostic = diagnosticInfo });
+            var hideAlmostZero = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "HideAlmostZeroBalances");
+            var hideAlmostZeroBalances = hideAlmostZero != null && string.Equals(hideAlmostZero.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+            return Ok(new { balances, usdGbpRate, hideAlmostZeroBalances, diagnostic = diagnosticInfo });
         }
         catch (Exception ex)
         {

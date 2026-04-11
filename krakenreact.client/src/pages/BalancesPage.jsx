@@ -9,6 +9,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 export default function BalancesPage() {
   const [rowData, setRowData] = useState([]);
+  const [hideAlmostZero, setHideAlmostZero] = useState(false);
   const [total, setTotal] = useState(0);
   const [totalGbp, setTotalGbp] = useState(0);
   const { gridTheme } = useTheme();
@@ -23,7 +24,7 @@ export default function BalancesPage() {
     let disposed = false;
     const loadBalances = () => {
       if (disposed) return;
-      api.get('/balances').then(r => { if (!disposed) updateFromBalances(r.data.balances || []); }).catch(console.error);
+      api.get('/balances').then(r => { if (!disposed) { updateFromBalances(r.data.balances || []); setHideAlmostZero(!!r.data.hideAlmostZeroBalances); } }).catch(console.error);
     };
     loadBalances();
 
@@ -86,7 +87,7 @@ export default function BalancesPage() {
         )}
       </div>
       <div style={{ flex: 1 }}>
-        <AgGridReact theme={gridTheme} rowData={rowData} columnDefs={columnDefs} defaultColDef={defaultColDef} />
+        <AgGridReact theme={gridTheme} rowData={hideAlmostZero ? rowData.filter(b => b.total >= 0.0001 && (b.latestValue || 0) >= 0.01) : rowData} columnDefs={columnDefs} defaultColDef={defaultColDef} />
       </div>
     </div>
   );

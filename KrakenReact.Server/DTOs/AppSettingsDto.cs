@@ -7,6 +7,7 @@ public class AppSettingsDto
     public string? PushoverUserKey { get; set; }
     public string? PushoverApiToken { get; set; }
     public bool StakingNotifications { get; set; }
+    public bool HideAlmostZeroBalances { get; set; }
     public List<string> BaseCurrencies { get; set; } = new();
     public List<string> Blacklist { get; set; } = new();
     public List<string> MajorCoin { get; set; } = new();
@@ -23,6 +24,7 @@ public class SaveSettingsRequest
     public string? PushoverUserKey { get; set; }
     public string? PushoverApiToken { get; set; }
     public bool? StakingNotifications { get; set; }
+    public bool? HideAlmostZeroBalances { get; set; }
     public List<string>? BaseCurrencies { get; set; }
     public List<string>? Blacklist { get; set; }
     public List<string>? MajorCoin { get; set; }
