@@ -94,7 +94,13 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
 
   const openChart = (symbol) => {
     if (!chartTabs.find(t => t.id === symbol)) {
-      setChartTabs(prev => [...prev, { id: symbol, label: symbol }]);
+      // Build a display-friendly label from the raw symbol using normalizations if available
+      const norms = serverSettings?.assetNormalizations || {};
+      const parts = symbol.split('/');
+      const displayBase = norms[parts[0]] || parts[0];
+      const displayCcy = parts[1] ? (norms[parts[1]] || parts[1]) : '';
+      const label = displayCcy ? `${displayBase}/${displayCcy}` : displayBase;
+      setChartTabs(prev => [...prev, { id: symbol, label }]);
     }
     setActiveTab(symbol);
   };
@@ -191,7 +197,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'orders' && <OrdersPage />}
         {activeTab === 'ledger' && <LedgerPage />}
         {activeTab === 'delisted' && <DelistedPairsPage />}
-        {chartTabs.find(t => t.id === activeTab) && <ChartPage symbol={activeTab} />}
+        {chartTabs.find(t => t.id === activeTab) && <ChartPage symbol={activeTab} displaySymbol={chartTabs.find(t => t.id === activeTab)?.label} />}
         {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>
 

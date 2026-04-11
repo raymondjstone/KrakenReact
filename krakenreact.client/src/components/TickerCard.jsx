@@ -10,7 +10,7 @@ export default function TickerCard({ data, selected, onClick, onRemove, tempPinn
       onClick={() => onClick(data.symbol)}
     >
       <div className="ticker-symbol">
-        {data.symbol}
+        {data.displaySymbol || data.symbol}
         {onRemove && (
           <button
             className="ticker-remove"

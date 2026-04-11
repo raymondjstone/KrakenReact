@@ -132,7 +132,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   const cardStyle = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: 20, marginBottom: 20 };
   const labelStyle = { marginBottom: 8, fontWeight: 600, color: 'var(--text-primary)' };
   const inputStyle = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 14 };
-  const textareaStyle = { ...inputStyle, minHeight: 100, fontFamily: 'monospace', resize: 'vertical' };
+  const textareaStyle = { ...inputStyle, minHeight: 500, fontFamily: 'monospace', resize: 'vertical' };
   const hintStyle = { color: 'var(--text-muted)', fontSize: 13, marginTop: 4 };
   const buttonStyle = { padding: '10px 20px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 };
 

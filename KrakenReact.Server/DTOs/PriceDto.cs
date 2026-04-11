@@ -3,6 +3,7 @@ namespace KrakenReact.Server.DTOs;
 public class PriceDto
 {
     public string Symbol { get; set; } = "";
+    public string DisplaySymbol { get; set; } = "";
     public string Base { get; set; } = "";
     public string CCY { get; set; } = "";
     public string CoinType { get; set; } = "";

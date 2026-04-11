@@ -4,7 +4,7 @@ import { formatPrice } from '../utils/formatters';
 export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelect, pinnedSet, onPin, onUnpin }) {
   const [filter, setFilter] = useState('');
   const [tab, setTab] = useState('all');
-  const [sortBy, setSortBy] = useState(null); // null | 'price' | 'change'
+  const [sortBy, setSortBy] = useState(null); // null | 'name' | 'price' | 'change'
   const [sortDir, setSortDir] = useState('desc');
 
   const toggleSort = (col) => {
@@ -18,7 +18,7 @@ export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelec
 
   const search = filter.toLowerCase();
   const filtered = tickers.filter(t =>
-    !search || t.symbol.toLowerCase().includes(search) || (t.base && t.base.toLowerCase().includes(search))
+    !search || (t.displaySymbol || t.symbol).toLowerCase().includes(search) || (t.base && t.base.toLowerCase().includes(search))
   );
 
   const held = filtered.filter(t => {
@@ -34,6 +34,11 @@ export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelec
     if (!sortBy) return list;
     const sorted = [...list];
     sorted.sort((a, b) => {
+      if (sortBy === 'name') {
+        const na = (a.displaySymbol || a.symbol || '').toLowerCase();
+        const nb = (b.displaySymbol || b.symbol || '').toLowerCase();
+        return sortDir === 'desc' ? nb.localeCompare(na) : na.localeCompare(nb);
+      }
       const va = sortBy === 'price' ? (a.closePrice ?? 0) : (a.closePriceMovement ?? 0);
       const vb = sortBy === 'price' ? (b.closePrice ?? 0) : (b.closePriceMovement ?? 0);
       return sortDir === 'desc' ? vb - va : va - vb;
@@ -65,7 +70,9 @@ export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelec
         />
       </div>
       <div className="watchlist-header-row">
-        <div style={{ flex: 1, fontSize: 10, color: 'var(--text-muted)' }}>Pair</div>
+        <button className={`watchlist-sort-btn${sortBy === 'name' ? ' active' : ''}`} onClick={() => toggleSort('name')} style={{ flex: 1, textAlign: 'left' }}>
+          Pair {sortBy === 'name' ? (sortDir === 'desc' ? '\u25BC' : '\u25B2') : ''}
+        </button>
         <button className={`watchlist-sort-btn${sortBy === 'price' ? ' active' : ''}`} onClick={() => toggleSort('price')}>
           Price {sortBy === 'price' ? (sortDir === 'desc' ? '\u25BC' : '\u25B2') : ''}
         </button>
@@ -97,7 +104,7 @@ export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelec
                 >{isPinned ? '\u2605' : '\u2606'}</button>
               )}
               <div className="watchlist-symbol">
-                {t.symbol}
+                {t.displaySymbol || t.symbol}
                 {isHeld && <span style={{ marginLeft: 4, fontSize: 9, color: 'var(--yellow)', verticalAlign: 'middle' }}>*</span>}
               </div>
               <div className="watchlist-price">{formatPrice(t.closePrice)}</div>

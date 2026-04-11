@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createChart, CandlestickSeries } from 'lightweight-charts';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
@@ -15,13 +15,35 @@ const CHART_THEMES = {
   },
 };
 
-export default function ChartPage({ symbol }) {
+const INTERVALS = [
+  { key: '1', label: '1m' },
+  { key: '5', label: '5m' },
+  { key: '15', label: '15m' },
+  { key: '30', label: '30m' },
+  { key: '60', label: '1H' },
+  { key: '240', label: '4H' },
+  { key: '1D', label: '1D' },
+  { key: '1W', label: '1W' },
+];
+
+// Intervals where candles represent less than a day — show time on the axis
+const INTRADAY = new Set(['1', '5', '15', '30', '60', '240']);
+
+export default function ChartPage({ symbol, displaySymbol }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const orderLinesRef = useRef([]);
   const resizeHandlerRef = useRef(null);
   const { theme } = useTheme();
+  const [interval, setInterval_] = useState(() => localStorage.getItem('kraken_chart_interval') || '1D');
+  const [loading, setLoading] = useState(true);
+  const [noData, setNoData] = useState(false);
+
+  const changeInterval = (iv) => {
+    setInterval_(iv);
+    localStorage.setItem('kraken_chart_interval', iv);
+  };
 
   useEffect(() => {
     const container = chartContainerRef.current;
@@ -32,6 +54,7 @@ export default function ChartPage({ symbol }) {
     let disposed = false;
     const conn = getConnection();
     const colors = CHART_THEMES[theme] || CHART_THEMES.light;
+    const isIntraday = INTRADAY.has(interval);
 
     if (chartRef.current) {
       chartRef.current.remove();
@@ -70,6 +93,9 @@ export default function ChartPage({ symbol }) {
       }).catch(() => {});
     }
 
+    setLoading(true);
+    setNoData(false);
+
     function tryCreate() {
       if (disposed || chartRef.current) return;
       const w = container.clientWidth;
@@ -82,7 +108,7 @@ export default function ChartPage({ symbol }) {
         layout: { background: { color: colors.bg }, textColor: colors.text },
         grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
         crosshair: { mode: 0 },
-        timeScale: { timeVisible: true, secondsVisible: false, borderColor: colors.border },
+        timeScale: { timeVisible: isIntraday, secondsVisible: false, borderColor: colors.border },
         rightPriceScale: { borderColor: colors.border },
       });
       chartRef.current = chart;
@@ -95,7 +121,9 @@ export default function ChartPage({ symbol }) {
       seriesRef.current = candleSeries;
 
       const encodedSymbol = encodeURIComponent(symbol);
-      api.get(`/prices/${encodedSymbol}/klines`).then(r => {
+      api.get(`/prices/${encodedSymbol}/klines?interval=${interval}`).then(r => {
+        console.log(`[Chart] ${symbol} interval=${interval}: ${r.data.length} raw klines, disposed=${disposed}`);
+        if (r.data.length > 0) console.log('[Chart] sample:', r.data[0]);
         if (disposed) return;
         const data = r.data
           .filter(k => k.openTime && k.open > 0)
@@ -105,47 +133,61 @@ export default function ChartPage({ symbol }) {
           }))
           .sort((a, b) => a.time - b.time)
           .filter((v, i, arr) => i === 0 || v.time !== arr[i - 1].time);
-        if (data.length) candleSeries.setData(data);
+        console.log(`[Chart] ${symbol}: ${data.length} after filter`);
+        if (data.length) {
+          candleSeries.setData(data);
+          if (!disposed) { setLoading(false); setNoData(false); }
+        } else {
+          if (!disposed) { setLoading(false); setNoData(true); }
+        }
 
         updateOrderLines();
-      }).catch(console.error);
+      }).catch((err) => {
+        console.error(err);
+        if (!disposed) { setLoading(false); setNoData(true); }
+      });
 
-      // Track the current day's OHLC so ticker updates merge into one daily candle
-      const todayCandle = { time: 0, open: 0, high: 0, low: 0, close: 0 };
+      // For intraday charts, merge live ticker updates into the current candle
+      const liveCandle = { time: 0, open: 0, high: 0, low: 0, close: 0 };
 
       handler = (data) => {
-        if (data.symbol === symbol && data.closePrice) {
-          try {
-            // Floor to start of UTC day to match the daily kline interval
-            const now = new Date();
-            const dayTime = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000);
-            const close = Number(data.closePrice);
-            const high = Number(data.highPrice || close);
-            const low = Number(data.lowPrice || close);
-            const open = Number(data.openPrice || close);
+        if (data.symbol !== symbol || !data.closePrice) return;
+        try {
+          const close = Number(data.closePrice);
+          const high = Number(data.highPrice || close);
+          const low = Number(data.lowPrice || close);
+          const open = Number(data.openPrice || close);
 
-            if (todayCandle.time !== dayTime) {
-              // New day — reset
-              todayCandle.time = dayTime;
-              todayCandle.open = open;
-              todayCandle.high = high;
-              todayCandle.low = low;
-            } else {
-              // Same day — extend high/low
-              if (high > todayCandle.high) todayCandle.high = high;
-              if (low < todayCandle.low) todayCandle.low = low;
-            }
-            todayCandle.close = close;
+          // Compute the bucket start time for the current interval
+          const now = new Date();
+          let bucketTime;
+          if (interval === '1D' || interval === '1W') {
+            bucketTime = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000);
+          } else {
+            const mins = parseInt(interval, 10) || 60;
+            const secs = mins * 60;
+            bucketTime = Math.floor(now.getTime() / 1000 / secs) * secs;
+          }
 
-            candleSeries.update({
-              time: todayCandle.time,
-              open: todayCandle.open,
-              high: todayCandle.high,
-              low: todayCandle.low,
-              close: todayCandle.close,
-            });
-          } catch { /* ignore update error */ }
-        }
+          if (liveCandle.time !== bucketTime) {
+            liveCandle.time = bucketTime;
+            liveCandle.open = open;
+            liveCandle.high = high;
+            liveCandle.low = low;
+          } else {
+            if (high > liveCandle.high) liveCandle.high = high;
+            if (low < liveCandle.low) liveCandle.low = low;
+          }
+          liveCandle.close = close;
+
+          candleSeries.update({
+            time: liveCandle.time,
+            open: liveCandle.open,
+            high: liveCandle.high,
+            low: liveCandle.low,
+            close: liveCandle.close,
+          });
+        } catch { /* ignore update error */ }
       };
       conn.on('TickerUpdate', handler);
 
@@ -192,14 +234,48 @@ export default function ChartPage({ symbol }) {
         orderLinesRef.current = [];
       }
     };
-  }, [symbol, theme]);
+  }, [symbol, theme, interval]);
+
+  const btnBase = {
+    border: 'none', cursor: 'pointer', padding: '3px 8px', borderRadius: 3,
+    fontSize: 11, fontWeight: 600, transition: 'all 0.15s',
+  };
 
   return (
     <div style={{ height: '100%', background: 'var(--bg-primary)', padding: 8, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ color: 'var(--yellow)', fontSize: 14, fontWeight: 600, marginBottom: 4, flexShrink: 0 }}>
-        {symbol}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexShrink: 0 }}>
+        <span style={{ color: 'var(--yellow)', fontSize: 14, fontWeight: 600 }}>
+          {displaySymbol || symbol}
+        </span>
+        <div style={{ display: 'flex', gap: 2, marginLeft: 12 }}>
+          {INTERVALS.map(iv => (
+            <button
+              key={iv.key}
+              onClick={() => changeInterval(iv.key)}
+              style={{
+                ...btnBase,
+                background: interval === iv.key ? 'var(--yellow)' : 'var(--bg-input)',
+                color: interval === iv.key ? '#0b0e11' : 'var(--text-secondary)',
+              }}
+            >
+              {iv.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div ref={chartContainerRef} style={{ flex: 1, minHeight: 0 }} />
+      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+        <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />
+        {loading && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', zIndex: 2 }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading chart data...</div>
+          </div>
+        )}
+        {!loading && noData && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', zIndex: 2 }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No data available for {displaySymbol || symbol}</div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

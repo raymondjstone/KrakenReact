@@ -107,8 +107,29 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
 
   const loadOrders2 = () => api.get('/orders').then(r => setOrders(r.data)).catch(() => {});
 
+  // Map an order symbol (e.g. "XBTUSD") to a ticker symbol (e.g. "XBT/USD")
+  const selectOrderSymbol = (orderSymbol) => {
+    // Try direct match with slash inserted (orders strip the slash)
+    const match = tickers.find(t => t.symbol.replace('/', '') === orderSymbol);
+    if (match) { selectSymbol(match.symbol); return; }
+    // Try matching by normalized base
+    const ticker = tickers.find(t => (t.displaySymbol || t.symbol).replace('/', '') === orderSymbol);
+    if (ticker) { selectSymbol(ticker.symbol); return; }
+  };
+
+  // Map a balance asset (e.g. "BTC") to its USD ticker symbol
+  const selectBalanceAsset = (asset) => {
+    const match = tickers.find(t => t.base === asset && t.ccy === 'USD');
+    if (match) { selectSymbol(match.symbol); return; }
+    // Fallback: first ticker with matching base
+    const fallback = tickers.find(t => t.base === asset);
+    if (fallback) selectSymbol(fallback.symbol);
+  };
+
   const balanceCols = useMemo(() => [
-    { field: 'asset', minWidth: 80, cellStyle: { fontWeight: 600 } },
+    { field: 'asset', minWidth: 80, cellRenderer: p => (
+      <span style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--yellow)', textDecoration: 'underline' }} onClick={() => selectBalanceAsset(p.value)}>{p.value}</span>
+    )},
     { field: 'total', minWidth: 110, valueFormatter: p => formatNumber(p.value, 4) },
     { field: 'available', minWidth: 110, valueFormatter: p => formatNumber(p.value, 4) },
     { field: 'latestPrice', headerName: 'Price', minWidth: 100, valueFormatter: p => formatPrice(p.value) },
@@ -139,7 +160,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       valueFormatter: p => p.value != null ? formatNumber(p.value, 4) : '',
       cellStyle: p => p.value > 0 ? { color: 'var(--yellow)' } : {},
     },
-  ], []);
+  ], [selectBalanceAsset]);
 
   const balanceDefaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 
@@ -172,7 +193,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
         <div className="dashboard-center">
           {config.showChart && selectedSymbol ? (
             <div className="dashboard-chart">
-              <ChartPage symbol={selectedSymbol} />
+              <ChartPage symbol={selectedSymbol} displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol} />
             </div>
           ) : (
             <div className="dashboard-chart" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
@@ -196,6 +217,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
                         orders={orders}
                         symbols={symbols}
                         onOrderChanged={loadOrders2}
+                        onSymbolClick={selectOrderSymbol}
                       />
                     )}
                     {bottomTab === 'balances' && (

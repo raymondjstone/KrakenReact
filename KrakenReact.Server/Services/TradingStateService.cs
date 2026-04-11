@@ -181,9 +181,9 @@ public class TradingStateService
     // Default values - used as fallback if DB has no configuration
     public static readonly List<string> DefaultBaseCurrencies = new() { "ZUSD" };
     public static readonly List<string> DefaultBlacklist = new() { "TRUMP", "MELANIA", "MATIC", "K", "KILT", "MIRA", "MKR", "EOS", "XMR", "BCH" };
-    public static readonly List<string> DefaultMajorCoin = new() { "XBT", "ETH", "SOL", "XRP" };
+    public static readonly List<string> DefaultMajorCoin = new() { "BTC", "ETH", "SOL", "XRP" };
     public static readonly List<string> DefaultCurrency = new() { "GBP", "EUR", "USD", "USDT", "USDC", "USDQ" };
-    public static readonly List<string> DefaultBadPairs = new() { "MATIC/USDT", "MATIC/GBP", "MATIC/USD", "XBT/USD", "TRUMP/USDT", "TRUMP/USD", "XDG/USD" };
+    public static readonly List<string> DefaultBadPairs = new() { "MATIC/USDT", "MATIC/GBP", "MATIC/USD",  "TRUMP/USDT", "TRUMP/USD", "XDG/USD" };
     public static readonly string[] DefaultDefaultPairs = { "SOL/USD", "XBT/USD", "ETH/USD" };
 
     /// <summary>Pairs that must always be loaded for internal use (e.g. currency conversion), regardless of user config.</summary>
@@ -201,7 +201,7 @@ public class TradingStateService
     // Balances can return either form, causing duplicate entries.
     private static Dictionary<string, string> AssetAliases = new(StringComparer.OrdinalIgnoreCase)
     {
-        { "XXBT", "XBT" }, { "BTC", "XBT" },
+        { "XXBT", "BTC" }, { "XBT", "BTC" },
         { "XXRP", "XRP" }, { "XETH", "ETH" }, { "XXLM", "XLM" },
         { "XLTC", "LTC" }, { "XXMR", "XMR" }, { "XXDG", "XDG" }, { "XZEC", "ZEC" },
         { "XREP", "REP" }, { "XMLN", "MLN" }, { "XETC", "ETC" }, { "XDAO", "DAO" },
@@ -241,6 +241,9 @@ public class TradingStateService
     public ConcurrentDictionary<string, BalanceDto> Balances { get; } = new();
     public ConcurrentDictionary<string, AutoTradeDto> AutoOrders { get; } = new();
     public ConcurrentDictionary<string, KrakenSymbol> Symbols { get; } = new();
+
+    /// <summary>Cache of working Kraken API pair names. Key = internal symbol (e.g. "XBT/USD"), Value = API-accepted name (e.g. "BTCUSD").</summary>
+    public ConcurrentDictionary<string, string> ApiPairNameCache { get; } = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _notifiedOrders = new();
     private readonly object _notifiedLock = new();
     private const int MaxNotifiedOrders = 5000;
@@ -304,6 +307,84 @@ public class TradingStateService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Resolves a symbol (which may use normalized names like "BTC/USD") to the
+    /// raw Kraken websocket key (e.g. "XBT/USD") used in the Prices dictionary.
+    /// Returns the input unchanged if already a valid key or no match found.
+    /// </summary>
+    public string ResolveSymbolKey(string symbol)
+    {
+        // Direct match — already a valid key
+        if (Prices.ContainsKey(symbol)) return symbol;
+
+        // Try matching by normalizing both sides
+        var parts = symbol.Split('/');
+        if (parts.Length == 2)
+        {
+            var normalizedBase = NormalizeAsset(parts[0]);
+            var normalizedCcy = NormalizeAsset(parts[1]);
+            var match = Prices.Keys.FirstOrDefault(k =>
+            {
+                var kParts = k.Split('/');
+                return kParts.Length == 2 &&
+                       NormalizeAsset(kParts[0]) == normalizedBase &&
+                       NormalizeAsset(kParts[1]) == normalizedCcy;
+            });
+            if (match != null) return match;
+        }
+
+        return symbol;
+    }
+
+    /// <summary>
+    /// Generates candidate pair names for the Kraken REST API.
+    /// Kraken accepts different name formats depending on the endpoint/era,
+    /// e.g. "XBT/USD", "XBTUSD", "BTC/USD", "BTCUSD", "XXBTZUSD".
+    /// </summary>
+    public List<string> GetApiPairCandidates(string symbol)
+    {
+        var candidates = new List<string>();
+        var parts = symbol.Split('/');
+        if (parts.Length != 2) { candidates.Add(symbol); return candidates; }
+
+        var rawBase = parts[0];
+        var rawCcy = parts[1];
+        var normBase = NormalizeAsset(rawBase);
+        var normCcy = NormalizeAsset(rawCcy);
+
+        // Build reverse map: normalized → all known raw names
+        var baseNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rawBase, normBase };
+        var ccyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rawCcy, normCcy };
+        foreach (var kvp in AssetAliases)
+        {
+            if (kvp.Value.Equals(normBase, StringComparison.OrdinalIgnoreCase)) baseNames.Add(kvp.Key);
+            if (kvp.Value.Equals(normCcy, StringComparison.OrdinalIgnoreCase)) ccyNames.Add(kvp.Key);
+        }
+
+        // Also check the Symbols table for AlternateName
+        var symbolEntry = Symbols.Values.FirstOrDefault(s =>
+            s.WebsocketName.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (symbolEntry?.AlternateName != null)
+            candidates.Add(symbolEntry.AlternateName);
+
+        // Generate all combinations: with slash, without slash
+        foreach (var b in baseNames)
+            foreach (var c in ccyNames)
+            {
+                candidates.Add($"{b}/{c}");
+                candidates.Add($"{b}{c}");
+            }
+
+        // Deduplicate preserving order, put the original first
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        // Original symbol first
+        if (seen.Add(symbol)) result.Add(symbol);
+        foreach (var c in candidates)
+            if (seen.Add(c)) result.Add(c);
+        return result;
     }
 
     /// <summary>Returns the USD-to-GBP conversion rate (e.g. 0.78), or 0 if not available.</summary>
@@ -421,37 +502,21 @@ public class TradingStateService
         }
     }
 
-    /// <summary>Ensures all default asset normalizations exist in the database, adding any missing ones.</summary>
+    /// <summary>Seeds any missing default asset normalizations into the database without overwriting user edits.</summary>
     public async Task SyncAssetNormalizations(Data.KrakenDbContext db)
     {
         var existing = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a, StringComparer.OrdinalIgnoreCase);
         var changed = false;
 
-        // Build the authoritative set from code defaults
+        // Build the set from code defaults — only ADD entries that don't exist yet.
+        // Never update or remove existing entries: the DB is the source of truth once seeded.
         var defaults = new Dictionary<string, string>(AssetAliases, StringComparer.OrdinalIgnoreCase);
 
-        // Add missing entries
         foreach (var kvp in defaults)
         {
             if (!existing.ContainsKey(kvp.Key))
             {
                 db.AssetNormalizations.Add(new AssetNormalization { KrakenName = kvp.Key, NormalizedName = kvp.Value });
-                changed = true;
-            }
-            else if (existing[kvp.Key].NormalizedName != kvp.Value)
-            {
-                // Update if the normalized name changed in code defaults
-                existing[kvp.Key].NormalizedName = kvp.Value;
-                changed = true;
-            }
-        }
-
-        // Remove DB entries that are no longer in code defaults
-        foreach (var kvp in existing)
-        {
-            if (!defaults.ContainsKey(kvp.Key))
-            {
-                db.AssetNormalizations.Remove(kvp.Value);
                 changed = true;
             }
         }
