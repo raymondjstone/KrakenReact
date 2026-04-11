@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Dashboard from './Dashboard';
 import InfoPage from '../pages/InfoPage';
 import BalancesPage from '../pages/BalancesPage';
@@ -40,10 +40,17 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
   const [statusText, setStatusText] = useState('');
   const [pinnedSymbols, setPinnedSymbols] = useState([]);
   const [appSettings, setAppSettings] = useState(loadSettings);
+  const [serverSettings, setServerSettings] = useState(null);
   const { toggleTheme, isDark } = useTheme();
 
-  // Load pinned pairs from database on mount
+  // Load server settings and pinned pairs from database on mount
+  const loadServerSettings = useCallback(() => {
+    api.get('/settings').then(r => setServerSettings(r.data))
+      .catch(err => console.error('Failed to load server settings:', err));
+  }, []);
+
   useEffect(() => {
+    loadServerSettings();
     api.get('/settings/pinned-pairs')
       .then(r => setPinnedSymbols(r.data))
       .catch(() => setPinnedSymbols(['XBT/USD', 'ETH/USD', 'SOL/USD']));
@@ -174,10 +181,10 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
 
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div style={{ position: 'absolute', inset: 0, display: activeTab === 'dashboard' ? 'block' : 'none' }}>
-          <Dashboard config={config} pinnedSymbols={pinnedSymbols} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} largeMovementThreshold={appSettings.largeMovementThreshold} />
+          <Dashboard config={config} pinnedSymbols={pinnedSymbols} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} largeMovementThreshold={appSettings.largeMovementThreshold} hideAlmostZeroBalances={serverSettings?.hideAlmostZeroBalances} />
         </div>
         {activeTab === 'info' && <InfoPage onSymbolClick={openChart} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} />}
-        {activeTab === 'balances' && <BalancesPage />}
+        {activeTab === 'balances' && <BalancesPage hideAlmostZeroBalances={serverSettings?.hideAlmostZeroBalances} />}
         {activeTab === 'autotrade' && <AutoTradePage />}
         {activeTab === 'grouptrades' && <GroupedTradesPage />}
         {activeTab === 'trades' && <TradesPage />}
@@ -185,7 +192,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'ledger' && <LedgerPage />}
         {activeTab === 'delisted' && <DelistedPairsPage />}
         {chartTabs.find(t => t.id === activeTab) && <ChartPage symbol={activeTab} />}
-        {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} />}
+        {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>
 
       {showConfig && (

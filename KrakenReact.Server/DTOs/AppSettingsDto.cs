@@ -8,6 +8,8 @@ public class AppSettingsDto
     public string? PushoverApiToken { get; set; }
     public bool StakingNotifications { get; set; }
     public bool HideAlmostZeroBalances { get; set; }
+    public bool OrderProximityNotifications { get; set; }
+    public decimal OrderProximityThreshold { get; set; }
     public List<string> BaseCurrencies { get; set; } = new();
     public List<string> Blacklist { get; set; } = new();
     public List<string> MajorCoin { get; set; } = new();
@@ -25,6 +27,8 @@ public class SaveSettingsRequest
     public string? PushoverApiToken { get; set; }
     public bool? StakingNotifications { get; set; }
     public bool? HideAlmostZeroBalances { get; set; }
+    public bool? OrderProximityNotifications { get; set; }
+    public decimal? OrderProximityThreshold { get; set; }
     public List<string>? BaseCurrencies { get; set; }
     public List<string>? Blacklist { get; set; }
     public List<string>? MajorCoin { get; set; }

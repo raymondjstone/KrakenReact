@@ -58,6 +58,13 @@ public class SettingsController : ControllerBase
             var hideAlmostZero = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "HideAlmostZeroBalances");
             settings.HideAlmostZeroBalances = hideAlmostZero != null && string.Equals(hideAlmostZero.Value, "true", StringComparison.OrdinalIgnoreCase);
 
+            var orderProxNotif = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderProximityNotifications");
+            settings.OrderProximityNotifications = orderProxNotif == null || string.Equals(orderProxNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+            var orderProxThreshold = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderProximityThreshold");
+            settings.OrderProximityThreshold = orderProxThreshold != null && decimal.TryParse(orderProxThreshold.Value, System.Globalization.CultureInfo.InvariantCulture, out var threshold)
+                ? Math.Clamp(threshold, 0.1m, 20.0m) : 2.0m;
+
             return Ok(settings);
         }
         catch (Exception ex)
@@ -114,6 +121,15 @@ public class SettingsController : ControllerBase
             if (request.HideAlmostZeroBalances.HasValue)
             {
                 await SaveOrUpdateSetting("HideAlmostZeroBalances", request.HideAlmostZeroBalances.Value.ToString().ToLower(), "Hide balance rows with less than 0.0001 units");
+            }
+            if (request.OrderProximityNotifications.HasValue)
+            {
+                await SaveOrUpdateSetting("OrderProximityNotifications", request.OrderProximityNotifications.Value.ToString().ToLower(), "Send Pushover notifications when an order is near the current price");
+            }
+            if (request.OrderProximityThreshold.HasValue)
+            {
+                var clamped = Math.Clamp(request.OrderProximityThreshold.Value, 0.1m, 20.0m);
+                await SaveOrUpdateSetting("OrderProximityThreshold", clamped.ToString(System.Globalization.CultureInfo.InvariantCulture), "Percentage threshold for order proximity notifications (0.1 to 20.0)");
             }
 
             // Save asset normalizations

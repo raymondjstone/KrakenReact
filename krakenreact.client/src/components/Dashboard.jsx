@@ -12,13 +12,12 @@ import ChartPage from '../pages/ChartPage';
 import { formatPrice, formatNumber } from '../utils/formatters';
 import { useTheme } from '../context/ThemeContext';
 
-export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5 }) {
+export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5, hideAlmostZeroBalances }) {
   const [tickers, setTickers] = useState([]);
   const [selectedSymbol, setSelectedSymbol] = useState(() => localStorage.getItem('kraken_selected_pair') || '');
   const [bottomTab, setBottomTab] = useState('orders');
   const [orders, setOrders] = useState([]);
   const [balances, setBalances] = useState([]);
-  const [hideAlmostZero, setHideAlmostZero] = useState(false);
   const [symbols, setSymbols] = useState([]);
   const { gridTheme } = useTheme();
 
@@ -39,7 +38,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       }).catch(() => {});
     };
     const loadOrders = () => { if (disposed) return; api.get('/orders').then(r => { if (!disposed) setOrders(r.data); }).catch(() => {}); };
-    const loadBalances = () => { if (disposed) return; api.get('/balances').then(r => { if (!disposed) { setBalances(r.data.balances || []); setHideAlmostZero(!!r.data.hideAlmostZeroBalances); } }).catch(() => {}); };
+    const loadBalances = () => { if (disposed) return; api.get('/balances').then(r => { if (!disposed) setBalances(r.data.balances || []); }).catch(() => {}); };
 
     loadPrices();
     loadOrders();
@@ -202,7 +201,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
                     {bottomTab === 'balances' && (
                       <AgGridReact
                         theme={gridTheme}
-                        rowData={balances.filter(b => b.total > 0 && (!hideAlmostZero || (b.total >= 0.0001 && (b.latestValue || 0) >= 0.01)))}
+                        rowData={balances.filter(b => b.total > 0 && (!hideAlmostZeroBalances || (b.total >= 0.0001 && (b.latestValue || 0) >= 0.01)))}
                         columnDefs={balanceCols}
                         defaultColDef={balanceDefaultColDef}
                         domLayout="normal"

@@ -232,6 +232,8 @@ public class TradingStateService
     public string LastStatusMessage { get; set; } = "";
     public bool StakingNotifications { get; set; }
     public bool HideAlmostZeroBalances { get; set; }
+    public bool OrderProximityNotifications { get; set; } = true;
+    public decimal OrderProximityThreshold { get; set; } = 2.0m;
     public HashSet<string> SeenLedgerIds { get; } = new();
 
     public ConcurrentDictionary<string, PriceDataItem> Prices { get; } = new();
@@ -350,7 +352,9 @@ public class TradingStateService
             new() { Key = "PushoverUserKey", Value = "", Description = "Pushover User Key" },
             new() { Key = "PushoverAppToken", Value = "", Description = "Pushover App Token" },
             new() { Key = "StakingNotifications", Value = "false", Description = "Send Pushover notifications for staking reward payments" },
-            new() { Key = "HideAlmostZeroBalances", Value = "false", Description = "Hide balance rows with less than 0.0001 units or less than $0.01 value" }
+            new() { Key = "HideAlmostZeroBalances", Value = "false", Description = "Hide balance rows with less than 0.0001 units or less than $0.01 value" },
+            new() { Key = "OrderProximityNotifications", Value = "true", Description = "Send Pushover notifications when an order is near the current price" },
+            new() { Key = "OrderProximityThreshold", Value = "2.0", Description = "Percentage threshold for order proximity notifications (0.1 to 20.0)" }
         };
 
         await db.AppSettings.AddRangeAsync(defaultSettings);
@@ -483,6 +487,15 @@ public class TradingStateService
         var hideAlmostZero = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "HideAlmostZeroBalances");
         HideAlmostZeroBalances = hideAlmostZero != null && string.Equals(hideAlmostZero.Value, "true", StringComparison.OrdinalIgnoreCase);
 
+        var orderProxNotif = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderProximityNotifications");
+        OrderProximityNotifications = orderProxNotif == null || string.Equals(orderProxNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var orderProxThreshold = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderProximityThreshold");
+        if (orderProxThreshold != null && decimal.TryParse(orderProxThreshold.Value, System.Globalization.CultureInfo.InvariantCulture, out var threshold))
+            OrderProximityThreshold = Math.Clamp(threshold, 0.1m, 20.0m);
+        else
+            OrderProximityThreshold = 2.0m;
+
         // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
         if (normalizations.Any())
@@ -498,6 +511,8 @@ public class TradingStateService
         {
             ["StakingNotifications"] = ("false", "Send Pushover notifications for staking reward payments"),
             ["HideAlmostZeroBalances"] = ("false", "Hide balance rows with less than 0.0001 units or less than $0.01 value"),
+            ["OrderProximityNotifications"] = ("true", "Send Pushover notifications when an order is near the current price"),
+            ["OrderProximityThreshold"] = ("2.0", "Percentage threshold for order proximity notifications (0.1 to 20.0)"),
         };
 
         var changed = false;

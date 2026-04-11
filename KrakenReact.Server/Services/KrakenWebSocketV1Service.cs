@@ -233,12 +233,14 @@ public class KrakenWebSocketV1Service : BackgroundService
                         order.DistancePercentage = latestPrice.Close != 0 ? Math.Round((order.Price - latestPrice.Close) / (latestPrice.Close / 100), 2) : 100;
                         _ordersDirty = true;
 
-                        // Pushover notification when order is within 2% of current price
-                        if (Math.Abs(order.DistancePercentage) < 2 && !_state.HasNotified(order.Id))
+                        // Pushover notification when order is within configured threshold of current price
+                        if (_state.OrderProximityNotifications
+                            && Math.Abs(order.DistancePercentage) < _state.OrderProximityThreshold
+                            && !_state.HasNotified(order.Id))
                         {
                             _state.AddNotified(order.Id);
                             _ = _notifications.Pushover(
-                                $"{order.Symbol} {latestPrice.Close} is <2% from order price",
+                                $"{order.Symbol} {latestPrice.Close} is <{_state.OrderProximityThreshold}% from order price",
                                 $"{order.Symbol} {order.Side} @{order.Price} near");
                         }
                     }

@@ -19,7 +19,7 @@ const defaultSettings = {
   largeMovementThreshold: 5,
 };
 
-export default function SettingsPage({ settings, onSettingsChange }) {
+export default function SettingsPage({ settings, onSettingsChange, serverSettings, onServerSettingsRefresh }) {
   const [threshold, setThreshold] = useState(settings.largeMovementThreshold);
   const [activeTab, setActiveTab] = useState('general');
 
@@ -40,41 +40,41 @@ export default function SettingsPage({ settings, onSettingsChange }) {
   // Boolean settings
   const [stakingNotifications, setStakingNotifications] = useState(false);
   const [hideAlmostZeroBalances, setHideAlmostZeroBalances] = useState(false);
+  const [orderProximityNotifications, setOrderProximityNotifications] = useState(true);
+  const [orderProximityThreshold, setOrderProximityThreshold] = useState(2.0);
 
   // Asset Normalizations
   const [normalizations, setNormalizations] = useState('');
 
   const [saveStatus, setSaveStatus] = useState('');
+  const [loaded, setLoaded] = useState(false);
   const saveTimerRef = useRef(null);
 
-  const loadServerSettings = () => {
-    api.get('/settings').then(r => {
-      const data = r.data;
-      setKrakenApiKey(data.krakenApiKey || '');
-      setKrakenApiSecret(data.krakenApiSecret || '');
-      setPushoverUserKey(data.pushoverUserKey || '');
-      setPushoverApiToken(data.pushoverApiToken || '');
-      setStakingNotifications(!!data.stakingNotifications);
-      setHideAlmostZeroBalances(!!data.hideAlmostZeroBalances);
-      setBaseCurrencies((data.baseCurrencies || []).join(', '));
-      setBlacklist((data.blacklist || []).join(', '));
-      setMajorCoin((data.majorCoin || []).join(', '));
-      setCurrency((data.currency || []).join(', '));
-      setBadPairs((data.badPairs || []).join(', '));
-      setDefaultPairs((data.defaultPairs || []).join(', '));
-
-      // Convert normalization dict to string
-      if (data.assetNormalizations) {
-        const normStr = Object.entries(data.assetNormalizations)
-          .map(([k, v]) => `${k}=${v}`)
-          .join('\n');
-        setNormalizations(normStr);
-      }
-    }).catch(err => console.error('Failed to load settings:', err));
-  };
+  // Populate local state from serverSettings prop (loaded once in parent, survives tab switches)
+  useEffect(() => {
+    if (!serverSettings) return;
+    const data = serverSettings;
+    setKrakenApiKey(data.krakenApiKey || '');
+    setKrakenApiSecret(data.krakenApiSecret || '');
+    setPushoverUserKey(data.pushoverUserKey || '');
+    setPushoverApiToken(data.pushoverApiToken || '');
+    setStakingNotifications(!!data.stakingNotifications);
+    setHideAlmostZeroBalances(!!data.hideAlmostZeroBalances);
+    setOrderProximityNotifications(data.orderProximityNotifications !== false);
+    setOrderProximityThreshold(data.orderProximityThreshold ?? 2.0);
+    setBaseCurrencies((data.baseCurrencies || []).join(', '));
+    setBlacklist((data.blacklist || []).join(', '));
+    setMajorCoin((data.majorCoin || []).join(', '));
+    setCurrency((data.currency || []).join(', '));
+    setBadPairs((data.badPairs || []).join(', '));
+    setDefaultPairs((data.defaultPairs || []).join(', '));
+    if (data.assetNormalizations) {
+      setNormalizations(Object.entries(data.assetNormalizations).map(([k, v]) => `${k}=${v}`).join('\n'));
+    }
+    setLoaded(true);
+  }, [serverSettings]);
 
   useEffect(() => {
-    loadServerSettings();
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, []);
 
@@ -86,6 +86,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
   };
 
   const handleSave = () => {
+    if (!loaded) return; // Don't save until server settings have been loaded
     setSaveStatus('Saving...');
 
     const payload = {
@@ -95,6 +96,8 @@ export default function SettingsPage({ settings, onSettingsChange }) {
       pushoverApiToken: pushoverApiToken || undefined,
       stakingNotifications: stakingNotifications,
       hideAlmostZeroBalances: hideAlmostZeroBalances,
+      orderProximityNotifications: orderProximityNotifications,
+      orderProximityThreshold: orderProximityThreshold,
       baseCurrencies: baseCurrencies.split(',').map(s => s.trim()).filter(Boolean),
       blacklist: blacklist.split(',').map(s => s.trim()).filter(Boolean),
       majorCoin: majorCoin.split(',').map(s => s.trim()).filter(Boolean),
@@ -114,7 +117,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
     api.post('/settings', payload)
       .then(() => {
         setSaveStatus('Saved successfully!');
-        loadServerSettings();
+        onServerSettingsRefresh(); // Refresh parent cache (updates masked API keys etc.)
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => setSaveStatus(''), 3000);
       })
@@ -226,6 +229,55 @@ export default function SettingsPage({ settings, onSettingsChange }) {
                 <span className="toggle-slider" />
               </label>
             </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={labelStyle}>Order Proximity Notifications</div>
+                <div style={hintStyle}>
+                  Send a Pushover notification when the current price is within the configured percentage of an open order. Requires Pushover API keys to be configured.
+                </div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={orderProximityNotifications}
+                  onChange={e => setOrderProximityNotifications(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {orderProximityNotifications && (
+              <div style={{ marginTop: 16 }}>
+                <div style={labelStyle}>Proximity Threshold</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="20.0"
+                    step="0.1"
+                    value={orderProximityThreshold}
+                    onChange={e => setOrderProximityThreshold(parseFloat(e.target.value))}
+                    style={{ flex: 1 }}
+                  />
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="20.0"
+                    step="0.1"
+                    value={orderProximityThreshold}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value);
+                      if (!isNaN(v)) setOrderProximityThreshold(Math.min(20.0, Math.max(0.1, v)));
+                    }}
+                    style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }}
+                  />
+                  <span style={{ color: 'var(--text-muted)' }}>%</span>
+                </div>
+                <div style={hintStyle}>Alert when price is within this percentage of an open order (0.1% � 20.0%)</div>
+              </div>
+            )}
           </div>
 
           <button onClick={handleSave} style={buttonStyle}>Save General Settings</button>
