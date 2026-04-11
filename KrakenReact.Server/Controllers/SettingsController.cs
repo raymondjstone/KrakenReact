@@ -51,6 +51,10 @@ public class SettingsController : ControllerBase
             settings.PushoverUserKey = pushoverUser != null ? MaskSecret(pushoverUser.Value) : "";
             settings.PushoverApiToken = pushoverToken != null ? MaskSecret(pushoverToken.Value) : "";
 
+            // Get boolean settings
+            var stakingNotif = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StakingNotifications");
+            settings.StakingNotifications = stakingNotif != null && string.Equals(stakingNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
+
             return Ok(settings);
         }
         catch (Exception ex)
@@ -98,6 +102,12 @@ public class SettingsController : ControllerBase
                 await SaveSettingList("BadPairs", request.BadPairs);
             if (request.DefaultPairs != null)
                 await SaveSettingList("DefaultPairs", request.DefaultPairs);
+
+            // Save boolean settings
+            if (request.StakingNotifications.HasValue)
+            {
+                await SaveOrUpdateSetting("StakingNotifications", request.StakingNotifications.Value.ToString().ToLower(), "Send Pushover notifications for staking reward payments");
+            }
 
             // Save asset normalizations
             if (request.AssetNormalizations != null)

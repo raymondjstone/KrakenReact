@@ -15,19 +15,22 @@ public class BackgroundTaskService : BackgroundService
     private readonly DbMethods _db;
     private readonly AutoOrderService _autoOrder;
     private readonly DelistedPriceService _delisted;
+    private readonly NotificationService _notify;
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly IHubContext<TradingHub> _hub;
     private readonly ILogger<BackgroundTaskService> _logger;
     private volatile bool _klinesDone = false;
+    private bool _initialLedgerSeeded = false;
 
     public BackgroundTaskService(
-        KrakenRestService kraken, 
-        TradingStateService state, 
-        DbMethods db, 
-        AutoOrderService autoOrder, 
+        KrakenRestService kraken,
+        TradingStateService state,
+        DbMethods db,
+        AutoOrderService autoOrder,
         DelistedPriceService delisted,
+        NotificationService notify,
         IDbContextFactory<KrakenDbContext> dbFactory,
-        IHubContext<TradingHub> hub, 
+        IHubContext<TradingHub> hub,
         ILogger<BackgroundTaskService> logger)
     {
         _kraken = kraken;
@@ -35,6 +38,7 @@ public class BackgroundTaskService : BackgroundService
         _db = db;
         _autoOrder = autoOrder;
         _delisted = delisted;
+        _notify = notify;
         _dbFactory = dbFactory;
         _hub = hub;
         _logger = logger;
@@ -60,6 +64,9 @@ public class BackgroundTaskService : BackgroundService
 
             // Sync asset normalizations with code defaults (adds new, updates changed, removes stale)
             await _state.SyncAssetNormalizations(dbContext);
+
+            // Ensure required settings exist for existing databases
+            await _state.EnsureRequiredSettings(dbContext);
 
             // Load current configuration
             await _state.ReloadConfiguration(dbContext);
@@ -251,7 +258,46 @@ public class BackgroundTaskService : BackgroundService
     }
 
     private async Task LoadTrades(bool initialLoad) => await _kraken.GetTradesAsync(initialLoad);
-    private async Task LoadLedger(bool initialLoad) => await _kraken.GetLedgerAsync(initialLoad);
+
+    private async Task LoadLedger(bool initialLoad)
+    {
+        var ledgers = await _kraken.GetLedgerAsync(initialLoad);
+        await CheckStakingRewards(ledgers);
+    }
+
+    private async Task CheckStakingRewards(List<Kraken.Net.Objects.Models.KrakenLedgerEntry> ledgers)
+    {
+        // On first call, seed all existing IDs so we don't notify on historical entries
+        if (!_initialLedgerSeeded)
+        {
+            foreach (var l in ledgers)
+                _state.SeenLedgerIds.Add(l.Id);
+            _initialLedgerSeeded = true;
+            return;
+        }
+
+        if (!_state.StakingNotifications) return;
+
+        var newRewards = ledgers
+            .Where(l => l.Type == Kraken.Net.Enums.LedgerEntryType.Reward && !_state.SeenLedgerIds.Contains(l.Id))
+            .ToList();
+
+        foreach (var reward in newRewards)
+        {
+            _state.SeenLedgerIds.Add(reward.Id);
+            var asset = TradingStateService.NormalizeAsset(reward.Asset);
+            var amount = reward.Quantity;
+            _logger.LogInformation("[BG] Staking reward: {Asset} +{Amount}", asset, amount);
+            try
+            {
+                await _notify.Pushover("Staking Reward", $"{asset} +{amount}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[BG] Failed to send staking reward notification");
+            }
+        }
+    }
 
     private async Task LoadBalances()
     {

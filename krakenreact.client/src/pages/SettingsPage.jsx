@@ -37,6 +37,9 @@ export default function SettingsPage({ settings, onSettingsChange }) {
   const [badPairs, setBadPairs] = useState('');
   const [defaultPairs, setDefaultPairs] = useState('');
 
+  // Boolean settings
+  const [stakingNotifications, setStakingNotifications] = useState(false);
+
   // Asset Normalizations
   const [normalizations, setNormalizations] = useState('');
 
@@ -50,6 +53,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
       setKrakenApiSecret(data.krakenApiSecret || '');
       setPushoverUserKey(data.pushoverUserKey || '');
       setPushoverApiToken(data.pushoverApiToken || '');
+      setStakingNotifications(!!data.stakingNotifications);
       setBaseCurrencies((data.baseCurrencies || []).join(', '));
       setBlacklist((data.blacklist || []).join(', '));
       setMajorCoin((data.majorCoin || []).join(', '));
@@ -87,6 +91,7 @@ export default function SettingsPage({ settings, onSettingsChange }) {
       krakenApiSecret: krakenApiSecret || undefined,
       pushoverUserKey: pushoverUserKey || undefined,
       pushoverApiToken: pushoverApiToken || undefined,
+      stakingNotifications: stakingNotifications,
       baseCurrencies: baseCurrencies.split(',').map(s => s.trim()).filter(Boolean),
       blacklist: blacklist.split(',').map(s => s.trim()).filter(Boolean),
       majorCoin: majorCoin.split(',').map(s => s.trim()).filter(Boolean),
@@ -152,33 +157,57 @@ export default function SettingsPage({ settings, onSettingsChange }) {
       </div>
 
       {activeTab === 'general' && (
-        <div style={cardStyle}>
-          <div style={labelStyle}>Large Movement Threshold</div>
-          <div style={hintStyle}>
-            Assets that have moved by this percentage or more in the last 25 hours will be temporarily pinned to the Dashboard ticker bar.
+        <>
+          <div style={cardStyle}>
+            <div style={labelStyle}>Large Movement Threshold</div>
+            <div style={hintStyle}>
+              Assets that have moved by this percentage or more in the last 25 hours will be temporarily pinned to the Dashboard ticker bar.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={threshold}
+                onChange={e => handleThresholdChange(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                value={threshold}
+                onChange={e => handleThresholdChange(e.target.value)}
+                style={{ width: 60, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }}
+              />
+              <span style={{ color: 'var(--text-muted)' }}>%</span>
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={threshold}
-              onChange={e => handleThresholdChange(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="1"
-              value={threshold}
-              onChange={e => handleThresholdChange(e.target.value)}
-              style={{ width: 60, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }}
-            />
-            <span style={{ color: 'var(--text-muted)' }}>%</span>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={labelStyle}>Staking Reward Notifications</div>
+                <div style={hintStyle}>
+                  Send a Pushover notification when a new staking reward payment is received. Requires Pushover API keys to be configured.
+                </div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={stakingNotifications}
+                  onChange={e => setStakingNotifications(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
           </div>
-        </div>
+
+          <button onClick={handleSave} style={buttonStyle}>Save General Settings</button>
+          {saveStatus && <span style={{ marginLeft: 12, color: saveStatus.includes('Error') ? 'var(--red)' : 'var(--green)' }}>{saveStatus}</span>}
+        </>
       )}
 
       {activeTab === 'api' && (

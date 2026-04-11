@@ -14,8 +14,8 @@ public class BalanceDto
     public decimal OrderUncoveredQty { get; set; }
     public decimal OrderCoveredValue { get; set; }
     public decimal OrderUncoveredValue { get; set; }
-    public decimal TotalCostBasis { get; set; }
-    public decimal TotalFees { get; set; }
-    public decimal NetProfitLoss { get; set; }
-    public decimal NetProfitLossPercentage { get; set; }
+    public decimal? TotalCostBasis { get; set; }
+    public decimal? TotalFees { get; set; }
+    public decimal? NetProfitLoss { get; set; }
+    public decimal? NetProfitLossPercentage { get; set; }
 }

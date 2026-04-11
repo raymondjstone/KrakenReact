@@ -230,6 +230,8 @@ public class TradingStateService
 
     public bool InitialDataLoad { get; set; } = true;
     public string LastStatusMessage { get; set; } = "";
+    public bool StakingNotifications { get; set; }
+    public HashSet<string> SeenLedgerIds { get; } = new();
 
     public ConcurrentDictionary<string, PriceDataItem> Prices { get; } = new();
     public ConcurrentDictionary<string, OrderDto> Orders { get; } = new();
@@ -334,7 +336,8 @@ public class TradingStateService
             new() { Key = "KrakenApiKey", Value = "", Description = "Kraken API Key" },
             new() { Key = "KrakenApiSecret", Value = "", Description = "Kraken API Secret" },
             new() { Key = "PushoverUserKey", Value = "", Description = "Pushover User Key" },
-            new() { Key = "PushoverAppToken", Value = "", Description = "Pushover App Token" }
+            new() { Key = "PushoverAppToken", Value = "", Description = "Pushover App Token" },
+            new() { Key = "StakingNotifications", Value = "false", Description = "Send Pushover notifications for staking reward payments" }
         };
 
         await db.AppSettings.AddRangeAsync(defaultSettings);
@@ -460,12 +463,36 @@ public class TradingStateService
         var defaultPairs = await GetSettingList(db, "DefaultPairs");
         if (defaultPairs != null && defaultPairs.Any()) DefaultPairs = defaultPairs.ToArray();
 
+        // Reload boolean settings
+        var stakingNotif = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StakingNotifications");
+        StakingNotifications = stakingNotif != null && string.Equals(stakingNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
+
         // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
         if (normalizations.Any())
         {
             AssetAliases = new Dictionary<string, string>(normalizations, StringComparer.OrdinalIgnoreCase);
         }
+    }
+
+    /// <summary>Ensures required settings exist in DB for databases created before new settings were added</summary>
+    public async Task EnsureRequiredSettings(Data.KrakenDbContext db)
+    {
+        var requiredSettings = new Dictionary<string, (string Value, string Description)>
+        {
+            ["StakingNotifications"] = ("false", "Send Pushover notifications for staking reward payments"),
+        };
+
+        var changed = false;
+        foreach (var (key, (value, description)) in requiredSettings)
+        {
+            if (!await db.AppSettings.AnyAsync(s => s.Key == key))
+            {
+                db.AppSettings.Add(new AppSettings { Key = key, Value = value, Description = description });
+                changed = true;
+            }
+        }
+        if (changed) await db.SaveChangesAsync();
     }
 
     private static async Task<List<string>?> GetSettingList(Data.KrakenDbContext db, string key)
