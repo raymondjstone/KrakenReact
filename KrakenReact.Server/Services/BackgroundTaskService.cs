@@ -274,7 +274,7 @@ public class BackgroundTaskService : BackgroundService
             return;
         }
 
-        if (!_state.StakingNotifications) return;
+        if (!_state.StakingNotifications && !_state.AutoAddStakingToOrder) return;
 
         var newRewards = ledgers
             .Where(l => l.Type == Kraken.Net.Enums.LedgerEntryType.Reward && !_state.SeenLedgerIds.Contains(l.Id))
@@ -286,13 +286,75 @@ public class BackgroundTaskService : BackgroundService
             var asset = TradingStateService.NormalizeAsset(reward.Asset);
             var amount = reward.Quantity;
             _logger.LogInformation("[BG] Staking reward: {Asset} +{Amount}", asset, amount);
-            try
+
+            if (_state.StakingNotifications)
             {
-                await _notify.Pushover("Staking Reward", $"{asset} +{amount}");
+                try
+                {
+                    await _notify.Pushover("Staking Reward", $"{asset} +{amount}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[BG] Failed to send staking reward notification");
+                }
             }
-            catch (Exception ex)
+
+            if (_state.AutoAddStakingToOrder && amount > 0)
             {
-                _logger.LogWarning(ex, "[BG] Failed to send staking reward notification");
+                // Find the newest open sell order for this asset
+                var newestSellOrder = _state.Orders.Values
+                    .Where(o => o.Side == "Sell"
+                        && (o.Status == "Open" || o.Status == "New" || o.Status == "PendingNew")
+                        && _state.NormalizeOrderSymbolBase(o.Symbol) == asset)
+                    .OrderByDescending(o => o.CreateTime)
+                    .FirstOrDefault();
+
+                if (newestSellOrder != null)
+                {
+                    var orderId = newestSellOrder.Id;
+                    var symbol = newestSellOrder.Symbol;
+                    var currentQty = newestSellOrder.Quantity;
+                    var price = newestSellOrder.Price;
+                    var rewardAmount = amount;
+
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            // Wait 2 minutes for the balance to settle on Kraken's side
+                            await Task.Delay(TimeSpan.FromMinutes(2));
+
+                            var newQty = currentQty + rewardAmount;
+                            var result = await _kraken.AmendOrderValues(orderId, symbol, price, newQty);
+                            if (result.Success)
+                            {
+                                // Update the order in state
+                                if (_state.Orders.TryGetValue(orderId, out var order))
+                                {
+                                    order.Quantity = newQty;
+                                    _state.RecalculateOrderFields(order);
+                                }
+                                _logger.LogInformation("[BG] Auto-amended sell order {OrderId}: added {Amount} {Asset} staking reward (qty {OldQty} -> {NewQty})",
+                                    orderId, rewardAmount, asset, currentQty, newQty);
+
+                                // Broadcast updated orders
+                                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+
+                                if (_state.StakingNotifications)
+                                {
+                                    try { await _notify.Pushover("Staking → Order", $"Added {rewardAmount} {asset} to sell order @ {price} (qty {currentQty} → {newQty})"); }
+                                    catch { /* ignore */ }
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogWarning("[BG] Failed to auto-amend sell order {OrderId} with staking reward: {Error}",
+                                    orderId, result.Error?.Message);
+                            }
+                        }
+                        catch (Exception ex) { _logger.LogError(ex, "[BG] Error auto-amending sell order {OrderId} with staking reward", orderId); }
+                    });
+                }
             }
         }
     }

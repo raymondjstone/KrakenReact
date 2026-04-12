@@ -47,6 +47,13 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   const [orderPriceOffsets, setOrderPriceOffsets] = useState('2, 5, 10, 15');
   const [orderQtyPercentages, setOrderQtyPercentages] = useState('5, 10, 20, 25, 50, 75, 100');
 
+  // Auto-sell
+  const [autoSellOnBuyFill, setAutoSellOnBuyFill] = useState(false);
+  const [autoSellPercentage, setAutoSellPercentage] = useState(10);
+
+  // Auto-add staking to order
+  const [autoAddStakingToOrder, setAutoAddStakingToOrder] = useState(false);
+
   // Asset Normalizations
   const [normalizations, setNormalizations] = useState('');
 
@@ -77,6 +84,9 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     }
     if (data.orderPriceOffsets?.length) setOrderPriceOffsets(data.orderPriceOffsets.join(', '));
     if (data.orderQtyPercentages?.length) setOrderQtyPercentages(data.orderQtyPercentages.join(', '));
+    setAutoSellOnBuyFill(!!data.autoSellOnBuyFill);
+    setAutoSellPercentage(data.autoSellPercentage ?? 10);
+    setAutoAddStakingToOrder(!!data.autoAddStakingToOrder);
     setLoaded(true);
   }, [serverSettings]);
 
@@ -115,6 +125,11 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     // Parse order dialog button configs
     payload.orderPriceOffsets = orderPriceOffsets.split(',').map(s => parseFloat(s.trim())).filter(v => v > 0 && !isNaN(v));
     payload.orderQtyPercentages = orderQtyPercentages.split(',').map(s => parseFloat(s.trim())).filter(v => v > 0 && v <= 100 && !isNaN(v));
+
+    // Auto-sell settings
+    payload.autoSellOnBuyFill = autoSellOnBuyFill;
+    payload.autoSellPercentage = autoSellPercentage;
+    payload.autoAddStakingToOrder = autoAddStakingToOrder;
 
     // Parse normalizations
     const normDict = {};
@@ -225,6 +240,25 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
           <div style={cardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
+                <div style={labelStyle}>Auto-Add Staking Rewards to Open Order</div>
+                <div style={hintStyle}>
+                  When a staking reward is received, automatically add the reward quantity to the newest open sell order for that asset. The order is amended after a 2-minute delay to allow balances to settle.
+                </div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={autoAddStakingToOrder}
+                  onChange={e => setAutoAddStakingToOrder(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
                 <div style={labelStyle}>Hide Almost Zero Balances</div>
                 <div style={hintStyle}>
                   Hide balance rows with less than 0.0001 units or less than $0.01 value from the Dashboard and Balances grids. These balances still count towards portfolio totals.
@@ -316,6 +350,55 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
               style={{ ...inputStyle, marginTop: 8 }}
               placeholder="5, 10, 20, 25, 50, 75, 100"
             />
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={labelStyle}>Auto-Sell on Buy Fill</div>
+                <div style={hintStyle}>
+                  When enabled, automatically creates a sell order when a buy order fills completely. The sell price is set at the configured percentage above the buy price.
+                </div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={autoSellOnBuyFill}
+                  onChange={e => setAutoSellOnBuyFill(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {autoSellOnBuyFill && (
+              <div style={{ marginTop: 16 }}>
+                <div style={labelStyle}>Sell Price Markup</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                  <input
+                    type="range"
+                    min="1"
+                    max="500"
+                    step="1"
+                    value={autoSellPercentage}
+                    onChange={e => setAutoSellPercentage(parseFloat(e.target.value))}
+                    style={{ flex: 1 }}
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    max="500"
+                    step="0.1"
+                    value={autoSellPercentage}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value);
+                      if (!isNaN(v)) setAutoSellPercentage(Math.min(500, Math.max(1, v)));
+                    }}
+                    style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }}
+                  />
+                  <span style={{ color: 'var(--text-muted)' }}>%</span>
+                </div>
+                <div style={hintStyle}>Sell order will be placed at this percentage above the buy price (1% - 500%)</div>
+              </div>
+            )}
           </div>
 
           <button onClick={handleSave} style={buttonStyle}>Save General Settings</button>

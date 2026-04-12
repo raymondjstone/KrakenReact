@@ -20,6 +20,9 @@ public class AppSettingsDto
     public Dictionary<string, string> AssetNormalizations { get; set; } = new();
     public List<decimal> OrderPriceOffsets { get; set; } = new();
     public List<decimal> OrderQtyPercentages { get; set; } = new();
+    public bool AutoSellOnBuyFill { get; set; }
+    public decimal AutoSellPercentage { get; set; }
+    public bool AutoAddStakingToOrder { get; set; }
 }
 
 public class SaveSettingsRequest
@@ -42,4 +45,7 @@ public class SaveSettingsRequest
     public Dictionary<string, string>? AssetNormalizations { get; set; }
     public List<decimal>? OrderPriceOffsets { get; set; }
     public List<decimal>? OrderQtyPercentages { get; set; }
+    public bool? AutoSellOnBuyFill { get; set; }
+    public decimal? AutoSellPercentage { get; set; }
+    public bool? AutoAddStakingToOrder { get; set; }
 }

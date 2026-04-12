@@ -247,6 +247,10 @@ public class TradingStateService
     public List<decimal> OrderPriceOffsets { get; set; } = new(DefaultOrderPriceOffsets);
     public List<decimal> OrderQtyPercentages { get; set; } = new(DefaultOrderQtyPercentages);
 
+    public bool AutoSellOnBuyFill { get; set; }
+    public decimal AutoSellPercentage { get; set; } = 10m;
+    public bool AutoAddStakingToOrder { get; set; }
+
     /// <summary>Cache of working Kraken API pair names. Key = internal symbol (e.g. "XBT/USD"), Value = API-accepted name (e.g. "BTCUSD").</summary>
     public ConcurrentDictionary<string, string> ApiPairNameCache { get; } = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _notifiedOrders = new();
@@ -644,6 +648,19 @@ public class TradingStateService
             if (parsed.Any()) OrderQtyPercentages = parsed;
         }
 
+        // Reload auto-sell settings
+        var autoSellEnabled = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoSellOnBuyFill");
+        AutoSellOnBuyFill = autoSellEnabled != null && string.Equals(autoSellEnabled.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var autoSellPct = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoSellPercentage");
+        if (autoSellPct != null && decimal.TryParse(autoSellPct.Value, System.Globalization.CultureInfo.InvariantCulture, out var pct))
+            AutoSellPercentage = Math.Clamp(pct, 1m, 500m);
+        else
+            AutoSellPercentage = 10m;
+
+        var autoAddStaking = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoAddStakingToOrder");
+        AutoAddStakingToOrder = autoAddStaking != null && string.Equals(autoAddStaking.Value, "true", StringComparison.OrdinalIgnoreCase);
+
         // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
         if (normalizations.Any())
@@ -664,6 +681,9 @@ public class TradingStateService
             ["Theme"] = ("dark", "UI theme (dark or light)"),
             ["OrderPriceOffsets"] = ("2,5,10,15", "Percentage offset buttons for the order dialog price field (comma-separated)"),
             ["OrderQtyPercentages"] = ("5,10,20,25,50,75,100", "Percentage buttons for the order dialog quantity field (comma-separated)"),
+            ["AutoSellOnBuyFill"] = ("false", "Automatically create a sell order when a buy order fills"),
+            ["AutoSellPercentage"] = ("10", "Percentage above buy price for the automatic sell order (1 to 500)"),
+            ["AutoAddStakingToOrder"] = ("false", "Automatically add staking reward quantity to the newest open sell order for that asset"),
         };
 
         var changed = false;

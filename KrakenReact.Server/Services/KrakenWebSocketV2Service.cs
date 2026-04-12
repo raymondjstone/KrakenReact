@@ -173,6 +173,47 @@ public class KrakenWebSocketV2Service : BackgroundService
                     _ = _hub.Clients.All.SendAsync("ExecutionUpdate", execMsg.Data)
                         .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] ExecutionUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
 
+                    // Auto-sell: when a buy order fills completely, create a sell order at configured percentage above buy price
+                    if (_state.AutoSellOnBuyFill)
+                    {
+                        foreach (var exec in execMsg.Data)
+                        {
+                            var status = (exec.OrderStatus ?? "").ToLower();
+                            var side = (exec.Side ?? "").ToLower();
+                            if (status == "filled" && side == "buy" && !string.IsNullOrEmpty(exec.Symbol))
+                            {
+                                var buyPrice = exec.LimitPrice;
+                                var qty = exec.OrderQty;
+                                if (buyPrice > 0 && qty > 0)
+                                {
+                                    var sellPrice = Math.Round(buyPrice * (1 + _state.AutoSellPercentage / 100), 8);
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            await Task.Delay(2000); // Brief delay to let Kraken settle
+                                            var clientOrderId = $"AS{DateTime.Now:yyyyMMddHHmmss}";
+                                            var result = await _kraken.PlaceOrderAsync(
+                                                exec.Symbol, Kraken.Net.Enums.OrderSide.Sell, Kraken.Net.Enums.OrderType.Limit,
+                                                qty, sellPrice, clientOrderId);
+                                            if (result.Success)
+                                            {
+                                                _logger.LogInformation("[WS V2] Auto-sell created: {Symbol} {Qty} @ {Price} (+{Pct}% from {BuyPrice})",
+                                                    exec.Symbol, qty, sellPrice, _state.AutoSellPercentage, buyPrice);
+                                            }
+                                            else
+                                            {
+                                                _logger.LogWarning("[WS V2] Auto-sell failed for {Symbol}: {Error}",
+                                                    exec.Symbol, result.Error?.Message);
+                                            }
+                                        }
+                                        catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error creating auto-sell for {Symbol}", exec.Symbol); }
+                                    });
+                                }
+                            }
+                        }
+                    }
+
                     // When a trade fills, fetch fresh trades+ledger from Kraken API so DB is up to date
                     if (hasFill)
                     {

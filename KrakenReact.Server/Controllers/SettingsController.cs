@@ -70,6 +70,9 @@ public class SettingsController : ControllerBase
 
             settings.OrderPriceOffsets = _state.OrderPriceOffsets;
             settings.OrderQtyPercentages = _state.OrderQtyPercentages;
+            settings.AutoSellOnBuyFill = _state.AutoSellOnBuyFill;
+            settings.AutoSellPercentage = _state.AutoSellPercentage;
+            settings.AutoAddStakingToOrder = _state.AutoAddStakingToOrder;
 
             return Ok(settings);
         }
@@ -153,6 +156,22 @@ public class SettingsController : ControllerBase
             {
                 var value = string.Join(",", request.OrderQtyPercentages.Where(v => v > 0 && v <= 100).Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                 await SaveOrUpdateSetting("OrderQtyPercentages", value, "Percentage buttons for the order dialog quantity field");
+            }
+
+            // Save auto-sell settings
+            if (request.AutoSellOnBuyFill.HasValue)
+            {
+                await SaveOrUpdateSetting("AutoSellOnBuyFill", request.AutoSellOnBuyFill.Value.ToString().ToLower(), "Automatically create a sell order when a buy order fills");
+            }
+            if (request.AutoSellPercentage.HasValue)
+            {
+                var clamped = Math.Clamp(request.AutoSellPercentage.Value, 1m, 500m);
+                await SaveOrUpdateSetting("AutoSellPercentage", clamped.ToString(System.Globalization.CultureInfo.InvariantCulture), "Percentage above buy price for the automatic sell order (1 to 500)");
+            }
+
+            if (request.AutoAddStakingToOrder.HasValue)
+            {
+                await SaveOrUpdateSetting("AutoAddStakingToOrder", request.AutoAddStakingToOrder.Value.ToString().ToLower(), "Automatically add staking reward quantity to the newest open sell order for that asset");
             }
 
             // Save asset normalizations
