@@ -84,20 +84,14 @@ public class BalancesController : ControllerBase
                 // Note: KrakenUserTrade might have either 'Symbol' or 'Pair' property depending on library version
                 var trades = allTrades.Where(t =>
                 {
-                    // Try to get the trading pair - could be Symbol or Pair property
                     var pairName = t.Symbol ?? "";
                     if (string.IsNullOrEmpty(pairName)) return false;
 
-                    // Extract base asset from trading pair (e.g., "XBT" from "XBT/USD" or "XBTUSD")
-                    var baseAsset = pairName.Contains('/') 
-                        ? pairName.Split('/').FirstOrDefault() ?? ""
-                        : pairName.Length >= 3 ? pairName.Substring(0, pairName.Length >= 6 ? 3 : pairName.Length / 2) : pairName;
+                    // Use NormalizeOrderSymbolBase to reliably extract and normalize the base asset
+                    // This handles all Kraken symbol formats: "XBT/USD", "XBTUSD", "XXBTZUSD", etc.
+                    var normalizedBaseAsset = _state.NormalizeOrderSymbolBase(pairName);
 
-                    var normalizedBaseAsset = TradingStateService.NormalizeAsset(baseAsset);
-
-                    return baseAsset == balance.Asset ||
-                           baseAsset == normalizedAsset ||
-                           normalizedBaseAsset == balance.Asset ||
+                    return normalizedBaseAsset == balance.Asset ||
                            normalizedBaseAsset == normalizedAsset;
                 }).ToList();
 

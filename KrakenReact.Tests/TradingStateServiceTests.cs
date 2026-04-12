@@ -256,6 +256,165 @@ public class TradingStateServiceTests
         Assert.Equal(0m, order.LatestPrice); // No price found
     }
 
+    // --- BTC/XBT mapping regression tests ---
+
+    /// <summary>
+    /// Full integration test for BTC (XBT) mapping: verifies that XBTUSD orders
+    /// correctly resolve prices, calculate distances, and map to BTC balances.
+    /// Kraken uses XBT/XXBT internally but we normalize to BTC everywhere.
+    /// </summary>
+    [Fact]
+    public void BtcXbt_FullMapping_OrderFieldsAndBalanceCoverage()
+    {
+        var svc = CreateService();
+
+        // Set up symbols as Kraken provides them
+        svc.Symbols["XBT/USD"] = new KrakenSymbol
+        {
+            WebsocketName = "XBT/USD",
+            AlternateName = "XBTUSD",
+            BaseAsset = "XXBT",
+            QuoteAsset = "ZUSD"
+        };
+
+        // Set up price data (keyed by websocket name)
+        var btcPrice = new PriceDataItem { Symbol = "XBT/USD" };
+        btcPrice.AddKline(new DerivedKline { Asset = "XBT/USD", Close = 60000m, OpenTime = DateTime.UtcNow });
+        svc.Prices.TryAdd("XBT/USD", btcPrice);
+
+        // Set up BTC balance (normalized from XXBT)
+        svc.Balances.TryAdd("BTC", new BalanceDto
+        {
+            Asset = "BTC", Total = 1.5m, Available = 1.5m, LatestPrice = 60000m
+        });
+
+        // Set up USD balance
+        svc.Balances.TryAdd("USD", new BalanceDto
+        {
+            Asset = "USD", Total = 50000m, Available = 50000m
+        });
+
+        // Open sell order for BTC (uses Kraken's XBTUSD format)
+        svc.Orders.TryAdd("sell1", new OrderDto
+        {
+            Id = "sell1", Symbol = "XBTUSD", Side = "Sell", Status = "Open",
+            Price = 65000m, Quantity = 0.5m, QuantityFilled = 0m
+        });
+
+        // Open buy order for BTC
+        svc.Orders.TryAdd("buy1", new OrderDto
+        {
+            Id = "buy1", Symbol = "XBTUSD", Side = "Buy", Status = "Open",
+            Price = 55000m, Quantity = 0.2m, QuantityFilled = 0m
+        });
+
+        // 1) RecalculateOrderFields should find BTC price via NormalizeOrderSymbolBase
+        svc.RecalculateOrderFields(svc.Orders["sell1"]);
+        Assert.Equal(60000m, svc.Orders["sell1"].LatestPrice);
+        Assert.Equal(5000m, svc.Orders["sell1"].Distance); // 65000 - 60000
+        Assert.Equal(32500m, svc.Orders["sell1"].OrderValue); // 65000 * 0.5
+
+        svc.RecalculateOrderFields(svc.Orders["buy1"]);
+        Assert.Equal(60000m, svc.Orders["buy1"].LatestPrice);
+        Assert.Equal(-5000m, svc.Orders["buy1"].Distance); // 55000 - 60000
+
+        // 2) RecalculateBalanceCoveredAmounts should map sell orders to BTC balance
+        //    and buy orders to USD balance
+        svc.RecalculateBalanceCoveredAmounts();
+
+        var btcBal = svc.Balances["BTC"];
+        Assert.Equal(0.5m, btcBal.OrderCoveredQty); // 0.5 BTC in sell order
+        Assert.Equal(1.0m, btcBal.OrderUncoveredQty); // 1.5 - 0.5
+
+        var usdBal = svc.Balances["USD"];
+        Assert.Equal(11000m, usdBal.OrderCoveredQty); // 0.2 * 55000 buy order cost
+        Assert.Equal(39000m, usdBal.Available); // 50000 - 11000
+    }
+
+    [Fact]
+    public void BtcXbt_NormalizeOrderSymbolBase_AllFormats()
+    {
+        var svc = CreateService();
+        svc.Symbols["XBT/USD"] = new KrakenSymbol
+        {
+            WebsocketName = "XBT/USD",
+            AlternateName = "XBTUSD",
+            BaseAsset = "XXBT",
+            QuoteAsset = "ZUSD"
+        };
+
+        // All these formats should resolve to "BTC"
+        Assert.Equal("BTC", svc.NormalizeOrderSymbolBase("XBTUSD"));
+        Assert.Equal("BTC", svc.NormalizeOrderSymbolBase("XBT/USD"));
+
+        // Without symbols table, heuristic should still work
+        var svc2 = CreateService();
+        Assert.Equal("BTC", svc2.NormalizeOrderSymbolBase("XBTUSD")); // strips USD → XBT → alias → BTC
+    }
+
+    [Fact]
+    public void BtcXbt_NormalizeOrderSymbolQuote_ReturnsUSD()
+    {
+        var svc = CreateService();
+        svc.Symbols["XBT/USD"] = new KrakenSymbol
+        {
+            WebsocketName = "XBT/USD",
+            AlternateName = "XBTUSD",
+            BaseAsset = "XXBT",
+            QuoteAsset = "ZUSD"
+        };
+
+        Assert.Equal("USD", svc.NormalizeOrderSymbolQuote("XBTUSD"));
+        Assert.Equal("USD", svc.NormalizeOrderSymbolQuote("XBT/USD"));
+    }
+
+    [Fact]
+    public void BtcXbt_RecalculateOrderFields_FindsPrice()
+    {
+        var svc = CreateService();
+        svc.Symbols["XBT/USD"] = new KrakenSymbol
+        {
+            WebsocketName = "XBT/USD",
+            AlternateName = "XBTUSD",
+            BaseAsset = "XXBT",
+            QuoteAsset = "ZUSD"
+        };
+        var btcPrice = new PriceDataItem { Symbol = "XBT/USD" };
+        btcPrice.AddKline(new DerivedKline { Asset = "XBT/USD", Close = 60000m, OpenTime = DateTime.UtcNow });
+        svc.Prices.TryAdd("XBT/USD", btcPrice);
+
+        var order = new OrderDto { Symbol = "XBTUSD", Price = 62000m, Quantity = 0.1m };
+        svc.RecalculateOrderFields(order);
+
+        Assert.Equal(60000m, order.LatestPrice);
+        Assert.Equal(2000m, order.Distance);
+        Assert.NotEqual(0m, order.DistancePercentage);
+        Assert.Equal(6200m, order.OrderValue);
+    }
+
+    [Fact]
+    public void BtcXbt_LatestPrice_FindsBtcFromNormalizedAsset()
+    {
+        var svc = CreateService();
+        svc.Symbols["XBT/USD"] = new KrakenSymbol
+        {
+            WebsocketName = "XBT/USD",
+            BaseAsset = "XXBT",
+            QuoteAsset = "ZUSD"
+        };
+        var btcPrice = new PriceDataItem { Symbol = "XBT/USD" };
+        btcPrice.AddKline(new DerivedKline { Asset = "XBT/USD", Close = 60000m, OpenTime = DateTime.UtcNow });
+        svc.Prices.TryAdd("XBT/USD", btcPrice);
+
+        // All these should find the BTC price
+        Assert.NotNull(svc.LatestPrice("BTC"));
+        Assert.Equal(60000m, svc.LatestPrice("BTC")!.Close);
+        Assert.NotNull(svc.LatestPrice("XBT"));
+        Assert.Equal(60000m, svc.LatestPrice("XBT")!.Close);
+        Assert.NotNull(svc.LatestPrice("XXBT"));
+        Assert.Equal(60000m, svc.LatestPrice("XXBT")!.Close);
+    }
+
     // --- RecalculateBalanceCoveredAmounts ---
 
     [Fact]

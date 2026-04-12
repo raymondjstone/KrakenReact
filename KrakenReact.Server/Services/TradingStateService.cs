@@ -691,13 +691,20 @@ public class TradingStateService
         // Get latest price using normalized base asset (order symbols like "XBTUSD" need base extraction first)
         var baseAsset = NormalizeOrderSymbolBase(order.Symbol);
         var latestPrice = LatestPrice(baseAsset);
+
         if (latestPrice != null)
         {
             order.LatestPrice = latestPrice.Close;
             order.Distance = order.Price - latestPrice.Close;
-            order.DistancePercentage = latestPrice.Close != 0 
-                ? Math.Round((order.Price - latestPrice.Close) / (latestPrice.Close / 100), 2) 
+            order.DistancePercentage = latestPrice.Close != 0
+                ? Math.Round((order.Price - latestPrice.Close) / (latestPrice.Close / 100), 2)
                 : 100;
+        }
+        else
+        {
+            order.LatestPrice = 0;
+            order.Distance = 0;
+            order.DistancePercentage = 0;
         }
 
         // Recalculate order value (price * quantity)

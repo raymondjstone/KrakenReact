@@ -7,11 +7,12 @@ import { useTheme } from '../context/ThemeContext';
 const CHART_THEMES = {
   light: {
     bg: '#f8f9fa', text: '#5e6673', grid: '#e8eaed', border: '#e0e3e8',
-    up: '#0b8c50', down: '#c9304e',
+        up: '#0b8c50', down: '#c9304e', buyorder: '#0b6c50', sellorder: '#a9304e' 
   },
   dark: {
     bg: '#0b0e11', text: '#848e9c', grid: '#1e2329', border: '#2e3440',
-    up: '#0ecb81', down: '#f6465d',
+      up: '#0ecb81', down: '#f6465d', buyorder: '#0e6b81', sellorder: '#d6465d',
+
   },
 };
 
@@ -81,7 +82,7 @@ export default function ChartPage({ symbol, displaySymbol }) {
           try {
             const line = seriesRef.current.createPriceLine({
               price: Number(order.price),
-              color: order.side === 'Buy' ? colors.up : colors.down,
+              color: order.side === 'Buy' ? colors.buyorder : colors.sellorder,
               lineWidth: 1,
               lineStyle: 2,
               axisLabelVisible: true,
@@ -117,6 +118,11 @@ export default function ChartPage({ symbol, displaySymbol }) {
         upColor: colors.up, downColor: colors.down,
         borderDownColor: colors.down, borderUpColor: colors.up,
         wickDownColor: colors.down, wickUpColor: colors.up,
+        lastValueMark: {
+          visible: true,
+          color: '#0000ff', // custom color for the last value line
+          text: 'Last',
+        },
       });
       seriesRef.current = candleSeries;
 
