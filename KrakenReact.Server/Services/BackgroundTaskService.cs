@@ -321,26 +321,31 @@ public class BackgroundTaskService : BackgroundService
             var valueUsd = Math.Round(b.Total * price, 2);
             var valueGbp = usdGbpRate > 0 ? Math.Round(valueUsd * usdGbpRate, 2) : 0;
 
-            // Order coverage: for non-USD assets, sum sell order quantities matching this asset
+            // Order coverage calculation
             decimal coveredQty;
+            decimal available;
             if (TradingStateService.Currency.Contains(b.Asset))
             {
+                // Currency assets: covered = total cost of open buy orders in this currency
                 coveredQty = openOrders
-                    .Where(o => o.Side == "Buy")
-                    .Sum(o => o.OrderValue);
+                    .Where(o => o.Side == "Buy" && _state.NormalizeOrderSymbolQuote(o.Symbol) == b.Asset)
+                    .Sum(o => (o.Quantity - o.QuantityFilled) * o.Price);
+                available = Math.Max(b.Total - coveredQty, 0);
             }
             else
             {
+                // Crypto assets: covered = quantity committed to open sell orders
                 coveredQty = openOrders
                     .Where(o => o.Side == "Sell" && _state.NormalizeOrderSymbolBase(o.Symbol) == b.Asset)
                     .Sum(o => o.Quantity);
+                available = b.Total - b.Locked;
             }
 
             var uncoveredQty = Math.Max(b.Total - coveredQty, 0);
             var dto = new BalanceDto
             {
                 Asset = b.Asset, Total = b.Total, Locked = b.Locked,
-                Available = b.Total - b.Locked, LatestPrice = price,
+                Available = available, LatestPrice = price,
                 LatestValue = valueUsd,
                 LatestValueGbp = valueGbp,
                 OrderCoveredQty = Math.Min(coveredQty, b.Total),

@@ -345,6 +345,35 @@ public class TradingStateService
         return NormalizeAsset(orderSymbol);
     }
 
+    /// <summary>
+    /// Extracts and normalizes the quote currency from an order symbol (e.g. "XBTUSD" → "USD", "ETHEUR" → "EUR").
+    /// Uses the Symbols table to find the correct quote asset, falling back to heuristic extraction.
+    /// </summary>
+    public string NormalizeOrderSymbolQuote(string orderSymbol)
+    {
+        if (string.IsNullOrEmpty(orderSymbol)) return "";
+
+        // If it contains a slash, just split
+        if (orderSymbol.Contains('/'))
+            return NormalizeAsset(orderSymbol.Split('/')[1]);
+
+        // Try to match against known symbols
+        var match = Symbols.Values.FirstOrDefault(s =>
+            s.WebsocketName.Replace("/", "") == orderSymbol ||
+            (s.AlternateName != null && s.AlternateName.Replace(".", "") == orderSymbol));
+        if (match != null)
+            return NormalizeAsset(match.QuoteAsset);
+
+        // Heuristic: match known quote suffixes
+        foreach (var suffix in new[] { "ZUSD", "USDT", "USDC", "USD", "ZEUR", "EUR", "ZGBP", "GBP" })
+        {
+            if (orderSymbol.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && orderSymbol.Length > suffix.Length)
+                return NormalizeAsset(suffix);
+        }
+
+        return "";
+    }
+
     /// raw Kraken websocket key (e.g. "XBT/USD") used in the Prices dictionary.
     /// Returns the input unchanged if already a valid key or no match found.
     /// </summary>
@@ -682,7 +711,9 @@ public class TradingStateService
             RecalculateOrderFields(order);
     }
 
-    /// <summary>Recalculates covered/uncovered quantities for all balances based on current open sell orders</summary>
+    /// <summary>Recalculates covered/uncovered quantities for all balances based on current open orders.
+    /// For crypto assets: uses open sell orders to calculate covered/uncovered quantities.
+    /// For currency assets (USD, EUR, etc.): reduces available by the total cost of open buy orders in that currency.</summary>
     public void RecalculateBalanceCoveredAmounts()
     {
         foreach (var balance in Balances.Values)
@@ -693,11 +724,12 @@ public class TradingStateService
             balance.OrderUncoveredValue = 0;
         }
 
-        var openSellOrders = Orders.Values
-            .Where(o => o.Side == "Sell" && (o.Status == "Open" || o.Status == "New" || o.Status == "PendingNew"))
+        var openOrders = Orders.Values
+            .Where(o => o.Status == "Open" || o.Status == "New" || o.Status == "PendingNew")
             .ToList();
 
-        foreach (var order in openSellOrders)
+        // Sell orders reduce crypto asset available amounts
+        foreach (var order in openOrders.Where(o => o.Side == "Sell"))
         {
             var normalizedBase = NormalizeOrderSymbolBase(order.Symbol);
             if (string.IsNullOrEmpty(normalizedBase)) continue;
@@ -710,6 +742,29 @@ public class TradingStateService
             balance.OrderUncoveredQty = Math.Max(balance.Total - balance.OrderCoveredQty, 0);
             balance.OrderCoveredValue += Math.Min(orderQty, balance.Total) * order.Price;
             balance.OrderUncoveredValue = balance.OrderUncoveredQty * (balance.LatestPrice > 0 ? balance.LatestPrice : order.Price);
+        }
+
+        // Buy orders reduce currency balance available amounts
+        foreach (var order in openOrders.Where(o => o.Side == "Buy"))
+        {
+            var quoteCurrency = NormalizeOrderSymbolQuote(order.Symbol);
+            if (string.IsNullOrEmpty(quoteCurrency) || !Currency.Contains(quoteCurrency)) continue;
+
+            var balance = Balances.Values.FirstOrDefault(b => b.Asset == quoteCurrency);
+            if (balance == null) continue;
+
+            var remainingQty = order.Quantity - order.QuantityFilled;
+            var orderCost = remainingQty * order.Price;
+            balance.OrderCoveredQty += orderCost;
+            balance.OrderCoveredValue += orderCost;
+        }
+
+        // Finalize currency balances: set available = total - covered (buy order costs)
+        foreach (var balance in Balances.Values.Where(b => Currency.Contains(b.Asset)))
+        {
+            balance.Available = Math.Max(balance.Total - balance.OrderCoveredQty, 0);
+            balance.OrderUncoveredQty = balance.Available;
+            balance.OrderUncoveredValue = balance.Available;
         }
     }
 }

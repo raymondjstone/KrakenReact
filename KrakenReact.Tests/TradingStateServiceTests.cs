@@ -351,6 +351,162 @@ public class TradingStateServiceTests
         Assert.Equal(3m, bal.OrderUncoveredQty);
     }
 
+    // --- NormalizeOrderSymbolQuote ---
+
+    [Fact]
+    public void NormalizeOrderSymbolQuote_WithSlash_ReturnsQuote()
+    {
+        var svc = CreateService();
+        Assert.Equal("USD", svc.NormalizeOrderSymbolQuote("XBT/USD"));
+        Assert.Equal("EUR", svc.NormalizeOrderSymbolQuote("ETH/EUR"));
+    }
+
+    [Fact]
+    public void NormalizeOrderSymbolQuote_ViaSymbolsTable()
+    {
+        var svc = CreateService();
+        svc.Symbols["XBTUSD"] = new KrakenSymbol
+        {
+            WebsocketName = "XBT/USD",
+            AlternateName = "XBTUSD",
+            BaseAsset = "XXBT",
+            QuoteAsset = "ZUSD"
+        };
+
+        // "ZUSD" normalizes to "USD"
+        Assert.Equal("USD", svc.NormalizeOrderSymbolQuote("XBTUSD"));
+    }
+
+    [Fact]
+    public void NormalizeOrderSymbolQuote_Heuristic_USD()
+    {
+        var svc = CreateService();
+        Assert.Equal("USD", svc.NormalizeOrderSymbolQuote("SOLUSD"));
+    }
+
+    [Fact]
+    public void NormalizeOrderSymbolQuote_Heuristic_EUR()
+    {
+        var svc = CreateService();
+        Assert.Equal("EUR", svc.NormalizeOrderSymbolQuote("SOLEUR"));
+    }
+
+    [Fact]
+    public void NormalizeOrderSymbolQuote_EmptyInput_ReturnsEmpty()
+    {
+        var svc = CreateService();
+        Assert.Equal("", svc.NormalizeOrderSymbolQuote(""));
+        Assert.Equal("", svc.NormalizeOrderSymbolQuote(null!));
+    }
+
+    // --- RecalculateBalanceCoveredAmounts (buy orders reduce currency available) ---
+
+    [Fact]
+    public void RecalculateBalanceCoveredAmounts_BuyOrderReducesCurrencyAvailable()
+    {
+        var svc = CreateService();
+        svc.Symbols["SOLUSD"] = new KrakenSymbol
+        {
+            WebsocketName = "SOL/USD", BaseAsset = "SOL", QuoteAsset = "ZUSD"
+        };
+
+        svc.Balances.TryAdd("USD", new BalanceDto { Asset = "USD", Total = 10000m, Available = 10000m });
+        svc.Orders.TryAdd("o1", new OrderDto
+        {
+            Id = "o1", Symbol = "SOLUSD", Side = "Buy", Status = "Open",
+            Price = 100m, Quantity = 20m, QuantityFilled = 0m
+        });
+
+        svc.RecalculateBalanceCoveredAmounts();
+
+        var usd = svc.Balances["USD"];
+        // Buy order costs 20 * 100 = 2000 USD
+        Assert.Equal(2000m, usd.OrderCoveredQty);
+        Assert.Equal(8000m, usd.Available);
+    }
+
+    [Fact]
+    public void RecalculateBalanceCoveredAmounts_MultipleBuyOrdersReduceCurrency()
+    {
+        var svc = CreateService();
+        svc.Symbols["SOLUSD"] = new KrakenSymbol
+        {
+            WebsocketName = "SOL/USD", BaseAsset = "SOL", QuoteAsset = "ZUSD"
+        };
+        svc.Symbols["ETHUSD"] = new KrakenSymbol
+        {
+            WebsocketName = "ETH/USD", BaseAsset = "XETH", QuoteAsset = "ZUSD"
+        };
+
+        svc.Balances.TryAdd("USD", new BalanceDto { Asset = "USD", Total = 5000m, Available = 5000m });
+        svc.Orders.TryAdd("o1", new OrderDto
+        {
+            Id = "o1", Symbol = "SOLUSD", Side = "Buy", Status = "Open",
+            Price = 100m, Quantity = 10m, QuantityFilled = 0m
+        });
+        svc.Orders.TryAdd("o2", new OrderDto
+        {
+            Id = "o2", Symbol = "ETHUSD", Side = "Buy", Status = "Open",
+            Price = 3000m, Quantity = 1m, QuantityFilled = 0m
+        });
+
+        svc.RecalculateBalanceCoveredAmounts();
+
+        var usd = svc.Balances["USD"];
+        // 10*100 + 1*3000 = 4000
+        Assert.Equal(4000m, usd.OrderCoveredQty);
+        Assert.Equal(1000m, usd.Available);
+    }
+
+    [Fact]
+    public void RecalculateBalanceCoveredAmounts_PartiallyFilledBuyOrder()
+    {
+        var svc = CreateService();
+        svc.Symbols["SOLUSD"] = new KrakenSymbol
+        {
+            WebsocketName = "SOL/USD", BaseAsset = "SOL", QuoteAsset = "ZUSD"
+        };
+
+        svc.Balances.TryAdd("USD", new BalanceDto { Asset = "USD", Total = 10000m, Available = 10000m });
+        svc.Orders.TryAdd("o1", new OrderDto
+        {
+            Id = "o1", Symbol = "SOLUSD", Side = "Buy", Status = "Open",
+            Price = 100m, Quantity = 20m, QuantityFilled = 5m
+        });
+
+        svc.RecalculateBalanceCoveredAmounts();
+
+        var usd = svc.Balances["USD"];
+        // Only remaining 15 * 100 = 1500 should be covered
+        Assert.Equal(1500m, usd.OrderCoveredQty);
+        Assert.Equal(8500m, usd.Available);
+    }
+
+    [Fact]
+    public void RecalculateBalanceCoveredAmounts_SellOrderDoesNotAffectCurrency()
+    {
+        var svc = CreateService();
+        svc.Symbols["SOLUSD"] = new KrakenSymbol
+        {
+            WebsocketName = "SOL/USD", BaseAsset = "SOL", QuoteAsset = "ZUSD"
+        };
+
+        svc.Balances.TryAdd("USD", new BalanceDto { Asset = "USD", Total = 10000m, Available = 10000m });
+        svc.Balances.TryAdd("SOL", new BalanceDto { Asset = "SOL", Total = 50m, Available = 50m, LatestPrice = 100m });
+        svc.Orders.TryAdd("o1", new OrderDto
+        {
+            Id = "o1", Symbol = "SOLUSD", Side = "Sell", Status = "Open",
+            Price = 110m, Quantity = 10m, QuantityFilled = 0m
+        });
+
+        svc.RecalculateBalanceCoveredAmounts();
+
+        // USD should be unaffected by sell orders
+        Assert.Equal(10000m, svc.Balances["USD"].Available);
+        // SOL should have covered qty
+        Assert.Equal(10m, svc.Balances["SOL"].OrderCoveredQty);
+    }
+
     // --- LatestPrice ---
 
     [Fact]
