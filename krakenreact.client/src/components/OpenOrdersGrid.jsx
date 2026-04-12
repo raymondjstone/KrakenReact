@@ -52,7 +52,7 @@ export default function OpenOrdersGrid({ orders, symbols, onOrderChanged, onSymb
     { field: 'latestPrice', headerName: 'Latest', minWidth: 110, valueFormatter: p => formatPrice(p.value) },
     { field: 'distance', headerName: 'Distance', minWidth: 100, valueFormatter: p => formatPrice(p.value), cellStyle: p => ({ color: colorForValue(p.value) }) },
     { field: 'distancePercentage', headerName: 'Dist%', minWidth: 80, valueFormatter: p => p.value != null ? Number(p.value).toFixed(2) + '%' : '', cellStyle: p => ({ color: colorForValue(p.value) }) },
-    { field: 'createTime', headerName: 'Created', minWidth: 160, valueFormatter: p => p.value ? new Date(p.value).toLocaleString() : '' },
+    { field: 'createTime', headerName: 'Created', minWidth: 160, sort: 'desc', valueFormatter: p => p.value ? new Date(p.value).toLocaleString() : '' },
     { field: 'leverage', headerName: 'Leverage', minWidth: 80 },
   ], [handleCancel, onSymbolClick]);
 

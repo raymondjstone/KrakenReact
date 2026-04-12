@@ -68,6 +68,9 @@ public class SettingsController : ControllerBase
             var themeSetting = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "Theme");
             settings.Theme = themeSetting?.Value ?? "dark";
 
+            settings.OrderPriceOffsets = _state.OrderPriceOffsets;
+            settings.OrderQtyPercentages = _state.OrderQtyPercentages;
+
             return Ok(settings);
         }
         catch (Exception ex)
@@ -138,6 +141,18 @@ public class SettingsController : ControllerBase
             {
                 var validTheme = request.Theme == "light" ? "light" : "dark";
                 await SaveOrUpdateSetting("Theme", validTheme, "UI theme (dark or light)");
+            }
+
+            // Save order dialog button configs
+            if (request.OrderPriceOffsets != null)
+            {
+                var value = string.Join(",", request.OrderPriceOffsets.Where(v => v > 0).Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                await SaveOrUpdateSetting("OrderPriceOffsets", value, "Percentage offset buttons for the order dialog price field");
+            }
+            if (request.OrderQtyPercentages != null)
+            {
+                var value = string.Join(",", request.OrderQtyPercentages.Where(v => v > 0 && v <= 100).Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                await SaveOrUpdateSetting("OrderQtyPercentages", value, "Percentage buttons for the order dialog quantity field");
             }
 
             // Save asset normalizations

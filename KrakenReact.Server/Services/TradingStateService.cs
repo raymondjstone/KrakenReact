@@ -242,6 +242,11 @@ public class TradingStateService
     public ConcurrentDictionary<string, AutoTradeDto> AutoOrders { get; } = new();
     public ConcurrentDictionary<string, KrakenSymbol> Symbols { get; } = new();
 
+    public static readonly List<decimal> DefaultOrderPriceOffsets = new() { 2, 5, 10, 15 };
+    public static readonly List<decimal> DefaultOrderQtyPercentages = new() { 5, 10, 20, 25, 50, 75, 100 };
+    public List<decimal> OrderPriceOffsets { get; set; } = new(DefaultOrderPriceOffsets);
+    public List<decimal> OrderQtyPercentages { get; set; } = new(DefaultOrderQtyPercentages);
+
     /// <summary>Cache of working Kraken API pair names. Key = internal symbol (e.g. "XBT/USD"), Value = API-accepted name (e.g. "BTCUSD").</summary>
     public ConcurrentDictionary<string, string> ApiPairNameCache { get; } = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _notifiedOrders = new();
@@ -591,6 +596,25 @@ public class TradingStateService
         else
             OrderProximityThreshold = 2.0m;
 
+        // Reload order dialog button configs
+        var priceOffsets = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderPriceOffsets");
+        if (priceOffsets != null)
+        {
+            var parsed = priceOffsets.Value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => decimal.TryParse(s.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : (decimal?)null)
+                .Where(v => v.HasValue && v.Value > 0).Select(v => v!.Value).ToList();
+            if (parsed.Any()) OrderPriceOffsets = parsed;
+        }
+
+        var qtyPcts = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderQtyPercentages");
+        if (qtyPcts != null)
+        {
+            var parsed = qtyPcts.Value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => decimal.TryParse(s.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : (decimal?)null)
+                .Where(v => v.HasValue && v.Value > 0 && v.Value <= 100).Select(v => v!.Value).ToList();
+            if (parsed.Any()) OrderQtyPercentages = parsed;
+        }
+
         // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
         if (normalizations.Any())
@@ -609,6 +633,8 @@ public class TradingStateService
             ["OrderProximityNotifications"] = ("true", "Send Pushover notifications when an order is near the current price"),
             ["OrderProximityThreshold"] = ("2.0", "Percentage threshold for order proximity notifications (0.1 to 20.0)"),
             ["Theme"] = ("dark", "UI theme (dark or light)"),
+            ["OrderPriceOffsets"] = ("2,5,10,15", "Percentage offset buttons for the order dialog price field (comma-separated)"),
+            ["OrderQtyPercentages"] = ("5,10,20,25,50,75,100", "Percentage buttons for the order dialog quantity field (comma-separated)"),
         };
 
         var changed = false;
@@ -633,8 +659,9 @@ public class TradingStateService
     /// <summary>Recalculates all calculated fields for a single order (LatestPrice, Distance, DistancePercentage, OrderValue)</summary>
     public void RecalculateOrderFields(OrderDto order)
     {
-        // Get latest price for the order's symbol
-        var latestPrice = LatestPrice(order.Symbol);
+        // Get latest price using normalized base asset (order symbols like "XBTUSD" need base extraction first)
+        var baseAsset = NormalizeOrderSymbolBase(order.Symbol);
+        var latestPrice = LatestPrice(baseAsset);
         if (latestPrice != null)
         {
             order.LatestPrice = latestPrice.Close;
@@ -646,6 +673,13 @@ public class TradingStateService
 
         // Recalculate order value (price * quantity)
         order.OrderValue = order.Price * order.Quantity;
+    }
+
+    /// <summary>Recalculates all calculated fields for all orders in state</summary>
+    public void RecalculateAllOrderFields()
+    {
+        foreach (var order in Orders.Values)
+            RecalculateOrderFields(order);
     }
 
     /// <summary>Recalculates covered/uncovered quantities for all balances based on current open sell orders</summary>

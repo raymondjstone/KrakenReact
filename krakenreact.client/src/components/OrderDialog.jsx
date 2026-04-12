@@ -1,15 +1,19 @@
 import { useState, useEffect } from 'react';
 import api from '../api/apiClient';
 
-const PRICE_OFFSETS = [2, 5, 10, 15];
+const DEFAULT_PRICE_OFFSETS = [2, 5, 10, 15];
+const DEFAULT_QTY_PERCENTAGES = [5, 10, 20, 25, 50, 75, 100];
 
-export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initialSymbol, symbols, balanceContext }) {
+export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initialSymbol, symbols, balanceContext, priceOffsets, qtyPercentages }) {
   const [symbol, setSymbol] = useState('');
   const [side, setSide] = useState('Buy');
   const [price, setPrice] = useState('');
   const [quantity, setQuantity] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const pOffsets = priceOffsets?.length ? priceOffsets : DEFAULT_PRICE_OFFSETS;
+  const qPcts = qtyPercentages?.length ? qtyPercentages : DEFAULT_QTY_PERCENTAGES;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -20,7 +24,6 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
       setPrice(String(editOrder.price));
       setQuantity(String(editOrder.quantity));
     } else if (balanceContext) {
-      // Opened from balance row
       setSymbol(balanceContext.symbol || '');
       setSide(balanceContext.uncoveredQty > 0.0001 ? 'Sell' : 'Buy');
       setPrice(balanceContext.price ? String(balanceContext.price) : '');
@@ -43,7 +46,9 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const currentPrice = balanceContext?.price || 0;
   const available = balanceContext?.available || 0;
   const uncoveredQty = balanceContext?.uncoveredQty || 0;
+  const usdAvailable = balanceContext?.usdAvailable || 0;
   const orderValue = price && quantity ? (Number(price) * Number(quantity)).toFixed(2) : '';
+  const enteredPrice = Number(price) || 0;
 
   const applyPriceOffset = (pct) => {
     if (!currentPrice) return;
@@ -55,16 +60,34 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
     if (currentPrice) setPrice(String(currentPrice));
   };
 
-  const setMaxQuantity = () => {
-    if (side === 'Sell') {
-      // Use uncovered amount if significant, otherwise full available
-      const qty = uncoveredQty > 0.0001 ? uncoveredQty : available;
-      setQuantity(String(qty));
+  const applyQtyPercentage = (pct) => {
+    if (side === 'Buy') {
+      // Buy: percentage of USD balance, converted to units at the entered price
+      const usePrice = enteredPrice > 0 ? enteredPrice : currentPrice;
+      if (usePrice <= 0 || usdAvailable <= 0) return;
+      const usdToSpend = pct >= 100 ? usdAvailable : usdAvailable * pct / 100;
+      const qty = Number((usdToSpend / usePrice).toPrecision(8));
+      if (qty > 0) setQuantity(String(qty));
     } else {
-      // For buy: max quantity at current price with available USD
-      // This requires knowing USD balance which we don't have here, so just clear
-      setQuantity('');
+      // Sell: percentage of held balance (uncovered if significant, otherwise available)
+      const base = uncoveredQty > 0.0001 ? uncoveredQty : available;
+      if (base <= 0) return;
+      const qty = pct >= 100 ? base : Number((base * pct / 100).toPrecision(8));
+      if (qty > 0) setQuantity(String(qty));
     }
+  };
+
+  const handleQtyChange = (val) => {
+    // Allow empty for clearing, otherwise only non-negative
+    if (val === '' || val === undefined) { setQuantity(''); return; }
+    const num = Number(val);
+    if (!isNaN(num) && num >= 0) setQuantity(val);
+  };
+
+  const handlePriceChange = (val) => {
+    if (val === '' || val === undefined) { setPrice(''); return; }
+    const num = Number(val);
+    if (!isNaN(num) && num >= 0) setPrice(val);
   };
 
   const validate = () => {
@@ -107,7 +130,6 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
     cursor: 'pointer', background: 'var(--bg-input)', color: 'var(--text-secondary)',
     transition: 'all 0.15s',
   };
-  const activeSmallBtn = { ...smallBtn, background: 'var(--yellow)', color: '#0b0e11' };
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
@@ -153,9 +175,9 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               <label style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Price</label>
               {currentPrice > 0 && !editOrder && (
-                <div style={{ display: 'flex', gap: 3, marginLeft: 'auto' }}>
+                <div style={{ display: 'flex', gap: 3, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <button style={smallBtn} onClick={setCurrentPrice} title="Use current price">Current</button>
-                  {PRICE_OFFSETS.map(pct => (
+                  {pOffsets.map(pct => (
                     <button key={pct} style={smallBtn} onClick={() => applyPriceOffset(pct)} title={`${side === 'Buy' ? '-' : '+'}${pct}% from current`}>
                       {side === 'Buy' ? '-' : '+'}{pct}%
                     </button>
@@ -163,23 +185,30 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
                 </div>
               )}
             </div>
-            <input type="number" step="any" value={price} onChange={e => setPrice(e.target.value)} style={inputStyle} placeholder={currentPrice ? `Current: ${currentPrice}` : ''} />
+            <input type="number" step="any" min="0" value={price} onChange={e => handlePriceChange(e.target.value)} style={inputStyle} placeholder={currentPrice ? `Current: ${currentPrice}` : ''} />
           </div>
 
           {/* Quantity */}
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               <label style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Quantity</label>
-              {!editOrder && side === 'Sell' && available > 0 && (
-                <div style={{ display: 'flex', gap: 3, marginLeft: 'auto' }}>
-                  {uncoveredQty > 0.0001 && (
-                    <button style={smallBtn} onClick={() => setQuantity(String(uncoveredQty))} title="Uncovered balance">Uncovered ({uncoveredQty.toFixed(4)})</button>
+              {!editOrder && ((side === 'Sell' && available > 0) || (side === 'Buy' && usdAvailable > 0)) && (
+                <div style={{ display: 'flex', gap: 3, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {side === 'Sell' && uncoveredQty > 0.0001 && (
+                    <button style={smallBtn} onClick={() => setQuantity(String(uncoveredQty))} title="Uncovered balance">Uncov</button>
                   )}
-                  <button style={smallBtn} onClick={setMaxQuantity} title="Full available balance">Max ({available.toFixed(4)})</button>
+                  {qPcts.map(pct => (
+                    <button key={pct} style={smallBtn} onClick={() => applyQtyPercentage(pct)}
+                      title={side === 'Buy'
+                        ? `${pct}% of $${usdAvailable.toFixed(2)} USD at ${enteredPrice > 0 ? enteredPrice : currentPrice}`
+                        : `${pct}% of ${uncoveredQty > 0.0001 ? 'uncovered' : 'available'} balance`}>
+                      {pct}%
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-            <input type="number" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} style={inputStyle} />
+            <input type="number" step="any" min="0" value={quantity} onChange={e => handleQtyChange(e.target.value)} style={inputStyle} />
           </div>
 
           {/* Order value */}

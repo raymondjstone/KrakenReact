@@ -239,20 +239,18 @@ public class BackgroundTaskService : BackgroundService
         var result = await _kraken.GetOrders(initialLoad);
         foreach (var order in result)
         {
-            var latestPrice = _state.LatestPrice(order.Symbol);
-            var price = latestPrice?.Close ?? 0;
             var dto = new OrderDto
             {
                 Id = order.Id, Symbol = order.Symbol ?? "", Side = order.Side.ToString(), Type = order.Type.ToString(),
                 Status = order.Status.ToString(), Price = order.OrderDetailsPrice != 0 ? order.OrderDetailsPrice : order.Price,
                 Quantity = order.Quantity, QuantityFilled = order.QuantityFilled, Fee = order.Fee,
-                AveragePrice = order.AveragePrice, OrderValue = Math.Round((order.OrderDetailsPrice != 0 ? order.OrderDetailsPrice : order.Price) * order.Quantity, 2),
-                LatestPrice = price, Distance = (order.OrderDetailsPrice != 0 ? order.OrderDetailsPrice : order.Price) - price,
-                DistancePercentage = price != 0 ? Math.Round(((order.OrderDetailsPrice != 0 ? order.OrderDetailsPrice : order.Price) - price) / (price / 100), 2) : 100,
+                AveragePrice = order.AveragePrice,
                 CreateTime = order.CreateTime, CloseTime = order.CloseTime, Reason = order.Reason ?? "",
                 ClientOrderId = order.ClientOrderId, SecondaryPrice = order.SecondaryPrice,
                 StopPrice = order.StopPrice, Leverage = order.Leverage ?? ""
             };
+            // Calculate LatestPrice, Distance, DistancePercentage, OrderValue using normalized symbol lookup
+            _state.RecalculateOrderFields(dto);
             _state.Orders[order.Id] = dto;
         }
     }

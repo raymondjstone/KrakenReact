@@ -65,11 +65,20 @@ export default function OrdersPage() {
     { field: 'latestPrice', headerName: 'Latest', minWidth: 110, valueFormatter: p => formatPrice(p.value) },
     { field: 'distance', headerName: 'Distance', minWidth: 100, valueFormatter: p => formatPrice(p.value), cellStyle: p => ({ color: colorForValue(p.value) }) },
     { field: 'distancePercentage', headerName: 'Dist%', minWidth: 80, valueFormatter: p => p.value != null ? Number(p.value).toFixed(2) + '%' : '', cellStyle: p => ({ color: colorForValue(p.value) }) },
-    { field: 'createTime', headerName: 'Created', minWidth: 160, valueFormatter: p => p.value ? new Date(p.value).toLocaleString() : '' },
+    { field: 'createTime', headerName: 'Created', minWidth: 160, sort: 'desc', valueFormatter: p => p.value ? new Date(p.value).toLocaleString() : '' },
     { field: 'closeTime', headerName: 'Closed', minWidth: 160, valueFormatter: p => p.value ? new Date(p.value).toLocaleString() : '' },
     { field: 'leverage', headerName: 'Leverage', minWidth: 80 },
     { field: 'reason', headerName: 'Reason', minWidth: 120 },
   ], [handleCancel]);
+
+  const closedColumnDefs = useMemo(() =>
+    columnDefs.map(col => {
+      if (col.field === 'createTime') return { ...col, sort: undefined };
+      if (col.field === 'closeTime') return { ...col, sort: 'desc' };
+      return col;
+    }),
+    [columnDefs]
+  );
 
   const defaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 
@@ -120,7 +129,7 @@ export default function OrdersPage() {
                 <AgGridReact
                   theme={gridTheme}
                   rowData={items}
-                  columnDefs={columnDefs}
+                  columnDefs={status === 'Open' ? columnDefs : closedColumnDefs}
                   defaultColDef={defaultColDef}
                   headerHeight={28}
                   rowHeight={28}

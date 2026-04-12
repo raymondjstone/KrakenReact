@@ -143,10 +143,11 @@ public class KrakenWebSocketV2Service : BackgroundService
                             if (exec.LimitPrice != 0) existing.Price = exec.LimitPrice;
                             if (exec.OrderQty != 0) existing.Quantity = exec.OrderQty;
                             if (exec.Timestamp != default) existing.CreateTime = exec.Timestamp;
+                            _state.RecalculateOrderFields(existing);
                         }
                         else
                         {
-                            _state.Orders[exec.OrderId] = new OrderDto
+                            var newOrder = new OrderDto
                             {
                                 Id = exec.OrderId,
                                 Symbol = exec.Symbol ?? "",
@@ -157,12 +158,18 @@ public class KrakenWebSocketV2Service : BackgroundService
                                 Quantity = exec.OrderQty,
                                 CreateTime = exec.Timestamp
                             };
+                            _state.RecalculateOrderFields(newOrder);
+                            _state.Orders[exec.OrderId] = newOrder;
                         }
                         // Detect fills (status changes that indicate a trade occurred)
                         var status = (exec.OrderStatus ?? "").ToLower();
                         if (status == "filled" || status == "partially_filled" || status == "closed")
                             hasFill = true;
                     }
+                    // Broadcast updated orders list (with recalculated fields) to all clients
+                    var ordersList = _state.Orders.Values.ToList();
+                    _ = _hub.Clients.All.SendAsync("OrderUpdate", ordersList)
+                        .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] OrderUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
                     _ = _hub.Clients.All.SendAsync("ExecutionUpdate", execMsg.Data)
                         .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] ExecutionUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
 

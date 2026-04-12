@@ -43,6 +43,10 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   const [orderProximityNotifications, setOrderProximityNotifications] = useState(true);
   const [orderProximityThreshold, setOrderProximityThreshold] = useState(2.0);
 
+  // Order dialog button configs
+  const [orderPriceOffsets, setOrderPriceOffsets] = useState('2, 5, 10, 15');
+  const [orderQtyPercentages, setOrderQtyPercentages] = useState('5, 10, 20, 25, 50, 75, 100');
+
   // Asset Normalizations
   const [normalizations, setNormalizations] = useState('');
 
@@ -71,6 +75,8 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     if (data.assetNormalizations) {
       setNormalizations(Object.entries(data.assetNormalizations).map(([k, v]) => `${k}=${v}`).join('\n'));
     }
+    if (data.orderPriceOffsets?.length) setOrderPriceOffsets(data.orderPriceOffsets.join(', '));
+    if (data.orderQtyPercentages?.length) setOrderQtyPercentages(data.orderQtyPercentages.join(', '));
     setLoaded(true);
   }, [serverSettings]);
 
@@ -106,6 +112,10 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
       defaultPairs: defaultPairs.split(',').map(s => s.trim()).filter(Boolean),
     };
 
+    // Parse order dialog button configs
+    payload.orderPriceOffsets = orderPriceOffsets.split(',').map(s => parseFloat(s.trim())).filter(v => v > 0 && !isNaN(v));
+    payload.orderQtyPercentages = orderQtyPercentages.split(',').map(s => parseFloat(s.trim())).filter(v => v > 0 && v <= 100 && !isNaN(v));
+
     // Parse normalizations
     const normDict = {};
     normalizations.split('\n').forEach(line => {
@@ -137,7 +147,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   const buttonStyle = { padding: '10px 20px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 };
 
   return (
-    <div style={{ padding: 24, maxWidth: 900 }}>
+    <div style={{ padding: 24, maxWidth: 900, height: '100%', overflow: 'auto' }}>
       <h2 style={{ margin: '0 0 24px', color: 'var(--text-primary)' }}>Settings</h2>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
@@ -278,6 +288,34 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
                 <div style={hintStyle}>Alert when price is within this percentage of an open order (0.1% � 20.0%)</div>
               </div>
             )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={labelStyle}>Order Dialog — Price Offset Buttons</div>
+            <div style={hintStyle}>
+              Comma-separated percentage values for the price helper buttons on the order dialog. Buy orders lower the price, sell orders raise it.
+            </div>
+            <input
+              type="text"
+              value={orderPriceOffsets}
+              onChange={e => setOrderPriceOffsets(e.target.value)}
+              style={{ ...inputStyle, marginTop: 8 }}
+              placeholder="2, 5, 10, 15"
+            />
+          </div>
+
+          <div style={cardStyle}>
+            <div style={labelStyle}>Order Dialog — Quantity Percentage Buttons</div>
+            <div style={hintStyle}>
+              Comma-separated percentage values for the sell quantity helper buttons on the order dialog. Each button sets the quantity to that percentage of the available (or uncovered) balance.
+            </div>
+            <input
+              type="text"
+              value={orderQtyPercentages}
+              onChange={e => setOrderQtyPercentages(e.target.value)}
+              style={{ ...inputStyle, marginTop: 8 }}
+              placeholder="5, 10, 20, 25, 50, 75, 100"
+            />
           </div>
 
           <button onClick={handleSave} style={buttonStyle}>Save General Settings</button>

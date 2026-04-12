@@ -187,7 +187,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
 
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div style={{ position: 'absolute', inset: 0, display: activeTab === 'dashboard' ? 'block' : 'none' }}>
-          <Dashboard config={config} pinnedSymbols={pinnedSymbols} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} largeMovementThreshold={appSettings.largeMovementThreshold} hideAlmostZeroBalances={serverSettings?.hideAlmostZeroBalances} />
+          <Dashboard config={config} pinnedSymbols={pinnedSymbols} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} largeMovementThreshold={appSettings.largeMovementThreshold} hideAlmostZeroBalances={serverSettings?.hideAlmostZeroBalances} orderPriceOffsets={serverSettings?.orderPriceOffsets} orderQtyPercentages={serverSettings?.orderQtyPercentages} />
         </div>
         {activeTab === 'info' && <InfoPage onSymbolClick={openChart} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} />}
         {activeTab === 'balances' && <BalancesPage hideAlmostZeroBalances={serverSettings?.hideAlmostZeroBalances} />}

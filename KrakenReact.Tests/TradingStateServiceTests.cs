@@ -233,10 +233,9 @@ public class TradingStateServiceTests
             QuoteAsset = "ZUSD"
         };
 
-        // Use the websocket-style symbol (with slash) since LatestPrice normalizes
-        // and searches Symbols by BaseAsset. The order symbol "SOLUSD" gets NormalizeAsset → "SOLUSD" (no alias).
-        // LatestPrice first normalizes input, so pass "SOL" as the asset for direct testing.
-        var order = new OrderDto { Symbol = "SOL", Price = 110m, Quantity = 5m };
+        // Use realistic order symbol "SOLUSD" — RecalculateOrderFields now uses
+        // NormalizeOrderSymbolBase to extract "SOL" before looking up price.
+        var order = new OrderDto { Symbol = "SOLUSD", Price = 110m, Quantity = 5m };
         svc.RecalculateOrderFields(order);
 
         Assert.Equal(100m, order.LatestPrice);

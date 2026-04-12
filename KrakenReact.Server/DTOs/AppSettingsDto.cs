@@ -18,6 +18,8 @@ public class AppSettingsDto
     public List<string> BadPairs { get; set; } = new();
     public List<string> DefaultPairs { get; set; } = new();
     public Dictionary<string, string> AssetNormalizations { get; set; } = new();
+    public List<decimal> OrderPriceOffsets { get; set; } = new();
+    public List<decimal> OrderQtyPercentages { get; set; } = new();
 }
 
 public class SaveSettingsRequest
@@ -38,4 +40,6 @@ public class SaveSettingsRequest
     public List<string>? BadPairs { get; set; }
     public List<string>? DefaultPairs { get; set; }
     public Dictionary<string, string>? AssetNormalizations { get; set; }
+    public List<decimal>? OrderPriceOffsets { get; set; }
+    public List<decimal>? OrderQtyPercentages { get; set; }
 }

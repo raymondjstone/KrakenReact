@@ -4,13 +4,19 @@ import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
+import OrderDialog from '../components/OrderDialog';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+
+const FIAT_ASSETS = new Set(['USD', 'USDT', 'USDC', 'GBP', 'EUR', 'CAD', 'AUD', 'JPY', 'CHF']);
 
 export default function BalancesPage({ hideAlmostZeroBalances }) {
   const [rowData, setRowData] = useState([]);
   const [total, setTotal] = useState(0);
   const [totalGbp, setTotalGbp] = useState(0);
+  const [symbols, setSymbols] = useState([]);
+  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
+  const [orderBalanceCtx, setOrderBalanceCtx] = useState(null);
   const { gridTheme } = useTheme();
 
   const updateFromBalances = (balances) => {
@@ -26,6 +32,7 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
       api.get('/balances').then(r => { if (!disposed) updateFromBalances(r.data.balances || []); }).catch(console.error);
     };
     loadBalances();
+    api.get('/symbols').then(r => { if (!disposed) setSymbols(r.data.map(s => s.websocketName)); }).catch(() => {});
 
     const refreshInterval = setInterval(loadBalances, 60000);
 
@@ -39,7 +46,25 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     };
   }, []);
 
+  const openBalanceOrder = (balanceRow) => {
+    const usdBal = rowData.find(b => b.asset === 'USD');
+    setOrderBalanceCtx({
+      symbol: balanceRow.asset + 'USD',
+      price: balanceRow.latestPrice || 0,
+      available: balanceRow.available || 0,
+      uncoveredQty: balanceRow.orderUncoveredQty || 0,
+      usdAvailable: usdBal?.available || 0,
+    });
+    setOrderDialogOpen(true);
+  };
+
+  const loadOrders = () => api.get('/orders').then(() => {}).catch(() => {});
+
   const columnDefs = useMemo(() => [
+    { headerName: '', flex: 0, width: 65, cellRenderer: p => {
+      if (!p.data || FIAT_ASSETS.has(p.data.asset)) return null;
+      return <button onClick={() => openBalanceOrder(p.data)} style={{ padding: '2px 6px', fontSize: 10, cursor: 'pointer', fontWeight: 600 }}>Order</button>;
+    }},
     { field: 'asset', headerName: 'Asset', minWidth: 100 },
     { field: 'total', headerName: 'Total', minWidth: 120, valueFormatter: p => Number(p.value).toFixed(4) },
     { field: 'locked', headerName: 'Locked', minWidth: 120, valueFormatter: p => Number(p.value).toFixed(4) },
@@ -88,6 +113,12 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
       <div style={{ flex: 1 }}>
         <AgGridReact theme={gridTheme} rowData={hideAlmostZeroBalances ? rowData.filter(b => b.total >= 0.0001 && (b.latestValue || 0) >= 0.01) : rowData} columnDefs={columnDefs} defaultColDef={defaultColDef} />
       </div>
+      <OrderDialog
+        isOpen={orderDialogOpen}
+        onClose={(ok) => { setOrderDialogOpen(false); setOrderBalanceCtx(null); if (ok) loadOrders(); }}
+        symbols={symbols}
+        balanceContext={orderBalanceCtx}
+      />
     </div>
   );
 }

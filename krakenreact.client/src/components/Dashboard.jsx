@@ -13,7 +13,7 @@ import ChartPage from '../pages/ChartPage';
 import { formatPrice, formatNumber } from '../utils/formatters';
 import { useTheme } from '../context/ThemeContext';
 
-export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5, hideAlmostZeroBalances }) {
+export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5, hideAlmostZeroBalances, orderPriceOffsets, orderQtyPercentages }) {
   const [tickers, setTickers] = useState([]);
   const [selectedSymbol, setSelectedSymbol] = useState(() => localStorage.getItem('kraken_selected_pair') || '');
   const [bottomTab, setBottomTab] = useState('orders');
@@ -110,6 +110,11 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
 
   const loadOrders2 = () => api.get('/orders').then(r => setOrders(r.data)).catch(() => {});
 
+  const getUsdAvailable = () => {
+    const usdBal = balances.find(b => b.asset === 'USD');
+    return usdBal?.available || 0;
+  };
+
   const openBalanceOrder = (balanceRow) => {
     // Find the matching ticker to get the websocket symbol for order placement
     const ticker = tickers.find(t => t.base === balanceRow.asset && t.ccy === 'USD');
@@ -119,6 +124,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       price: ticker.closePrice || balanceRow.latestPrice,
       available: balanceRow.available,
       uncoveredQty: balanceRow.orderUncoveredQty || 0,
+      usdAvailable: getUsdAvailable(),
     });
     setOrderDialogOpen(true);
   };
@@ -132,6 +138,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       price: tickerData.closePrice || 0,
       available: bal?.available || 0,
       uncoveredQty: bal?.orderUncoveredQty || 0,
+      usdAvailable: getUsdAvailable(),
     });
     setOrderDialogOpen(true);
   };
@@ -296,6 +303,8 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
         onClose={(ok) => { setOrderDialogOpen(false); setOrderBalanceCtx(null); if (ok) loadOrders2(); }}
         symbols={symbols}
         balanceContext={orderBalanceCtx}
+        priceOffsets={orderPriceOffsets}
+        qtyPercentages={orderQtyPercentages}
       />
     </div>
   );

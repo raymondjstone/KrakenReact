@@ -25,6 +25,8 @@ public class OrdersController : ControllerBase
     [HttpGet]
     public ActionResult<List<OrderDto>> GetAll()
     {
+        // Recalculate fields to ensure latest prices/distances are fresh
+        _state.RecalculateAllOrderFields();
         return Ok(_state.Orders.Values.OrderByDescending(o => o.CreateTime).ToList());
     }
 
@@ -37,21 +39,38 @@ public class OrdersController : ControllerBase
         if (!result.Success)
             return BadRequest(new { error = result.Error?.Message ?? "Failed to place order" });
 
-        // If this is a sell order, recalculate balance covered/uncovered amounts
-        if (side == OrderSide.Sell)
+        // Add the new order(s) to state immediately with calculated fields
+        foreach (var orderId in result.Data.OrderIds)
         {
-            _state.RecalculateBalanceCoveredAmounts();
-
-            // Broadcast balance updates
-            _ = Task.Run(async () =>
+            var dto = new OrderDto
             {
-                try
-                {
-                    await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
-                }
-                catch { /* Ignore broadcast errors */ }
-            });
+                Id = orderId,
+                Symbol = req.Symbol.Replace("/", ""),
+                Side = req.Side,
+                Type = "Limit",
+                Status = "Open",
+                Price = req.Price,
+                Quantity = req.Quantity,
+                CreateTime = DateTime.UtcNow,
+                ClientOrderId = clientOrderId
+            };
+            _state.RecalculateOrderFields(dto);
+            _state.Orders[orderId] = dto;
         }
+
+        // Recalculate balance covered/uncovered amounts
+        _state.RecalculateBalanceCoveredAmounts();
+
+        // Broadcast updates to all clients
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+                await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+            }
+            catch { /* Ignore broadcast errors */ }
+        });
 
         return Ok(new { orderIds = result.Data.OrderIds });
     }
