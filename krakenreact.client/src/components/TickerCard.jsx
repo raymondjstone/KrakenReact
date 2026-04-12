@@ -1,6 +1,6 @@
 import { formatPrice } from '../utils/formatters';
 
-export default function TickerCard({ data, selected, onClick, onRemove, tempPinned }) {
+export default function TickerCard({ data, selected, onClick, onRemove, onOrder, tempPinned }) {
   const change = data.closePriceMovement ?? 0;
   const isPositive = change >= 0;
 
@@ -11,13 +11,22 @@ export default function TickerCard({ data, selected, onClick, onRemove, tempPinn
     >
       <div className="ticker-symbol">
         {data.displaySymbol || data.symbol}
-        {onRemove && (
-          <button
-            className="ticker-remove"
-            onClick={(e) => { e.stopPropagation(); onRemove(data.symbol); }}
-            title="Remove from ticker bar"
-          >x</button>
-        )}
+        <span className="ticker-actions">
+          {onOrder && (
+            <button
+              className="ticker-order"
+              onClick={(e) => { e.stopPropagation(); onOrder(data); }}
+              title="Create order"
+            >$</button>
+          )}
+          {onRemove && (
+            <button
+              className="ticker-remove"
+              onClick={(e) => { e.stopPropagation(); onRemove(data.symbol); }}
+              title="Remove from ticker bar"
+            >x</button>
+          )}
+        </span>
       </div>
       <div className="ticker-price">{formatPrice(data.closePrice)}</div>
       <div className={`ticker-change ${isPositive ? 'positive' : 'negative'}`}>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { formatPrice } from '../utils/formatters';
 
-export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelect, pinnedSet, onPin, onUnpin }) {
+export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelect, pinnedSet, onPin, onUnpin, onOrder }) {
   const [filter, setFilter] = useState('');
   const [tab, setTab] = useState('all');
   const [sortBy, setSortBy] = useState(null); // null | 'name' | 'price' | 'change'
@@ -96,6 +96,13 @@ export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelec
               className={`watchlist-row${t.symbol === selectedSymbol ? ' active' : ''}`}
               onClick={() => onSelect(t.symbol)}
             >
+              {onOrder && (
+                <button
+                  className="watchlist-order"
+                  onClick={(e) => { e.stopPropagation(); onOrder(t); }}
+                  title="Create order"
+                >$</button>
+              )}
               {onPin && (
                 <button
                   className={`watchlist-pin${isPinned ? ' pinned' : ''}`}

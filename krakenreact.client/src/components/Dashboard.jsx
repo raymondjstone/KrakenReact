@@ -123,6 +123,19 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
     setOrderDialogOpen(true);
   };
 
+  const openTickerOrder = (tickerData) => {
+    if (!tickerData) return;
+    // Find balance for this ticker's base asset to get available/uncovered info
+    const bal = balances.find(b => b.asset === tickerData.base);
+    setOrderBalanceCtx({
+      symbol: tickerData.symbol.replace('/', ''),
+      price: tickerData.closePrice || 0,
+      available: bal?.available || 0,
+      uncoveredQty: bal?.orderUncoveredQty || 0,
+    });
+    setOrderDialogOpen(true);
+  };
+
   // Map an order symbol (e.g. "XBTUSD") to a ticker symbol (e.g. "XBT/USD")
   const selectOrderSymbol = (orderSymbol) => {
     // Try direct match with slash inserted (orders strip the slash)
@@ -197,6 +210,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
               selected={t.symbol === selectedSymbol}
               onClick={selectSymbol}
               onRemove={onUnpin}
+              onOrder={openTickerOrder}
             />
           ))}
           {tempPinned.map(t => (
@@ -206,6 +220,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
               selected={t.symbol === selectedSymbol}
               onClick={selectSymbol}
               tempPinned
+              onOrder={openTickerOrder}
             />
           ))}
         </div>
@@ -271,6 +286,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
               pinnedSet={pinnedSet}
               onPin={onPin}
               onUnpin={onUnpin}
+              onOrder={openTickerOrder}
             />
           </div>
         )}

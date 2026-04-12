@@ -254,7 +254,13 @@ input, select { font-family: inherit; }
   justify-content: space-between;
 }
 
-.ticker-remove {
+.ticker-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ticker-order, .ticker-remove {
   background: none;
   border: none;
   color: var(--text-muted);
@@ -265,7 +271,9 @@ input, select { font-family: inherit; }
   opacity: 0;
   transition: opacity 0.15s, color 0.15s;
 }
+.ticker-card:hover .ticker-order,
 .ticker-card:hover .ticker-remove { opacity: 1; }
+.ticker-order:hover { color: var(--yellow); }
 .ticker-remove:hover { color: var(--red); }
 
 .ticker-price {
@@ -358,6 +366,22 @@ input, select { font-family: inherit; }
 }
 .watchlist-pin:hover { color: var(--yellow); }
 .watchlist-pin.pinned { color: var(--yellow); }
+
+.watchlist-order {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.watchlist-row:hover .watchlist-order { opacity: 1; }
+.watchlist-order:hover { color: var(--yellow); }
 
 .watchlist-header-row {
   display: flex; align-items: center; padding: 2px 12px; gap: 6px;
