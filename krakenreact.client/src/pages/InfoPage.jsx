@@ -67,7 +67,7 @@ export default function InfoPage({ onSymbolClick, pinnedSet, onPin, onUnpin }) {
   }, []);
 
   const columnDefs = useMemo(() => [
-    { headerName: 'Order', flex: 0, width: 70, cellRenderer: (p) => {
+    { headerName: 'Order', flex: 0, width: 80, cellRenderer: (p) => {
       return <button onClick={(e) => { e.stopPropagation(); setDialogSymbol(p.data.symbol); setDialogOpen(true); }}
         style={{ padding: '2px 6px', cursor: 'pointer', fontSize: 11 }}>Order</button>;
     }},
@@ -82,7 +82,7 @@ export default function InfoPage({ onSymbolClick, pinnedSet, onPin, onUnpin }) {
     }},
     { field: 'base', headerName: 'Symbol', minWidth: 80, cellStyle: movementCellStyle },
     { field: 'closePrice', headerName: 'Price', minWidth: 100, valueFormatter: p => formatPrice(p.value) },
-    { field: 'openTime', headerName: 'Time', minWidth: 150, valueFormatter: p => p.value ? new Date(p.value).toLocaleString() : '' },
+    { field: 'openTime', headerName: 'Time', minWidth: 180, valueFormatter: p => p.value ? new Date(p.value).toLocaleString() : '' },
     { field: 'age', headerName: 'Age', minWidth: 80 },
     { field: 'krakenNewPricesLoaded', headerName: 'Loaded', flex: 0, width: 70 },
     { field: 'priceLowerThanBuy', headerName: 'P<Buy', flex: 0, width: 60, cellRenderer: p => p.value ? '\u2713' : '' },

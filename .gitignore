@@ -3,6 +3,7 @@ bin/
 obj/
 dist/
 out/
+KrakenReact.Server/wwwroot/
 
 # IDE / editor
 .vs/
@@ -47,3 +48,4 @@ logs/
 
 # Test results
 TestResults/
+/KrakenReact.Server/Properties/PublishProfiles/galcomp.pubxml

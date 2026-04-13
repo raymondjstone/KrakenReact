@@ -7,12 +7,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://localhost:7247',
+        target: process.env.API_URL || 'https://localhost:7247',
         secure: false,
         changeOrigin: true
       },
       '/tradingHub': {
-        target: 'https://localhost:7247',
+        target: process.env.API_URL || 'https://localhost:7247',
         secure: false,
         changeOrigin: true,
         ws: true

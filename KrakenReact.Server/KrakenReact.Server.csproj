@@ -27,4 +27,21 @@
     </Content>
   </ItemGroup>
 
+  <!-- Build React frontend and include in publish output -->
+  <PropertyGroup>
+    <ClientDir>$(MSBuildProjectDirectory)\..\krakenreact.client</ClientDir>
+    <ContainerPort>4567</ContainerPort>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ContainerEnvironmentVariable Include="ASPNETCORE_HTTP_PORTS" Value="4567" />
+  </ItemGroup>
+
+  <Target Name="BuildFrontend" BeforeTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <Exec Command="npm ci" WorkingDirectory="$(ClientDir)" />
+    <Exec Command="npm run build" WorkingDirectory="$(ClientDir)" />
+    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+    <Exec Command="xcopy &quot;$(ClientDir)\dist&quot; &quot;$(MSBuildProjectDirectory)\wwwroot&quot; /E /I /Y" />
+  </Target>
+
 </Project>

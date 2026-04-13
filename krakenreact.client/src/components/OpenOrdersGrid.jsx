@@ -33,7 +33,7 @@ export default function OpenOrdersGrid({ orders, symbols, onOrderChanged, onSymb
       if (!p.data || !isOpenOrder(p.data.status)) return null;
       return <button onClick={() => { setEditOrder(p.data); setDialogOpen(true); }} style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}>Edit</button>;
     }},
-    { headerName: 'Cancel', flex: 0, width: 80, cellRenderer: p => {
+    { headerName: 'Cancel', flex: 0, width: 85, cellRenderer: p => {
       if (!p.data || !isOpenOrder(p.data.status)) return null;
       return <button onClick={() => handleCancel(p.data)} style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', color: 'var(--red)' }}>Cancel</button>;
     }},

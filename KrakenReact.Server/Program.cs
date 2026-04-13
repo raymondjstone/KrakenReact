@@ -9,6 +9,7 @@ using Serilog;
 Process? viteProcess = null;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Environment.WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 
 // Load local config (not committed to git) for connection strings / secrets
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
@@ -112,8 +113,28 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
-app.UseHttpsRedirection();
+
+// Log static file diagnostics
+var webRoot = app.Environment.WebRootPath;
+var contentRoot = app.Environment.ContentRootPath;
+Log.Information("ContentRootPath: {ContentRoot}", contentRoot);
+Log.Information("WebRootPath: {WebRoot}", webRoot);
+if (!string.IsNullOrEmpty(webRoot) && Directory.Exists(webRoot))
+{
+    var files = Directory.GetFiles(webRoot, "*", SearchOption.AllDirectories);
+    Log.Information("wwwroot contains {Count} files", files.Length);
+    foreach (var f in files.Take(10))
+        Log.Information("  {File}", f);
+}
+else
+{
+    Log.Warning("wwwroot directory does not exist at: {WebRoot}", webRoot);
+}
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.MapControllers();
 app.MapHub<TradingHub>("/tradingHub");
+app.MapFallbackToFile("index.html");
 
 app.Run();
