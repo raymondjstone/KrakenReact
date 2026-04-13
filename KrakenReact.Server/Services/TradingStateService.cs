@@ -217,7 +217,7 @@ public class TradingStateService
     public static string NormalizeAsset(string asset)
     {
         if (string.IsNullOrEmpty(asset)) return asset ?? "";
-        var clean = asset.Replace(".F", "").Replace(".B", "").Replace(".S", "").Replace(".P", "");
+        var clean = asset.Replace(".F", "").Replace(".B", "").Replace(".S", "").Replace(".P", "").Replace(".M", "");
         return AssetAliases.TryGetValue(clean, out var canonical) ? canonical : clean;
     }
 

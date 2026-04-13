@@ -419,10 +419,14 @@ public class BackgroundTaskService : BackgroundService
         }
 
         // Clear stale balance entries (e.g. un-normalized keys like XBT when BTC exists)
-        foreach (var key in _state.Balances.Keys.ToList())
+        // Only clean up if we got a meaningful response (not empty/partial API result)
+        if (grouped.Count >= _state.Balances.Count / 2 || grouped.Count >= 3)
         {
-            if (!newAssets.Contains(key))
-                _state.Balances.TryRemove(key, out _);
+            foreach (var key in _state.Balances.Keys.ToList())
+            {
+                if (!newAssets.Contains(key))
+                    _state.Balances.TryRemove(key, out _);
+            }
         }
 
         // Second pass: compute portfolio percentages

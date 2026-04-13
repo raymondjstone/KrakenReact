@@ -250,42 +250,48 @@ public class KrakenWebSocketV2Service : BackgroundService
                 if (balMsg?.Data != null && balMsg.Data.Any())
                 {
                     var usdGbpRate = _state.GetUsdGbpRate();
-                    foreach (var b in balMsg.Data)
+                    // Group by normalized asset to handle XBT→BTC, XBT.S→BTC, etc.
+                    var grouped = balMsg.Data
+                        .GroupBy(b => TradingStateService.NormalizeAsset(b.Asset))
+                        .Select(g => new { Asset = g.Key, Total = (decimal)g.Sum(x => x.Balance) });
+
+                    foreach (var b in grouped)
                     {
-                        var normalizedAsset = TradingStateService.NormalizeAsset(b.Asset);
-                        var latestPrice = _state.LatestPrice(normalizedAsset);
+                        var latestPrice = _state.LatestPrice(b.Asset);
                         var price = latestPrice?.Close ?? 0;
-                        var total = (decimal)b.Balance;
-                        var valueUsd = Math.Round(total * price, 2);
+                        var valueUsd = Math.Round(b.Total * price, 2);
                         var valueGbp = usdGbpRate > 0 ? Math.Round(valueUsd * usdGbpRate, 2) : 0;
 
-                        if (_state.Balances.TryGetValue(normalizedAsset, out var existing) && b.Asset != normalizedAsset)
+                        if (_state.Balances.TryGetValue(b.Asset, out var existing))
                         {
-                            // Merge into existing normalized entry
-                            existing.Total += total;
-                            existing.Available = existing.Total - existing.Locked;
-                            existing.LatestValue = Math.Round(existing.Total * price, 2);
-                            existing.LatestValueGbp = usdGbpRate > 0 ? Math.Round(existing.LatestValue * usdGbpRate, 2) : 0;
+                            // Update existing entry, preserving order coverage fields
+                            existing.Total = b.Total;
+                            existing.Available = b.Total - existing.Locked;
+                            existing.LatestPrice = price;
+                            existing.LatestValue = valueUsd;
+                            existing.LatestValueGbp = valueGbp;
                         }
                         else
                         {
-                            _state.Balances[normalizedAsset] = new BalanceDto
+                            _state.Balances[b.Asset] = new BalanceDto
                             {
-                                Asset = normalizedAsset,
-                                Total = total,
+                                Asset = b.Asset,
+                                Total = b.Total,
                                 Locked = 0,
-                                Available = total,
+                                Available = b.Total,
                                 LatestPrice = price,
                                 LatestValue = valueUsd,
                                 LatestValueGbp = valueGbp
                             };
                         }
+                    }
 
-                        // Remove the un-normalized key if it differs
+                    // Remove un-normalized keys that differ from the canonical form
+                    foreach (var b in balMsg.Data)
+                    {
+                        var normalizedAsset = TradingStateService.NormalizeAsset(b.Asset);
                         if (b.Asset != normalizedAsset)
-                        {
                             _state.Balances.TryRemove(b.Asset, out _);
-                        }
                     }
                     // Recalculate portfolio percentages
                     var totalPortfolioValue = _state.Balances.Values.Sum(x => x.LatestValue);
