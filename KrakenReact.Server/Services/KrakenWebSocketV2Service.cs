@@ -286,12 +286,12 @@ public class KrakenWebSocketV2Service : BackgroundService
                         }
                     }
 
-                    // Remove un-normalized keys that differ from the canonical form
-                    foreach (var b in balMsg.Data)
+                    // Remove any un-normalized keys from state to prevent duplicates
+                    foreach (var key in _state.Balances.Keys.ToList())
                     {
-                        var normalizedAsset = TradingStateService.NormalizeAsset(b.Asset);
-                        if (b.Asset != normalizedAsset)
-                            _state.Balances.TryRemove(b.Asset, out _);
+                        var normalized = TradingStateService.NormalizeAsset(key);
+                        if (key != normalized)
+                            _state.Balances.TryRemove(key, out _);
                     }
                     // Recalculate portfolio percentages
                     var totalPortfolioValue = _state.Balances.Values.Sum(x => x.LatestValue);

@@ -418,13 +418,19 @@ public class BackgroundTaskService : BackgroundService
             balanceDtos.Add(dto);
         }
 
-        // Remove un-normalized duplicate keys (e.g. XBT when BTC already exists from normalization)
-        // Only remove keys whose normalized form differs AND the normalized form is present
+        // Always remove un-normalized keys (e.g. XBT → BTC) to prevent duplicates.
+        // If fresh API data doesn't include the normalized form, re-home the entry.
         foreach (var key in _state.Balances.Keys.ToList())
         {
             var normalized = TradingStateService.NormalizeAsset(key);
-            if (key != normalized && newAssets.Contains(normalized))
-                _state.Balances.TryRemove(key, out _);
+            if (key != normalized && _state.Balances.TryRemove(key, out var stale))
+            {
+                if (!newAssets.Contains(normalized))
+                {
+                    stale.Asset = normalized;
+                    _state.Balances.TryAdd(normalized, stale);
+                }
+            }
         }
 
         // Second pass: compute portfolio percentages
