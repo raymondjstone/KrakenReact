@@ -418,15 +418,13 @@ public class BackgroundTaskService : BackgroundService
             balanceDtos.Add(dto);
         }
 
-        // Clear stale balance entries (e.g. un-normalized keys like XBT when BTC exists)
-        // Only clean up if we got a meaningful response (not empty/partial API result)
-        if (grouped.Count >= _state.Balances.Count / 2 || grouped.Count >= 3)
+        // Remove un-normalized duplicate keys (e.g. XBT when BTC already exists from normalization)
+        // Only remove keys whose normalized form differs AND the normalized form is present
+        foreach (var key in _state.Balances.Keys.ToList())
         {
-            foreach (var key in _state.Balances.Keys.ToList())
-            {
-                if (!newAssets.Contains(key))
-                    _state.Balances.TryRemove(key, out _);
-            }
+            var normalized = TradingStateService.NormalizeAsset(key);
+            if (key != normalized && newAssets.Contains(normalized))
+                _state.Balances.TryRemove(key, out _);
         }
 
         // Second pass: compute portfolio percentages
