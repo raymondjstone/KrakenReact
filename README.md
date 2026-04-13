@@ -155,6 +155,37 @@ Pinned ticker pairs are also persisted to the database.
 - **Theme Persistence** -- Theme preference survives page refreshes and syncs across browser tabs
 - **Settings Debouncing** -- Settings auto-save after 1 second of inactivity to prevent excessive writes
 
+
+## Docker Support
+
+You can build and run KrakenReact using Docker for simplified deployment and consistent environments.
+
+- See [DOCKER.md](DOCKER.md) for full instructions.
+
+### Quick Start
+
+1. **Build images:**
+   ```bash
+   docker build -t krakenreact-server -f KrakenReact.Server/Dockerfile .
+   docker build -t krakenreact-client -f krakenreact.client/Dockerfile .
+   ```
+2. **Run containers:**
+   ```bash
+   docker run -d --name krakenreact-server -p 7247:7247 krakenreact-server
+   docker run -d --name krakenreact-client -p 5173:5173 krakenreact-client
+   ```
+   Or use Docker Compose if available:
+   ```bash
+   docker-compose up --build
+   ```
+3. **Configuration:**
+   - Mount your `appsettings.Local.json` or set environment variables for DB connection.
+   - Set API keys and settings via the web UI after launch.
+
+The `.dockerignore` file ensures fast, clean builds by excluding node_modules, bin/obj, test projects, etc.
+
+---
+
 ## License
 
 Private -- not for redistribution.

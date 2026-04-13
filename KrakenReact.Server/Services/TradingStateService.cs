@@ -218,7 +218,15 @@ public class TradingStateService
     {
         if (string.IsNullOrEmpty(asset)) return asset ?? "";
         var clean = asset.Replace(".F", "").Replace(".B", "").Replace(".S", "").Replace(".P", "").Replace(".M", "");
-        return AssetAliases.TryGetValue(clean, out var canonical) ? canonical : clean;
+        // Chase alias chains (e.g. XXBT → XBT → BTC)
+        for (int i = 0; i < 5; i++)
+        {
+            if (AssetAliases.TryGetValue(clean, out var canonical) && canonical != clean)
+                clean = canonical;
+            else
+                break;
+        }
+        return clean;
     }
 
     private readonly DelistedPriceService _delisted;
@@ -570,16 +578,14 @@ public class TradingStateService
         }
     }
 
-    /// <summary>Seeds any missing default asset normalizations into the database without overwriting user edits.</summary>
+    /// <summary>Seeds missing default asset normalizations and flattens any alias chains in the database.</summary>
     public async Task SyncAssetNormalizations(Data.KrakenDbContext db)
     {
         var existing = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a, StringComparer.OrdinalIgnoreCase);
         var changed = false;
 
-        // Build the set from code defaults — only ADD entries that don't exist yet.
-        // Never update or remove existing entries: the DB is the source of truth once seeded.
+        // Add entries from code defaults that don't exist in DB yet
         var defaults = new Dictionary<string, string>(AssetAliases, StringComparer.OrdinalIgnoreCase);
-
         foreach (var kvp in defaults)
         {
             if (!existing.ContainsKey(kvp.Key))
@@ -590,6 +596,28 @@ public class TradingStateService
         }
 
         if (changed) await db.SaveChangesAsync();
+
+        // Flatten any alias chains (e.g. XXBT→XBT, XBT→BTC  becomes  XXBT→BTC, XBT→BTC)
+        var allEntries = await db.AssetNormalizations.ToListAsync();
+        var lookup = allEntries.ToDictionary(a => a.KrakenName, a => a.NormalizedName, StringComparer.OrdinalIgnoreCase);
+        var flattened = false;
+        foreach (var entry in allEntries)
+        {
+            var resolved = entry.NormalizedName;
+            for (int i = 0; i < 5; i++)
+            {
+                if (lookup.TryGetValue(resolved, out var next) && next != resolved)
+                    resolved = next;
+                else
+                    break;
+            }
+            if (resolved != entry.NormalizedName)
+            {
+                entry.NormalizedName = resolved;
+                flattened = true;
+            }
+        }
+        if (flattened) await db.SaveChangesAsync();
     }
 
     /// <summary>Reloads configuration from database</summary>
