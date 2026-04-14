@@ -10,6 +10,7 @@ import Watchlist from './Watchlist';
 import OpenOrdersGrid from './OpenOrdersGrid';
 import OrderDialog from './OrderDialog';
 import ChartPage from '../pages/ChartPage';
+import OrderBook from './OrderBook';
 import { formatPrice, formatNumber } from '../utils/formatters';
 import { useTheme } from '../context/ThemeContext';
 
@@ -236,11 +237,16 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       <div className="dashboard-main">
         <div className="dashboard-center">
           {config.showChart && selectedSymbol ? (
-            <div className="dashboard-chart">
-              <ChartPage symbol={selectedSymbol} displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol} />
+            <div className="dashboard-chart-row">
+              <div className="dashboard-chart">
+                <ChartPage symbol={selectedSymbol} displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol} />
+              </div>
+              <div className="dashboard-orderbook">
+                <OrderBook symbol={selectedSymbol} />
+              </div>
             </div>
           ) : (
-            <div className="dashboard-chart" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+            <div className="dashboard-chart-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
               Select a pair to view chart
             </div>
           )}

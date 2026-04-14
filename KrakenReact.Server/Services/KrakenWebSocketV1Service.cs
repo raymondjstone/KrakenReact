@@ -21,6 +21,7 @@ public class KrakenWebSocketV1Service : BackgroundService
     private long _lastOrderBroadcastTicks = DateTime.MinValue.Ticks;
     private volatile bool _balancesDirty;
     private volatile bool _ordersDirty;
+    private string? _currentBookPair;
 
     public KrakenWebSocketV1Service(TradingStateService state, AutoOrderService autoOrder, NotificationService notifications, IHubContext<TradingHub> hub, ILogger<KrakenWebSocketV1Service> logger)
     {
@@ -29,6 +30,26 @@ public class KrakenWebSocketV1Service : BackgroundService
         _notifications = notifications;
         _hub = hub;
         _logger = logger;
+
+        _state.BookPairChanged += (oldPair, newPair) =>
+        {
+            if (_socket == null) return;
+            try
+            {
+                if (!string.IsNullOrEmpty(oldPair))
+                {
+                    var unsub = JsonSerializer.Serialize(new { @event = "unsubscribe", pair = new[] { oldPair }, subscription = new { name = "book", depth = 10 } });
+                    _socket.Send(Encoding.UTF8.GetBytes(unsub));
+                }
+                if (!string.IsNullOrEmpty(newPair))
+                {
+                    var sub = JsonSerializer.Serialize(new { @event = "subscribe", pair = new[] { newPair }, subscription = new { name = "book", depth = 10 } });
+                    _socket.Send(Encoding.UTF8.GetBytes(sub));
+                    _currentBookPair = newPair;
+                }
+            }
+            catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error changing book subscription"); }
+        };
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -146,6 +167,54 @@ public class KrakenWebSocketV1Service : BackgroundService
             if (doc.RootElement.ValueKind != JsonValueKind.Array) return;
         }
         catch { return; }
+
+        // Process order book messages
+        if (message.Contains("book-10"))
+        {
+            try
+            {
+                var elements = JsonSerializer.Deserialize<List<object>>(message);
+                if (elements != null && elements.Count >= 4)
+                {
+                    var pair = elements[elements.Count - 1].ToString();
+                    var bookJson = elements[1].ToString();
+                    using var bookDoc = JsonDocument.Parse(bookJson!);
+                    var bookRoot = bookDoc.RootElement;
+
+                    // Snapshot has "as" and "bs" keys, updates have "a" or "b"
+                    bool isSnapshot = bookRoot.TryGetProperty("as", out _);
+
+                    if (isSnapshot)
+                    {
+                        var asks = ParseBookLevels(bookRoot, "as");
+                        var bids = ParseBookLevels(bookRoot, "bs");
+                        _ = _hub.Clients.All.SendAsync("BookSnapshot", new { pair, asks, bids });
+                    }
+                    else
+                    {
+                        var asks = bookRoot.TryGetProperty("a", out _) ? ParseBookLevels(bookRoot, "a") : null;
+                        var bids = bookRoot.TryGetProperty("b", out _) ? ParseBookLevels(bookRoot, "b") : null;
+                        // Kraken can send two objects in the array for combined ask+bid updates
+                        List<decimal[]>? asks2 = null, bids2 = null;
+                        if (elements.Count >= 5)
+                        {
+                            var bookJson2 = elements[2].ToString();
+                            using var bookDoc2 = JsonDocument.Parse(bookJson2!);
+                            var bookRoot2 = bookDoc2.RootElement;
+                            if (bookRoot2.TryGetProperty("a", out _)) asks2 = ParseBookLevels(bookRoot2, "a");
+                            if (bookRoot2.TryGetProperty("b", out _)) bids2 = ParseBookLevels(bookRoot2, "b");
+                        }
+                        var finalAsks = asks2 ?? asks;
+                        var finalBids = bids2 ?? bids;
+                        if (asks != null && asks2 != null) finalAsks = asks2; // prefer the second if both
+                        if (bids != null && bids2 != null) finalBids = bids2;
+                        _ = _hub.Clients.All.SendAsync("BookUpdate", new { pair, asks = finalAsks, bids = finalBids });
+                    }
+                }
+            }
+            catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error parsing book"); }
+            return;
+        }
 
         if (!message.Contains("ticker")) return;
 
@@ -289,6 +358,23 @@ public class KrakenWebSocketV1Service : BackgroundService
             });
         }
         catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error parsing ticker"); }
+    }
+
+    private static List<decimal[]> ParseBookLevels(JsonElement root, string key)
+    {
+        var levels = new List<decimal[]>();
+        if (!root.TryGetProperty(key, out var arr)) return levels;
+        foreach (var entry in arr.EnumerateArray())
+        {
+            var items = entry.EnumerateArray().ToList();
+            if (items.Count >= 2)
+            {
+                decimal.TryParse(items[0].GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var price);
+                decimal.TryParse(items[1].GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var volume);
+                levels.Add(new[] { price, volume });
+            }
+        }
+        return levels;
     }
 
     private void Ping()

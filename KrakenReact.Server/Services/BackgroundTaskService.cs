@@ -95,11 +95,15 @@ public class BackgroundTaskService : BackgroundService
         // Phase 2: Fetch fresh trades, ledger, orders, balances from Kraken API immediately
         // This is fast and must happen before the slow kline loading
         _logger.LogInformation("[BG] Fetching fresh orders, trades, ledger, balances from API...");
-        await _kraken.GetInstrumentsAsync(false);
-        await LoadOrders(false);
-        await LoadTrades(false);
-        await LoadLedger(false);
-        await LoadBalances();
+        try
+        {
+            await _kraken.GetInstrumentsAsync(false);
+            await LoadOrders(false);
+            await LoadTrades(false);
+            await LoadLedger(false);
+            await LoadBalances();
+        }
+        catch (Exception ex) { _logger.LogError(ex, "[BG] Error during initial data load — continuing to start loops"); }
         _state.InitialDataLoad = false;
         _logger.LogInformation("[BG] Fresh transaction data loaded");
 
@@ -482,21 +486,40 @@ public class BackgroundTaskService : BackgroundService
             }
 
             var delay = nextRun!.Value - now;
+            _logger.LogInformation("[BG] Daily task scheduled for {NextRun} (in {Hours:F1}h)", nextRun.Value.ToString("yyyy-MM-dd HH:mm"), delay.TotalHours);
             try { await Task.Delay(delay, ct); }
             catch (OperationCanceledException) { break; }
 
             try
             {
-                _logger.LogInformation("[BG] Daily kline refresh starting at {Time}", DateTime.Now.ToString("HH:mm"));
+                var snapshot = _state.GetPriceSnapshot();
+                _logger.LogInformation("[BG] Daily kline refresh starting at {Time} — {Count} symbols", DateTime.Now.ToString("HH:mm"), snapshot.Count);
                 try { await _hub.Clients.All.SendAsync("StatusUpdate", "Refreshing daily kline data..."); }
                 catch { /* non-critical */ }
 
-                foreach (var p in _state.GetPriceSnapshot())
-                    await LoadLatestPriceData(p);
+                var done = 0;
+                foreach (var p in snapshot)
+                {
+                    try
+                    {
+                        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        cts.CancelAfter(TimeSpan.FromMinutes(2));
+                        await LoadLatestPriceData(p).WaitAsync(cts.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        _logger.LogWarning("[BG] Daily kline refresh timed out for {Symbol}, skipping", p.Symbol);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[BG] Daily kline refresh failed for {Symbol}, skipping", p.Symbol);
+                    }
+                    done++;
+                }
 
                 try { await _hub.Clients.All.SendAsync("StatusUpdate", "Daily kline refresh complete"); }
                 catch { /* non-critical */ }
-                _logger.LogInformation("[BG] Daily kline refresh complete");
+                _logger.LogInformation("[BG] Daily kline refresh complete — {Done}/{Total} symbols", done, snapshot.Count);
             }
             catch (Exception ex) { _logger.LogError(ex, "[BG] Daily task error"); }
         }

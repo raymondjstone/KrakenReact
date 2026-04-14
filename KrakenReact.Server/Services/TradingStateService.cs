@@ -250,6 +250,22 @@ public class TradingStateService
     public ConcurrentDictionary<string, AutoTradeDto> AutoOrders { get; } = new();
     public ConcurrentDictionary<string, KrakenSymbol> Symbols { get; } = new();
 
+    // Order book state
+    private string? _bookPair;
+    private readonly object _bookLock = new();
+    public event Action<string?, string?>? BookPairChanged; // (oldPair, newPair)
+
+    public string? BookPair
+    {
+        get { lock (_bookLock) return _bookPair; }
+        set
+        {
+            string? old;
+            lock (_bookLock) { old = _bookPair; _bookPair = value; }
+            if (old != value) BookPairChanged?.Invoke(old, value);
+        }
+    }
+
     public static readonly List<decimal> DefaultOrderPriceOffsets = new() { 2, 5, 10, 15 };
     public static readonly List<decimal> DefaultOrderQtyPercentages = new() { 5, 10, 20, 25, 50, 75, 100 };
     public List<decimal> OrderPriceOffsets { get; set; } = new(DefaultOrderPriceOffsets);

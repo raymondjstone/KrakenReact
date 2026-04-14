@@ -22,4 +22,10 @@ public class TradingHub : Hub
             await Clients.Caller.SendAsync("StatusUpdate", _state.LastStatusMessage);
         }
     }
+
+    public Task SubscribeBook(string pair)
+    {
+        _state.BookPair = pair;
+        return Task.CompletedTask;
+    }
 }
