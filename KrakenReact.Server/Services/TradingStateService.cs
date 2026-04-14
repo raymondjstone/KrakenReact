@@ -251,6 +251,8 @@ public class TradingStateService
     public ConcurrentDictionary<string, KrakenSymbol> Symbols { get; } = new();
 
     // Order book state
+    public static readonly int[] ValidBookDepths = { 10, 25, 100, 500, 1000 };
+    public int OrderBookDepth { get; set; } = 25;
     private string? _bookPair;
     private readonly object _bookLock = new();
     public event Action<string?, string?>? BookPairChanged; // (oldPair, newPair)
@@ -704,6 +706,12 @@ public class TradingStateService
 
         var autoAddStaking = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoAddStakingToOrder");
         AutoAddStakingToOrder = autoAddStaking != null && string.Equals(autoAddStaking.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var bookDepth = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderBookDepth");
+        if (bookDepth != null && int.TryParse(bookDepth.Value, out var depth) && ValidBookDepths.Contains(depth))
+            OrderBookDepth = depth;
+        else
+            OrderBookDepth = 25;
 
         // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);

@@ -73,6 +73,7 @@ public class SettingsController : ControllerBase
             settings.AutoSellOnBuyFill = _state.AutoSellOnBuyFill;
             settings.AutoSellPercentage = _state.AutoSellPercentage;
             settings.AutoAddStakingToOrder = _state.AutoAddStakingToOrder;
+            settings.OrderBookDepth = _state.OrderBookDepth;
 
             return Ok(settings);
         }
@@ -172,6 +173,11 @@ public class SettingsController : ControllerBase
             if (request.AutoAddStakingToOrder.HasValue)
             {
                 await SaveOrUpdateSetting("AutoAddStakingToOrder", request.AutoAddStakingToOrder.Value.ToString().ToLower(), "Automatically add staking reward quantity to the newest open sell order for that asset");
+            }
+
+            if (request.OrderBookDepth.HasValue && TradingStateService.ValidBookDepths.Contains(request.OrderBookDepth.Value))
+            {
+                await SaveOrUpdateSetting("OrderBookDepth", request.OrderBookDepth.Value.ToString(), "Number of price levels shown in the order book (10, 25, 100, 500, 1000)");
             }
 
             // Save asset normalizations

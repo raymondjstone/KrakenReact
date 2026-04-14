@@ -54,6 +54,9 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   // Auto-add staking to order
   const [autoAddStakingToOrder, setAutoAddStakingToOrder] = useState(false);
 
+  // Order book
+  const [orderBookDepth, setOrderBookDepth] = useState(25);
+
   // Asset Normalizations
   const [normalizations, setNormalizations] = useState('');
 
@@ -87,6 +90,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     setAutoSellOnBuyFill(!!data.autoSellOnBuyFill);
     setAutoSellPercentage(data.autoSellPercentage ?? 10);
     setAutoAddStakingToOrder(!!data.autoAddStakingToOrder);
+    setOrderBookDepth(data.orderBookDepth || 25);
     setLoaded(true);
   }, [serverSettings]);
 
@@ -130,6 +134,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     payload.autoSellOnBuyFill = autoSellOnBuyFill;
     payload.autoSellPercentage = autoSellPercentage;
     payload.autoAddStakingToOrder = autoAddStakingToOrder;
+    payload.orderBookDepth = orderBookDepth;
 
     // Parse normalizations
     const normDict = {};
@@ -350,6 +355,22 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
               style={{ ...inputStyle, marginTop: 8 }}
               placeholder="5, 10, 20, 25, 50, 75, 100"
             />
+          </div>
+
+          <div style={cardStyle}>
+            <div style={labelStyle}>Order Book Depth</div>
+            <div style={hintStyle}>
+              Number of price levels shown on each side of the order book. Higher values show more of the market but use more bandwidth. Requires page refresh to take effect.
+            </div>
+            <select
+              value={orderBookDepth}
+              onChange={e => setOrderBookDepth(Number(e.target.value))}
+              style={{ ...inputStyle, marginTop: 8, width: 'auto', minWidth: 120 }}
+            >
+              {[10, 25, 100, 500, 1000].map(d => (
+                <option key={d} value={d}>{d} levels</option>
+              ))}
+            </select>
           </div>
 
           <div style={cardStyle}>

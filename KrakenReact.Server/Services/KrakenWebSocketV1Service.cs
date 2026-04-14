@@ -36,14 +36,15 @@ public class KrakenWebSocketV1Service : BackgroundService
             if (_socket == null) return;
             try
             {
+                var depth = _state.OrderBookDepth;
                 if (!string.IsNullOrEmpty(oldPair))
                 {
-                    var unsub = JsonSerializer.Serialize(new { @event = "unsubscribe", pair = new[] { oldPair }, subscription = new { name = "book", depth = 10 } });
+                    var unsub = JsonSerializer.Serialize(new { @event = "unsubscribe", pair = new[] { oldPair }, subscription = new { name = "book", depth } });
                     _socket.Send(Encoding.UTF8.GetBytes(unsub));
                 }
                 if (!string.IsNullOrEmpty(newPair))
                 {
-                    var sub = JsonSerializer.Serialize(new { @event = "subscribe", pair = new[] { newPair }, subscription = new { name = "book", depth = 10 } });
+                    var sub = JsonSerializer.Serialize(new { @event = "subscribe", pair = new[] { newPair }, subscription = new { name = "book", depth } });
                     _socket.Send(Encoding.UTF8.GetBytes(sub));
                     _currentBookPair = newPair;
                 }
@@ -169,7 +170,7 @@ public class KrakenWebSocketV1Service : BackgroundService
         catch { return; }
 
         // Process order book messages
-        if (message.Contains("book-10"))
+        if (message.Contains("\"book-"))
         {
             try
             {

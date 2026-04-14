@@ -23,6 +23,7 @@ public class AppSettingsDto
     public bool AutoSellOnBuyFill { get; set; }
     public decimal AutoSellPercentage { get; set; }
     public bool AutoAddStakingToOrder { get; set; }
+    public int OrderBookDepth { get; set; }
 }
 
 public class SaveSettingsRequest
@@ -48,4 +49,5 @@ public class SaveSettingsRequest
     public bool? AutoSellOnBuyFill { get; set; }
     public decimal? AutoSellPercentage { get; set; }
     public bool? AutoAddStakingToOrder { get; set; }
+    public int? OrderBookDepth { get; set; }
 }

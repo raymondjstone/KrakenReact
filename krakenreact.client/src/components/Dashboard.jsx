@@ -14,7 +14,7 @@ import OrderBook from './OrderBook';
 import { formatPrice, formatNumber } from '../utils/formatters';
 import { useTheme } from '../context/ThemeContext';
 
-export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5, hideAlmostZeroBalances, orderPriceOffsets, orderQtyPercentages }) {
+export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5, hideAlmostZeroBalances, orderPriceOffsets, orderQtyPercentages, orderBookDepth }) {
   const [tickers, setTickers] = useState([]);
   const [selectedSymbol, setSelectedSymbol] = useState(() => localStorage.getItem('kraken_selected_pair') || '');
   const [bottomTab, setBottomTab] = useState('orders');
@@ -242,7 +242,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
                 <ChartPage symbol={selectedSymbol} displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol} />
               </div>
               <div className="dashboard-orderbook">
-                <OrderBook symbol={selectedSymbol} />
+                <OrderBook symbol={selectedSymbol} depth={orderBookDepth || 25} />
               </div>
             </div>
           ) : (

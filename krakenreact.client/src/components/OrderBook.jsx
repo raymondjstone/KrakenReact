@@ -2,12 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { getConnection } from '../api/signalRService';
 import { formatPrice } from '../utils/formatters';
 
-export default function OrderBook({ symbol }) {
+export default function OrderBook({ symbol, depth = 25 }) {
   const [asks, setAsks] = useState([]);
   const [bids, setBids] = useState([]);
   const asksRef = useRef([]);
   const bidsRef = useRef([]);
-  const lastPairRef = useRef(null);
 
   const applyUpdates = useCallback((current, updates) => {
     if (!updates) return current;
@@ -26,7 +25,6 @@ export default function OrderBook({ symbol }) {
 
     // Tell backend which pair we want
     conn.invoke('SubscribeBook', symbol).catch(() => {});
-    lastPairRef.current = symbol;
 
     const snapshotHandler = (data) => {
       if (data.pair !== symbol) return;
@@ -41,11 +39,11 @@ export default function OrderBook({ symbol }) {
     const updateHandler = (data) => {
       if (data.pair !== symbol) return;
       if (data.asks) {
-        asksRef.current = applyUpdates(asksRef.current, data.asks).sort((a, b) => a[0] - b[0]).slice(0, 10);
+        asksRef.current = applyUpdates(asksRef.current, data.asks).sort((a, b) => a[0] - b[0]).slice(0, depth);
         setAsks([...asksRef.current]);
       }
       if (data.bids) {
-        bidsRef.current = applyUpdates(bidsRef.current, data.bids).sort((a, b) => b[0] - a[0]).slice(0, 10);
+        bidsRef.current = applyUpdates(bidsRef.current, data.bids).sort((a, b) => b[0] - a[0]).slice(0, depth);
         setBids([...bidsRef.current]);
       }
     };
@@ -57,7 +55,7 @@ export default function OrderBook({ symbol }) {
       conn.off('BookSnapshot', snapshotHandler);
       conn.off('BookUpdate', updateHandler);
     };
-  }, [symbol, applyUpdates]);
+  }, [symbol, depth, applyUpdates]);
 
   const maxQty = Math.max(
     ...asks.map(a => a[1] || 0),
@@ -66,8 +64,8 @@ export default function OrderBook({ symbol }) {
   );
 
   // Show asks in reverse so lowest ask is at bottom (nearest to spread)
-  const displayAsks = asks.slice(0, 10).reverse();
-  const displayBids = bids.slice(0, 10);
+  const displayAsks = asks.slice(0, depth).reverse();
+  const displayBids = bids.slice(0, depth);
 
   const spread = asks.length > 0 && bids.length > 0 ? asks[0][0] - bids[0][0] : null;
 
