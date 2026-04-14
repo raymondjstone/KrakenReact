@@ -281,7 +281,11 @@ public class BackgroundTaskService : BackgroundService
         if (!_state.StakingNotifications && !_state.AutoAddStakingToOrder) return;
 
         var newRewards = ledgers
-            .Where(l => l.Type == Kraken.Net.Enums.LedgerEntryType.Reward && !_state.SeenLedgerIds.Contains(l.Id))
+            .Where(l => l.Type == Kraken.Net.Enums.LedgerEntryType.Staking
+                && l.Quantity > 0
+                && l.SubType != "spotFromStaking"
+                && l.SubType != "spotToStaking"
+                && !_state.SeenLedgerIds.Contains(l.Id))
             .ToList();
 
         foreach (var reward in newRewards)
