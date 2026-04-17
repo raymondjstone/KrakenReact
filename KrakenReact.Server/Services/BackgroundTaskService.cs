@@ -498,7 +498,8 @@ public class BackgroundTaskService : BackgroundService
             {
                 var snapshot = _state.GetPriceSnapshot();
                 _logger.LogInformation("[BG] Daily kline refresh starting at {Time} — {Count} symbols", DateTime.Now.ToString("HH:mm"), snapshot.Count);
-                try { await _hub.Clients.All.SendAsync("StatusUpdate", "Refreshing daily kline data..."); }
+                _state.LastStatusMessage = $"Refreshing daily kline data ({snapshot.Count} symbols)...";
+                try { await _hub.Clients.All.SendAsync("StatusUpdate", _state.LastStatusMessage); }
                 catch { /* non-critical */ }
 
                 var done = 0;
@@ -509,6 +510,10 @@ public class BackgroundTaskService : BackgroundService
                         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                         cts.CancelAfter(TimeSpan.FromMinutes(2));
                         await LoadLatestPriceData(p).WaitAsync(cts.Token);
+
+                        // Re-run auto-order check with updated kline data
+                        var result = await _autoOrder.CheckAsync(p, "Default Rule");
+                        _state.AutoOrders[result.Symbol] = result;
                     }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                     {
@@ -521,7 +526,13 @@ public class BackgroundTaskService : BackgroundService
                     done++;
                 }
 
-                try { await _hub.Clients.All.SendAsync("StatusUpdate", "Daily kline refresh complete"); }
+                // Refresh balances so portfolio values reflect updated prices
+                try { await LoadBalances(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[BG] Post-refresh balance update failed"); }
+
+                var dailyDoneMsg = $"Daily price refresh done at {DateTime.Now:HH:mm}";
+                _state.LastStatusMessage = dailyDoneMsg;
+                try { await _hub.Clients.All.SendAsync("StatusUpdate", dailyDoneMsg); }
                 catch { /* non-critical */ }
                 _logger.LogInformation("[BG] Daily kline refresh complete — {Done}/{Total} symbols", done, snapshot.Count);
             }

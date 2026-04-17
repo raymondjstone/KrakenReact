@@ -95,7 +95,7 @@ public class PriceDataItemTests
     }
 
     [Fact]
-    public void AddKlineHistory_InsertsAtFront()
+    public void AddKlineHistory_MergesSortsChronologically()
     {
         var item = new PriceDataItem { Symbol = "SOL/USD" };
         item.AddKline(MakeKline(DateTime.UtcNow, 200m));
@@ -111,6 +111,37 @@ public class PriceDataItemTests
         Assert.Equal(3, snapshot.Count);
         Assert.Equal(100m, snapshot[0].Close);
         Assert.Equal(200m, snapshot[2].Close);
+    }
+
+    [Fact]
+    public void AddKlineHistory_DeduplicatesByOpenTime()
+    {
+        var item = new PriceDataItem { Symbol = "SOL/USD" };
+        var date = DateTime.UtcNow.Date;
+
+        var initial = new List<DerivedKline>
+        {
+            MakeKline(date.AddDays(-2), 100m),
+            MakeKline(date.AddDays(-1), 150m),
+            MakeKline(date, 200m)
+        };
+        item.AddKlineHistory(initial);
+
+        // Simulate daily refresh: updated candle for today + new candle for tomorrow
+        var refresh = new List<DerivedKline>
+        {
+            MakeKline(date, 210m),
+            MakeKline(date.AddDays(1), 220m)
+        };
+        item.AddKlineHistory(refresh);
+
+        var snapshot = item.GetKlineSnapshot();
+        Assert.Equal(4, snapshot.Count);
+        Assert.Equal(100m, snapshot[0].Close);  // day -2 unchanged
+        Assert.Equal(150m, snapshot[1].Close);  // day -1 unchanged
+        Assert.Equal(210m, snapshot[2].Close);  // today updated
+        Assert.Equal(220m, snapshot[3].Close);  // tomorrow added
+        Assert.Equal(220m, item.LatestKline!.Close);  // latest is newest
     }
 
     [Fact]

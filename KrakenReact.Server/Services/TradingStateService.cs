@@ -62,7 +62,14 @@ public class PriceDataItem
         if (!klines.Any()) return;
         lock (_klineLock)
         {
-            _klineSnapshot.InsertRange(0, klines);
+            // Remove existing klines that overlap with new data (same OpenTime+Interval)
+            var newDates = new HashSet<(DateTime, string)>(
+                klines.Select(k => (k.OpenTime, k.Interval)));
+            _klineSnapshot.RemoveAll(k => newDates.Contains((k.OpenTime, k.Interval)));
+
+            _klineSnapshot.AddRange(klines);
+            _klineSnapshot.Sort((a, b) => a.OpenTime.CompareTo(b.OpenTime));
+
             if (_klineSnapshot.Count > MaxKlines)
                 _klineSnapshot.RemoveRange(0, _klineSnapshot.Count - MaxKlines);
         }
