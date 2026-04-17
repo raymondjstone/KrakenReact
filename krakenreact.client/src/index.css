@@ -570,6 +570,84 @@ input, select { font-family: inherit; }
   flex-shrink: 0;
 }
 
+/* Dashboard grid (react-grid-layout) */
+.dashboard-grid-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.dashboard-grid {
+  min-height: 100%;
+}
+
+.grid-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.grid-panel-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+  min-height: 26px;
+}
+
+.grid-panel-header:active { cursor: grabbing; }
+
+.grid-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.grid-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.grid-panel-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Let tabs inside a drag handle still behave like buttons */
+.grid-panel-header .panel-tabs,
+.grid-panel-header .panel-tab {
+  cursor: pointer;
+}
+
+/* react-grid-layout theming tweaks */
+.react-grid-item.react-grid-placeholder {
+  background: var(--yellow) !important;
+  opacity: 0.2;
+  border-radius: 4px;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  border-right-color: var(--text-muted);
+  border-bottom-color: var(--text-muted);
+}
+
 /* Responsive */
 @media (max-width: 1200px) { .dashboard-sidebar { width: 260px; } .dashboard-orderbook { max-width: 180px; } }
 @media (max-width: 900px) { .dashboard-sidebar { display: none; } .dashboard-orderbook { display: none; } }

@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import GridLayout, { WidthProvider } from 'react-grid-layout/legacy';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { AgGridReact } from 'ag-grid-react';
@@ -13,6 +14,33 @@ import ChartPage from '../pages/ChartPage';
 import OrderBook from './OrderBook';
 import { formatPrice, formatNumber } from '../utils/formatters';
 import { useTheme } from '../context/ThemeContext';
+
+const ResponsiveGrid = WidthProvider(GridLayout);
+
+const LAYOUT_STORAGE_KEY = 'kraken_dashboard_layout_v1';
+const GRID_COLS = 12;
+const GRID_ROW_HEIGHT = 40;
+
+const DEFAULT_LAYOUT = [
+  { i: 'chart',     x: 0, y: 0,  w: 7, h: 12, minW: 3, minH: 4 },
+  { i: 'orderbook', x: 7, y: 0,  w: 2, h: 12, minW: 2, minH: 4 },
+  { i: 'bottom',    x: 0, y: 12, w: 9, h: 6,  minW: 3, minH: 3 },
+  { i: 'watchlist', x: 9, y: 0,  w: 3, h: 18, minW: 2, minH: 4 },
+];
+
+function loadLayout() {
+  try {
+    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (!raw) return DEFAULT_LAYOUT;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_LAYOUT;
+    // Merge with defaults so newly added keys still appear if schema changes
+    const byId = new Map(parsed.map(l => [l.i, l]));
+    return DEFAULT_LAYOUT.map(d => ({ ...d, ...(byId.get(d.i) || {}) }));
+  } catch {
+    return DEFAULT_LAYOUT;
+  }
+}
 
 export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5, hideAlmostZeroBalances, orderPriceOffsets, orderQtyPercentages, orderBookDepth }) {
   const [tickers, setTickers] = useState([]);
@@ -207,6 +235,116 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
 
   const balanceDefaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 
+  const [layout, setLayout] = useState(loadLayout);
+  const layoutContainerRef = useRef(null);
+
+  const onLayoutChange = useCallback((next) => {
+    setLayout(next);
+    try { localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(next)); } catch { /* quota — ignore */ }
+  }, []);
+
+  // RGL resizes panel containers directly; the chart listens to window resize,
+  // so nudge it when a panel changes size.
+  const nudgeResize = useCallback(() => {
+    window.dispatchEvent(new Event('resize'));
+  }, []);
+
+  const panels = {
+    chart: (
+      <div key="chart" className="grid-panel">
+        <div className="grid-panel-header panel-drag-handle">
+          <span className="grid-panel-title">Chart</span>
+        </div>
+        <div className="grid-panel-body">
+          {selectedSymbol ? (
+            <ChartPage
+              symbol={selectedSymbol}
+              displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol}
+            />
+          ) : (
+            <div className="grid-panel-empty">Select a pair to view chart</div>
+          )}
+        </div>
+      </div>
+    ),
+    orderbook: (
+      <div key="orderbook" className="grid-panel">
+        <div className="grid-panel-header panel-drag-handle">
+          <span className="grid-panel-title">Order Book</span>
+        </div>
+        <div className="grid-panel-body">
+          {selectedSymbol ? (
+            <OrderBook symbol={selectedSymbol} depth={orderBookDepth || 25} />
+          ) : (
+            <div className="grid-panel-empty">No pair selected</div>
+          )}
+        </div>
+      </div>
+    ),
+    bottom: (
+      <div key="bottom" className="grid-panel">
+        <div className="grid-panel-header panel-drag-handle">
+          <div className="panel-tabs">
+            <button className={`panel-tab${bottomTab === 'orders' ? ' active' : ''}`} onClick={() => setBottomTab('orders')}>Open Orders</button>
+            <button className={`panel-tab${bottomTab === 'balances' ? ' active' : ''}`} onClick={() => setBottomTab('balances')}>Balances</button>
+          </div>
+        </div>
+        <div className="grid-panel-body">
+          <div style={{ height: '100%', width: '100%' }}>
+            {bottomTab === 'orders' && (
+              <OpenOrdersGrid
+                orders={orders}
+                symbols={symbols}
+                onOrderChanged={loadOrders2}
+                onSymbolClick={selectOrderSymbol}
+              />
+            )}
+            {bottomTab === 'balances' && (
+              <AgGridReact
+                theme={gridTheme}
+                rowData={balances.filter(b => b.total > 0 && (!hideAlmostZeroBalances || (b.total >= 0.0001 && (b.latestValue || 0) >= 0.01)))}
+                columnDefs={balanceCols}
+                defaultColDef={balanceDefaultColDef}
+                domLayout="normal"
+                headerHeight={32}
+                rowHeight={30}
+                suppressCellFocus
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    ),
+    watchlist: (
+      <div key="watchlist" className="grid-panel">
+        <div className="grid-panel-header panel-drag-handle">
+          <span className="grid-panel-title">Watchlist</span>
+        </div>
+        <div className="grid-panel-body">
+          <Watchlist
+            tickers={allSorted}
+            heldAssets={heldAssets}
+            selectedSymbol={selectedSymbol}
+            onSelect={selectSymbol}
+            pinnedSet={pinnedSet}
+            onPin={onPin}
+            onUnpin={onUnpin}
+            onOrder={openTickerOrder}
+          />
+        </div>
+      </div>
+    ),
+  };
+
+  const visibleIds = [
+    config.showChart ? 'chart' : null,
+    config.showChart ? 'orderbook' : null,
+    config.showOrders ? 'bottom' : null,
+    config.showWatchlist ? 'watchlist' : null,
+  ].filter(Boolean);
+
+  const activeLayout = layout.filter(l => visibleIds.includes(l.i));
+
   return (
     <div className="dashboard">
       {config.showTickers && (
@@ -234,76 +372,26 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
         </div>
       )}
 
-      <div className="dashboard-main">
-        <div className="dashboard-center">
-          {config.showChart && selectedSymbol ? (
-            <div className="dashboard-chart-row">
-              <div className="dashboard-chart">
-                <ChartPage symbol={selectedSymbol} displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol} />
-              </div>
-              <div className="dashboard-orderbook">
-                <OrderBook symbol={selectedSymbol} depth={orderBookDepth || 25} />
-              </div>
-            </div>
-          ) : (
-            <div className="dashboard-chart-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-              Select a pair to view chart
-            </div>
-          )}
-
-          {config.showOrders && (
-            <div className="dashboard-bottom">
-              <div className="panel">
-                <div className="panel-header">
-                  <div className="panel-tabs">
-                    <button className={`panel-tab${bottomTab === 'orders' ? ' active' : ''}`} onClick={() => setBottomTab('orders')}>Open Orders</button>
-                    <button className={`panel-tab${bottomTab === 'balances' ? ' active' : ''}`} onClick={() => setBottomTab('balances')}>Balances</button>
-                  </div>
-                </div>
-                <div className="panel-body">
-                  <div style={{ height: '100%', width: '100%' }}>
-                    {bottomTab === 'orders' && (
-                      <OpenOrdersGrid
-                        orders={orders}
-                        symbols={symbols}
-                        onOrderChanged={loadOrders2}
-                        onSymbolClick={selectOrderSymbol}
-                      />
-                    )}
-                    {bottomTab === 'balances' && (
-                      <AgGridReact
-                        theme={gridTheme}
-                        rowData={balances.filter(b => b.total > 0 && (!hideAlmostZeroBalances || (b.total >= 0.0001 && (b.latestValue || 0) >= 0.01)))}
-                        columnDefs={balanceCols}
-                        defaultColDef={balanceDefaultColDef}
-                        domLayout="normal"
-                        headerHeight={32}
-                        rowHeight={30}
-                        suppressCellFocus
-                      />
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {config.showWatchlist && (
-          <div className="dashboard-sidebar">
-            <Watchlist
-              tickers={allSorted}
-              heldAssets={heldAssets}
-              selectedSymbol={selectedSymbol}
-              onSelect={selectSymbol}
-              pinnedSet={pinnedSet}
-              onPin={onPin}
-              onUnpin={onUnpin}
-              onOrder={openTickerOrder}
-            />
-          </div>
-        )}
+      <div className="dashboard-grid-wrap" ref={layoutContainerRef}>
+        <ResponsiveGrid
+          className="dashboard-grid"
+          layout={activeLayout}
+          cols={GRID_COLS}
+          rowHeight={GRID_ROW_HEIGHT}
+          margin={[6, 6]}
+          containerPadding={[6, 6]}
+          draggableHandle=".panel-drag-handle"
+          onLayoutChange={onLayoutChange}
+          onResize={nudgeResize}
+          onResizeStop={nudgeResize}
+          onDragStop={nudgeResize}
+          compactType="vertical"
+          preventCollision={false}
+        >
+          {visibleIds.map(id => panels[id])}
+        </ResponsiveGrid>
       </div>
+
       <OrderDialog
         isOpen={orderDialogOpen}
         onClose={(ok) => { setOrderDialogOpen(false); setOrderBalanceCtx(null); if (ok) loadOrders2(); }}
