@@ -157,6 +157,18 @@ input, select { font-family: inherit; }
   flex-shrink: 0;
 }
 
+.bmc-link {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+  border-radius: 4px;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.bmc-link:hover { transform: translateY(-1px); opacity: 0.9; }
+
+.bmc-link img { display: block; height: 28px; width: auto; }
+
 .portfolio-value {
   color: var(--green);
   font-weight: 700;

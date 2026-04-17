@@ -158,6 +158,19 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         </div>
 
         <div className="header-right">
+          <a
+            href="https://buymeacoffee.com/raymondjstone"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bmc-link"
+            title="Support the developer — Buy me a coffee"
+          >
+            <img
+              src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+              alt="Buy me a coffee"
+              height="28"
+            />
+          </a>
           {statusText && (
             <div className="status-text" style={{ color: 'var(--text-muted)', fontSize: 11, marginRight: 12, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {statusText}
