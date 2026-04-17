@@ -2,9 +2,28 @@
 
 A real-time cryptocurrency trading dashboard built with ASP.NET Core and React, connected to the Kraken exchange via REST API and WebSocket feeds.
 
+## Disclaimer
+
+**USE AT YOUR OWN RISK.** KrakenReact is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, accuracy, and non-infringement.
+
+By downloading, installing, configuring, running, modifying, or otherwise using this software, **you acknowledge and agree that:**
+
+- All use of this software is entirely at your own risk.
+- This software places and manages **real orders** against your connected Kraken account using your API keys, and may result in **real financial loss**.
+- Cryptocurrency markets are highly volatile. Prices, balances, profit/loss figures, order states, alerts, and any other information displayed may be delayed, incomplete, or incorrect.
+- The author(s) make no representations about the accuracy, reliability, completeness, or timeliness of any data, calculation, signal, suggestion, notification, or automated behaviour produced by this software.
+- **Nothing in this software constitutes financial, investment, tax, or trading advice.** Any "auto-trade", suggestion, or alert feature is experimental and must not be relied upon for trading decisions.
+- You are solely responsible for your API key permissions, for reviewing every order before it is placed, for monitoring the software's behaviour, and for complying with the terms of service of Kraken and any applicable laws in your jurisdiction.
+- **The author(s) and contributors shall not be liable for any direct, indirect, incidental, special, consequential, or exemplary damages** — including but not limited to loss of funds, lost profits, loss of data, trading losses, missed trades, erroneous orders, incorrect calculations, downtime, bugs, security incidents, or any other damages — arising out of or in any way connected with the use of, or inability to use, this software, even if advised of the possibility of such damages.
+
+**If you do not agree to these terms, do not use this software.**
+
 ## Features
 
-- **Live Dashboard** -- Pinned ticker cards, candlestick chart, open orders, and balances in a single view
+- **Live Dashboard** -- Pinned ticker cards, candlestick chart(s), live order book, open orders, and balances in a single view
+- **Draggable / Resizable Layout** -- Dashboard panels can be rearranged and resized (react-grid-layout), with layout persisted to localStorage
+- **Multi-Chart Support** -- Add or remove additional chart panels on the fly; each chart keeps its own interval selection
+- **Live Order Book** -- Configurable-depth bid/ask panel streamed via SignalR, synced to the selected pair
 - **Real-time Pricing** -- WebSocket V1 (public ticker) and V2 (private executions/balances) for live updates
 - **Order Management** -- View, create, edit, and cancel limit orders directly from the UI
 - **Portfolio Tracking** -- Balance overview with USD and GBP valuations, portfolio percentages, and order coverage (covered vs uncovered quantities for sell orders)
@@ -189,3 +208,7 @@ The `.dockerignore` file ensures fast, clean builds by excluding node_modules, b
 ## License
 
 Private -- not for redistribution.
+
+---
+
+**Reminder:** use of this software is entirely at your own risk. The author(s) accept no liability whatsoever for any losses, errors, incorrect data, missed or erroneous orders, or any other damages arising from its use. See the [Disclaimer](#disclaimer) above.
