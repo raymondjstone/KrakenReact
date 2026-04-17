@@ -30,20 +30,23 @@ const INTERVALS = [
 // Intervals where candles represent less than a day — show time on the axis
 const INTRADAY = new Set(['1', '5', '15', '30', '60', '240']);
 
-export default function ChartPage({ symbol, displaySymbol }) {
+export default function ChartPage({ symbol, displaySymbol, chartId }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const orderLinesRef = useRef([]);
   const resizeHandlerRef = useRef(null);
   const { theme } = useTheme();
-  const [interval, setInterval_] = useState(() => localStorage.getItem('kraken_chart_interval') || '1D');
+  const intervalKey = chartId ? `kraken_chart_interval_${chartId}` : 'kraken_chart_interval';
+  const [interval, setInterval_] = useState(() =>
+    localStorage.getItem(intervalKey) || localStorage.getItem('kraken_chart_interval') || '1D'
+  );
   const [loading, setLoading] = useState(true);
   const [noData, setNoData] = useState(false);
 
   const changeInterval = (iv) => {
     setInterval_(iv);
-    localStorage.setItem('kraken_chart_interval', iv);
+    localStorage.setItem(intervalKey, iv);
   };
 
   useEffect(() => {

@@ -17,29 +17,54 @@ import { useTheme } from '../context/ThemeContext';
 
 const ResponsiveGrid = WidthProvider(GridLayout);
 
-const LAYOUT_STORAGE_KEY = 'kraken_dashboard_layout_v1';
+const LAYOUT_STORAGE_KEY = 'kraken_dashboard_layout_v2';
+const LAYOUT_STORAGE_KEY_V1 = 'kraken_dashboard_layout_v1';
+const CHARTS_STORAGE_KEY = 'kraken_dashboard_charts_v1';
 const GRID_COLS = 12;
 const GRID_ROW_HEIGHT = 40;
 
+const CHART_MIN = { minW: 3, minH: 4 };
+
 const DEFAULT_LAYOUT = [
-  { i: 'chart',     x: 0, y: 0,  w: 7, h: 12, minW: 3, minH: 4 },
+  { i: 'chart-1',   x: 0, y: 0,  w: 7, h: 12, ...CHART_MIN },
   { i: 'orderbook', x: 7, y: 0,  w: 2, h: 12, minW: 2, minH: 4 },
   { i: 'bottom',    x: 0, y: 12, w: 9, h: 6,  minW: 3, minH: 3 },
   { i: 'watchlist', x: 9, y: 0,  w: 3, h: 18, minW: 2, minH: 4 },
 ];
 
+function loadChartIds() {
+  try {
+    const raw = localStorage.getItem(CHARTS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(x => typeof x === 'string')) {
+        return parsed;
+      }
+    }
+  } catch { /* ignore */ }
+  return ['chart-1'];
+}
+
 function loadLayout() {
+  // v2 (current)
   try {
     const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
-    if (!raw) return DEFAULT_LAYOUT;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return DEFAULT_LAYOUT;
-    // Merge with defaults so newly added keys still appear if schema changes
-    const byId = new Map(parsed.map(l => [l.i, l]));
-    return DEFAULT_LAYOUT.map(d => ({ ...d, ...(byId.get(d.i) || {}) }));
-  } catch {
-    return DEFAULT_LAYOUT;
-  }
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch { /* ignore */ }
+  // Migrate v1: rename `chart` -> `chart-1` so Phase 1 users keep their layout
+  try {
+    const rawV1 = localStorage.getItem(LAYOUT_STORAGE_KEY_V1);
+    if (rawV1) {
+      const parsed = JSON.parse(rawV1);
+      if (Array.isArray(parsed)) {
+        return parsed.map(l => (l && l.i === 'chart' ? { ...l, i: 'chart-1' } : l));
+      }
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_LAYOUT;
 }
 
 export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onUnpin, largeMovementThreshold = 5, hideAlmostZeroBalances, orderPriceOffsets, orderQtyPercentages, orderBookDepth }) {
@@ -236,12 +261,17 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
   const balanceDefaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 
   const [layout, setLayout] = useState(loadLayout);
+  const [chartIds, setChartIds] = useState(loadChartIds);
   const layoutContainerRef = useRef(null);
+
+  const persistLayout = useCallback((next) => {
+    try { localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(next)); } catch { /* quota — ignore */ }
+  }, []);
 
   const onLayoutChange = useCallback((next) => {
     setLayout(next);
-    try { localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(next)); } catch { /* quota — ignore */ }
-  }, []);
+    persistLayout(next);
+  }, [persistLayout]);
 
   // RGL resizes panel containers directly; the chart listens to window resize,
   // so nudge it when a panel changes size.
@@ -249,24 +279,86 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
     window.dispatchEvent(new Event('resize'));
   }, []);
 
-  const panels = {
-    chart: (
-      <div key="chart" className="grid-panel">
-        <div className="grid-panel-header panel-drag-handle">
-          <span className="grid-panel-title">Chart</span>
-        </div>
-        <div className="grid-panel-body">
-          {selectedSymbol ? (
-            <ChartPage
-              symbol={selectedSymbol}
-              displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol}
-            />
-          ) : (
-            <div className="grid-panel-empty">Select a pair to view chart</div>
+  const addChart = useCallback(() => {
+    setChartIds(prevIds => {
+      const chartEntries = layout.filter(l => prevIds.includes(l.i));
+      const source = chartEntries.length > 0
+        ? chartEntries.reduce((a, b) => (b.w >= a.w ? b : a), chartEntries[0])
+        : { x: 0, y: 0, w: 7, h: 12 };
+      const newW = Math.max(Math.floor(source.w / 2), CHART_MIN.minW);
+      const leftW = Math.max(source.w - newW, CHART_MIN.minW);
+      const newId = `chart-${Date.now()}`;
+      const nextLayout = layout.map(l => (l.i === source.i ? { ...l, w: leftW } : l));
+      nextLayout.push({
+        i: newId,
+        x: source.x + leftW,
+        y: source.y,
+        w: newW,
+        h: source.h,
+        ...CHART_MIN,
+      });
+      setLayout(nextLayout);
+      persistLayout(nextLayout);
+      const nextIds = [...prevIds, newId];
+      try { localStorage.setItem(CHARTS_STORAGE_KEY, JSON.stringify(nextIds)); } catch { /* ignore */ }
+      return nextIds;
+    });
+  }, [layout, persistLayout]);
+
+  const removeChart = useCallback((id) => {
+    setChartIds(prevIds => {
+      if (prevIds.length <= 1) return prevIds;
+      const nextIds = prevIds.filter(x => x !== id);
+      const nextLayout = layout.filter(l => l.i !== id);
+      setLayout(nextLayout);
+      persistLayout(nextLayout);
+      try { localStorage.setItem(CHARTS_STORAGE_KEY, JSON.stringify(nextIds)); } catch { /* ignore */ }
+      try { localStorage.removeItem(`kraken_chart_interval_${id}`); } catch { /* ignore */ }
+      return nextIds;
+    });
+  }, [layout, persistLayout]);
+
+  // Prevent header-button clicks from starting a panel drag
+  const stopDrag = useCallback((e) => { e.stopPropagation(); }, []);
+
+  const chartPanel = (id) => (
+    <div key={id} className="grid-panel">
+      <div className="grid-panel-header panel-drag-handle">
+        <span className="grid-panel-title">Chart</span>
+        <div className="panel-header-actions">
+          <button
+            className="panel-header-btn"
+            title="Add chart"
+            onMouseDown={stopDrag}
+            onTouchStart={stopDrag}
+            onClick={addChart}
+          >+</button>
+          {chartIds.length > 1 && (
+            <button
+              className="panel-header-btn"
+              title="Remove chart"
+              onMouseDown={stopDrag}
+              onTouchStart={stopDrag}
+              onClick={() => removeChart(id)}
+            >×</button>
           )}
         </div>
       </div>
-    ),
+      <div className="grid-panel-body">
+        {selectedSymbol ? (
+          <ChartPage
+            chartId={id}
+            symbol={selectedSymbol}
+            displaySymbol={tickers.find(t => t.symbol === selectedSymbol)?.displaySymbol}
+          />
+        ) : (
+          <div className="grid-panel-empty">Select a pair to view chart</div>
+        )}
+      </div>
+    </div>
+  );
+
+  const panels = {
     orderbook: (
       <div key="orderbook" className="grid-panel">
         <div className="grid-panel-header panel-drag-handle">
@@ -337,13 +429,24 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
   };
 
   const visibleIds = [
-    config.showChart ? 'chart' : null,
+    ...(config.showChart ? chartIds : []),
     config.showChart ? 'orderbook' : null,
     config.showOrders ? 'bottom' : null,
     config.showWatchlist ? 'watchlist' : null,
   ].filter(Boolean);
 
-  const activeLayout = layout.filter(l => visibleIds.includes(l.i));
+  // Ensure every visible id has a layout entry — fall back to defaults for
+  // panels that don't yet exist in the stored layout (e.g. a newly added chart
+  // after a reload where persistLayout somehow lagged).
+  const activeLayout = visibleIds.map(id => {
+    const existing = layout.find(l => l.i === id);
+    if (existing) return existing;
+    if (id.startsWith('chart-')) {
+      return { i: id, x: 0, y: 0, w: 6, h: 12, ...CHART_MIN };
+    }
+    const def = DEFAULT_LAYOUT.find(l => l.i === id);
+    return def ? { ...def } : { i: id, x: 0, y: 0, w: 4, h: 6, minW: 2, minH: 3 };
+  });
 
   return (
     <div className="dashboard">
@@ -388,7 +491,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
           compactType="vertical"
           preventCollision={false}
         >
-          {visibleIds.map(id => panels[id])}
+          {visibleIds.map(id => (id.startsWith('chart-') ? chartPanel(id) : panels[id]))}
         </ResponsiveGrid>
       </div>
 
