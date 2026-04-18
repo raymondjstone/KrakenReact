@@ -45,12 +45,15 @@ builder.Services.AddHostedService<KrakenWebSocketV2Service>();
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
 
-// CORS for React dev server
+// CORS for React dev server + production origins (configurable via "Cors:AllowedOrigins")
+var defaultOrigins = new[] { "http://localhost:5173", "http://localhost:3000", "https://awakethekraken", "http://awakethekraken" };
+var configuredOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+var allowedOrigins = defaultOrigins.Concat(configuredOrigins).Distinct().ToArray();
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();

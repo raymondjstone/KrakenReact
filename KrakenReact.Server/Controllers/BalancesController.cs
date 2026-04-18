@@ -37,35 +37,16 @@ public class BalancesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult> GetAll()
+    public ActionResult GetAll()
     {
         try
         {
             var balances = _state.Balances.Values.ToList();
             var usdGbpRate = _state.GetUsdGbpRate();
 
-            // Load all trades and ledgers once for P/L calculation (client-side filtering since NormalizeAsset can't translate to SQL)
-            var allTrades = await _db.Trades.AsNoTracking().ToListAsync();
-            var allLedgers = await _db.Ledgers.AsNoTracking().ToListAsync();
-
-            // DIAGNOSTIC: Return diagnostic info showing first balance with trades
-            var firstBalanceWithTrades = balances.FirstOrDefault(b => b.Total > 0 && b.TotalCostBasis > 0);
-            var diagnosticInfo = new
-            {
-                TotalTradesInDb = allTrades.Count,
-                TotalLedgersInDb = allLedgers.Count,
-                SampleTradeSymbols = allTrades.Take(3).Select(t => t.Symbol).ToList(),
-                SampleBalanceAssets = balances.Where(b => b.Total > 0).Take(3).Select(b => b.Asset).ToList(),
-                SampleCalculation = firstBalanceWithTrades == null ? null : new
-                {
-                    Asset = firstBalanceWithTrades.Asset,
-                    TotalCostBasis = firstBalanceWithTrades.TotalCostBasis,
-                    TotalFees = firstBalanceWithTrades.TotalFees,
-                    CurrentValue = firstBalanceWithTrades.LatestValue,
-                    NetProfitLoss = firstBalanceWithTrades.NetProfitLoss,
-                    NetProfitLossPercentage = firstBalanceWithTrades.NetProfitLossPercentage
-                }
-            };
+            // Use cached snapshots from BackgroundTaskService — DB scans on every poll were timing out at 30s.
+            var allTrades = _state.CachedTrades;
+            var allLedgers = _state.CachedLedgers;
 
             // Calculate profit/loss for each balance
             foreach (var balance in balances)

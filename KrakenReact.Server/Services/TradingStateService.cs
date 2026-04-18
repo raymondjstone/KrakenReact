@@ -257,6 +257,12 @@ public class TradingStateService
     public ConcurrentDictionary<string, AutoTradeDto> AutoOrders { get; } = new();
     public ConcurrentDictionary<string, KrakenSymbol> Symbols { get; } = new();
 
+    // Snapshot caches refreshed by BackgroundTaskService so request handlers don't hit the DB.
+    public IReadOnlyList<KrakenUserTrade> CachedTrades { get; private set; } = Array.Empty<KrakenUserTrade>();
+    public IReadOnlyList<KrakenLedgerEntry> CachedLedgers { get; private set; } = Array.Empty<KrakenLedgerEntry>();
+    public void SetCachedTrades(IEnumerable<KrakenUserTrade> trades) => CachedTrades = trades.ToList();
+    public void SetCachedLedgers(IEnumerable<KrakenLedgerEntry> ledgers) => CachedLedgers = ledgers.ToList();
+
     // Order book state
     public static readonly int[] ValidBookDepths = { 10, 25, 100, 500, 1000 };
     public int OrderBookDepth { get; set; } = 25;

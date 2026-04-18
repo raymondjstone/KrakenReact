@@ -39,11 +39,6 @@ public class DbMethods
                 Console.WriteLine("Connection pool exhausted: " + ex.Message);
                 throw;
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.Message);
-                return default;
-            }
             finally
             {
                 if (context is not null) await context.DisposeAsync();

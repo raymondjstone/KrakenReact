@@ -259,11 +259,17 @@ public class BackgroundTaskService : BackgroundService
         }
     }
 
-    private async Task LoadTrades(bool initialLoad) => await _kraken.GetTradesAsync(initialLoad);
+    private async Task LoadTrades(bool initialLoad)
+    {
+        var trades = await _kraken.GetTradesAsync(initialLoad);
+        if (trades != null) _state.SetCachedTrades(trades);
+    }
 
     private async Task LoadLedger(bool initialLoad)
     {
         var ledgers = await _kraken.GetLedgerAsync(initialLoad);
+        if (ledgers == null) return;
+        _state.SetCachedLedgers(ledgers);
         await CheckStakingRewards(ledgers);
     }
 
