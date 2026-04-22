@@ -54,7 +54,7 @@ export default function OrdersPage() {
       return <button onClick={() => handleCancel(p.data)} style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', color: 'var(--red)' }}>Cancel</button>;
     }},
     { field: 'symbol', headerName: 'Symbol', minWidth: 100 },
-    { field: 'side', headerName: 'Side', flex: 0, width: 60, cellStyle: p => ({ color: p.value === 'Buy' ? 'var(--green)' : 'var(--red)' }) },
+    { field: 'side', headerName: 'Side', flex: 0, width: 60, cellStyle: p => ({ color: (p.value || '').trim().toLowerCase() === 'buy' ? 'var(--green)' : 'var(--red)' }) },
     { field: 'type', headerName: 'Type', flex: 0, width: 70 },
     { field: 'price', headerName: 'Price', minWidth: 110, valueFormatter: p => formatPrice(p.value) },
     { field: 'quantity', headerName: 'Qty', minWidth: 90, valueFormatter: p => p.value != null ? Number(p.value).toFixed(4) : '' },

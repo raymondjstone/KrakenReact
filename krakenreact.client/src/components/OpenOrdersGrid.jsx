@@ -41,7 +41,7 @@ export default function OpenOrdersGrid({ orders, symbols, onOrderChanged, onSymb
       if (!p.value || !onSymbolClick) return p.value;
       return <span style={{ cursor: 'pointer', color: 'var(--yellow)', textDecoration: 'underline' }} onClick={() => onSymbolClick(p.value)}>{p.value}</span>;
     }},
-    { field: 'side', headerName: 'Side', flex: 0, width: 60, cellStyle: p => ({ color: p.value === 'Buy' ? 'var(--green)' : 'var(--red)' }) },
+    { field: 'side', headerName: 'Side', flex: 0, width: 60, cellStyle: p => ({ color: (p.value || '').trim().toLowerCase() === 'buy' ? 'var(--green)' : 'var(--red)' }) },
     { field: 'type', headerName: 'Type', flex: 0, width: 70 },
     { field: 'price', headerName: 'Price', minWidth: 110, valueFormatter: p => formatPrice(p.value) },
     { field: 'quantity', headerName: 'Qty', minWidth: 90, valueFormatter: p => p.value != null ? Number(p.value).toFixed(4) : '' },

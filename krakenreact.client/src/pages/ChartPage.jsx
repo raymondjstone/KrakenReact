@@ -36,6 +36,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
   const seriesRef = useRef(null);
   const orderLinesRef = useRef([]);
   const resizeHandlerRef = useRef(null);
+  const resizeObserverRef = useRef(null);
   const { theme } = useTheme();
   const intervalKey = chartId ? `kraken_chart_interval_${chartId}` : 'kraken_chart_interval';
   const [interval, setInterval_] = useState(() =>
@@ -100,6 +101,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
     setLoading(true);
     setNoData(false);
 
+
     function tryCreate() {
       if (disposed || chartRef.current) return;
       const w = container.clientWidth;
@@ -129,6 +131,15 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       });
       seriesRef.current = candleSeries;
 
+      // Double rAF to ensure flexbox/layout is complete before resizing
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (chartRef.current && container) {
+            chartRef.current.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+          }
+        });
+      });
+
       const encodedSymbol = encodeURIComponent(symbol);
       api.get(`/prices/${encodedSymbol}/klines?interval=${interval}`).then(r => {
         console.log(`[Chart] ${symbol} interval=${interval}: ${r.data.length} raw klines, disposed=${disposed}`);
@@ -149,6 +160,15 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
         } else {
           if (!disposed) { setLoading(false); setNoData(true); }
         }
+
+        // Double rAF after data load to ensure chart fills container
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (chartRef.current && container) {
+              chartRef.current.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+            }
+          });
+        });
 
         updateOrderLines();
       }).catch((err) => {
@@ -210,6 +230,12 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       window.removeEventListener('resize', resizeHandlerRef.current);
     }
 
+    // ResizeObserver for robust container resize detection
+    if (resizeObserverRef.current) {
+      resizeObserverRef.current.disconnect();
+      resizeObserverRef.current = null;
+    }
+
     const handleResize = () => {
       if (!chartRef.current) {
         tryCreate();
@@ -223,6 +249,20 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
     };
     resizeHandlerRef.current = handleResize;
 
+    // Observe container size changes
+    if (container) {
+      resizeObserverRef.current = new window.ResizeObserver(() => {
+        if (chartRef.current && container) {
+          const w = container.clientWidth;
+          const h = container.clientHeight;
+          if (w > 10 && h > 10) {
+            chartRef.current.applyOptions({ width: w, height: h });
+          }
+        }
+      });
+      resizeObserverRef.current.observe(container);
+    }
+
     const frameId = requestAnimationFrame(tryCreate);
     window.addEventListener('resize', handleResize);
 
@@ -231,6 +271,10 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       cancelAnimationFrame(frameId);
       window.removeEventListener('resize', handleResize);
       resizeHandlerRef.current = null;
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
+      }
       if (handler) conn.off('TickerUpdate', handler);
       if (orderHandler) {
         conn.off('OrderUpdate', orderHandler);

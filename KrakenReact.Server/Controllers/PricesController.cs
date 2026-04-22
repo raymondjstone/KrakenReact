@@ -85,21 +85,24 @@ public class PricesController : ControllerBase
         _logger.LogInformation("Klines request: symbol={Symbol}, resolved={Resolved}, clean={Clean}, interval={Interval}",
             symbol, resolvedSymbol, cleanSymbol, interval);
 
-        // If a non-daily interval is requested, fetch directly from Kraken API
+        // Always try to fetch from Kraken API first for all intervals (including 1D)
         var krakenInterval = ParseInterval(interval);
-        if (krakenInterval != null && krakenInterval != KlineInterval.OneDay)
+        if (krakenInterval != null)
         {
             var since = GetSinceForInterval(krakenInterval.Value);
             var result = await _kraken.GetKlinesAsync(cleanSymbol, krakenInterval.Value, since);
             _logger.LogInformation("Klines API result for {Clean}: {Count} candles", cleanSymbol, result.Count());
-            return Ok(result.Select(k => new KlineDto
+            if (result.Any())
             {
-                OpenTime = k.OpenTime, Open = k.OpenPrice, High = k.HighPrice,
-                Low = k.LowPrice, Close = k.ClosePrice, Volume = k.Volume
-            }).ToList());
+                return Ok(result.Select(k => new KlineDto
+                {
+                    OpenTime = k.OpenTime, Open = k.OpenPrice, High = k.HighPrice,
+                    Low = k.LowPrice, Close = k.ClosePrice, Volume = k.Volume
+                }).ToList());
+            }
         }
 
-        // Daily: try in-memory first
+        // Fallback to in-memory (if available)
         if (_state.Prices.TryGetValue(resolvedSymbol, out var priceItem))
         {
             var snapshot = priceItem.GetKlineSnapshot();
@@ -136,14 +139,8 @@ public class PricesController : ControllerBase
             }).ToList());
         }
 
-        // Final fallback: fetch daily klines directly from Kraken API
-        _logger.LogInformation("Klines: fetching daily from Kraken API for {Clean}", cleanSymbol);
-        var apiResult = await _kraken.GetKlinesAsync(cleanSymbol, KlineInterval.OneDay, DateTime.UtcNow.AddYears(-3));
-        return Ok(apiResult.Select(k => new KlineDto
-        {
-            OpenTime = k.OpenTime, Open = k.OpenPrice, High = k.HighPrice,
-            Low = k.LowPrice, Close = k.ClosePrice, Volume = k.Volume
-        }).ToList());
+        // If all else fails, return empty
+        return Ok(new List<KlineDto>());
     }
 
     private static KlineInterval? ParseInterval(string? interval)
