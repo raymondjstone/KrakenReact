@@ -117,8 +117,6 @@ public class BackgroundTaskService : BackgroundService
         // Phase 4: Start periodic timers
         _ = Task.Run(async () => { try { await OrderRefreshLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] OrderRefreshLoop crashed"); } }, stoppingToken);
         _ = Task.Run(async () => { try { await TransactionRefreshLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] TransactionRefreshLoop crashed"); } }, stoppingToken);
-        _ = Task.Run(async () => { try { await DailyTaskLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] DailyTaskLoop crashed"); } }, stoppingToken);
-
         try { await Task.Delay(Timeout.Infinite, stoppingToken); }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -479,70 +477,4 @@ public class BackgroundTaskService : BackgroundService
         }
     }
 
-    private async Task DailyTaskLoop(CancellationToken ct)
-    {
-        // Run at 04:00 each day
-        var scheduleTimes = new[] { (4, 0) };
-
-        while (!ct.IsCancellationRequested)
-        {
-            var now = DateTime.Now;
-            DateTime? nextRun = null;
-            foreach (var (hour, minute) in scheduleTimes)
-            {
-                var candidate = new DateTime(now.Year, now.Month, now.Day, hour, minute, 0);
-                if (candidate <= now) candidate = candidate.AddDays(1);
-                if (nextRun == null || candidate < nextRun) nextRun = candidate;
-            }
-
-            var delay = nextRun!.Value - now;
-            _logger.LogInformation("[BG] Daily task scheduled for {NextRun} (in {Hours:F1}h)", nextRun.Value.ToString("yyyy-MM-dd HH:mm"), delay.TotalHours);
-            try { await Task.Delay(delay, ct); }
-            catch (OperationCanceledException) { break; }
-
-            try
-            {
-                var snapshot = _state.GetPriceSnapshot();
-                _logger.LogInformation("[BG] Daily kline refresh starting at {Time} — {Count} symbols", DateTime.Now.ToString("HH:mm"), snapshot.Count);
-                _state.LastStatusMessage = $"Refreshing daily kline data ({snapshot.Count} symbols)...";
-                try { await _hub.Clients.All.SendAsync("StatusUpdate", _state.LastStatusMessage); }
-                catch { /* non-critical */ }
-
-                var done = 0;
-                foreach (var p in snapshot)
-                {
-                    try
-                    {
-                        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        cts.CancelAfter(TimeSpan.FromMinutes(2));
-                        await LoadLatestPriceData(p).WaitAsync(cts.Token);
-
-                        // Re-run auto-order check with updated kline data
-                        var result = await _autoOrder.CheckAsync(p, "Default Rule");
-                        _state.AutoOrders[result.Symbol] = result;
-                    }
-                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                    {
-                        _logger.LogWarning("[BG] Daily kline refresh timed out for {Symbol}, skipping", p.Symbol);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "[BG] Daily kline refresh failed for {Symbol}, skipping", p.Symbol);
-                    }
-                    done++;
-                }
-
-                // Refresh balances so portfolio values reflect updated prices
-                try { await LoadBalances(); }
-                catch (Exception ex) { _logger.LogWarning(ex, "[BG] Post-refresh balance update failed"); }
-
-                var dailyDoneMsg = $"Daily price refresh done at {DateTime.Now:HH:mm}";
-                _state.LastStatusMessage = dailyDoneMsg;
-                try { await _hub.Clients.All.SendAsync("StatusUpdate", dailyDoneMsg); }
-                catch { /* non-critical */ }
-                _logger.LogInformation("[BG] Daily kline refresh complete — {Done}/{Total} symbols", done, snapshot.Count);
-            }
-            catch (Exception ex) { _logger.LogError(ex, "[BG] Daily task error"); }
-        }
-    }
 }

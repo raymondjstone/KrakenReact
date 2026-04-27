@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Hangfire;
+using Hangfire.SqlServer;
 using KrakenReact.Server.Data;
 using KrakenReact.Server.Hubs;
 using KrakenReact.Server.Services;
@@ -25,6 +27,23 @@ builder.Host.UseSerilog();
 builder.Services.AddDbContextFactory<KrakenDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("EFDB"),
         sql => sql.CommandTimeout(30)));
+
+// Hangfire — uses the same SQL Server database, creates its own [HangFire] schema
+var hangfireConnStr = builder.Configuration.GetConnectionString("EFDB")!;
+builder.Services.AddHangfire(config => config
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UseSqlServerStorage(hangfireConnStr, new SqlServerStorageOptions
+    {
+        CommandBatchMaxTimeout = TimeSpan.FromMinutes(5),
+        SlidingInvisibilityTimeout = TimeSpan.FromMinutes(5),
+        QueuePollInterval = TimeSpan.Zero,
+        UseRecommendedIsolationLevel = true,
+        DisableGlobalLocks = true
+    }));
+builder.Services.AddHangfireServer();
+builder.Services.AddTransient<DailyPriceRefreshJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -116,6 +135,30 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+
+// Hangfire dashboard at /hangfire
+app.UseHangfireDashboard("/hangfire", new DashboardOptions { IsReadOnlyFunc = _ => false });
+
+// Schedule the recurring price download job.
+// Cron defaults to 4am daily; update appsettings.json or call POST /api/schedule/price-download to change.
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    try
+    {
+        var cron = app.Configuration["HangfireSchedule:PriceDownloadCron"] ?? "0 4 * * *";
+        var manager = app.Services.GetRequiredService<IRecurringJobManager>();
+        manager.AddOrUpdate<DailyPriceRefreshJob>(
+            "daily-price-download",
+            job => job.ExecuteAsync(CancellationToken.None),
+            cron,
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+        Log.Information("[Hangfire] Daily price download scheduled with cron: {Cron}", cron);
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "[Hangfire] Failed to schedule daily price download job");
+    }
+});
 
 // Log static file diagnostics
 var webRoot = app.Environment.WebRootPath;

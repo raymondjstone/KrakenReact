@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="Altairis.Pushover.Client" Version="1.0.0" />
+    <PackageReference Include="Hangfire.AspNetCore" Version="1.8.17" />
+    <PackageReference Include="Hangfire.SqlServer" Version="1.8.17" />
     <PackageReference Include="KrakenExchange.Net" Version="6.11.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.6" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.6">
