@@ -136,29 +136,45 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors();
 
-// Hangfire dashboard at /hangfire
-app.UseHangfireDashboard("/hangfire", new DashboardOptions { IsReadOnlyFunc = _ => false });
+// Hangfire dashboard — Authorization = [] allows access from Docker/reverse proxy (no localhost restriction)
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    IsReadOnlyFunc = _ => false,
+    Authorization = []
+});
 
-// Schedule the recurring price download job.
-// Cron defaults to 4am daily; update appsettings.json or call POST /api/schedule/price-download to change.
+// Schedule the recurring price download job from the time stored in the database.
+// Change the time via Settings → Schedule in the app UI.
 app.Lifetime.ApplicationStarted.Register(() =>
 {
     try
     {
-        var cron = app.Configuration["HangfireSchedule:PriceDownloadCron"] ?? "0 4 * * *";
+        var dbFactory = app.Services.GetRequiredService<IDbContextFactory<KrakenDbContext>>();
+        using var db = dbFactory.CreateDbContext();
+        var timeSetting = db.AppSettings.FirstOrDefault(s => s.Key == "PriceDownloadTime");
+        var cron = TimeToCron(timeSetting?.Value ?? "04:00");
         var manager = app.Services.GetRequiredService<IRecurringJobManager>();
         manager.AddOrUpdate<DailyPriceRefreshJob>(
             "daily-price-download",
             job => job.ExecuteAsync(CancellationToken.None),
             cron,
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
-        Log.Information("[Hangfire] Daily price download scheduled with cron: {Cron}", cron);
+        Log.Information("[Hangfire] Daily price download scheduled at {Time} (cron: {Cron})", timeSetting?.Value ?? "04:00", cron);
     }
     catch (Exception ex)
     {
         Log.Error(ex, "[Hangfire] Failed to schedule daily price download job");
     }
 });
+
+static string TimeToCron(string hhmm)
+{
+    var parts = hhmm.Split(':');
+    if (parts.Length == 2 && int.TryParse(parts[0], out var h) && int.TryParse(parts[1], out var m)
+        && h is >= 0 and <= 23 && m is >= 0 and <= 59)
+        return $"{m} {h} * * *";
+    return "0 4 * * *";
+}
 
 // Log static file diagnostics
 var webRoot = app.Environment.WebRootPath;

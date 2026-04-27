@@ -1,3 +1,4 @@
+using Hangfire;
 using KrakenReact.Server.Data;
 using KrakenReact.Server.DTOs;
 using KrakenReact.Server.Models;
@@ -13,12 +14,14 @@ public class SettingsController : ControllerBase
 {
     private readonly KrakenDbContext _db;
     private readonly TradingStateService _state;
+    private readonly IRecurringJobManager _jobManager;
     private readonly ILogger<SettingsController> _logger;
 
-    public SettingsController(KrakenDbContext db, TradingStateService state, ILogger<SettingsController> logger)
+    public SettingsController(KrakenDbContext db, TradingStateService state, IRecurringJobManager jobManager, ILogger<SettingsController> logger)
     {
         _db = db;
         _state = state;
+        _jobManager = jobManager;
         _logger = logger;
     }
 
@@ -74,6 +77,9 @@ public class SettingsController : ControllerBase
             settings.AutoSellPercentage = _state.AutoSellPercentage;
             settings.AutoAddStakingToOrder = _state.AutoAddStakingToOrder;
             settings.OrderBookDepth = _state.OrderBookDepth;
+
+            var priceDownloadTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PriceDownloadTime");
+            settings.PriceDownloadTime = priceDownloadTime?.Value ?? "04:00";
 
             return Ok(settings);
         }
@@ -178,6 +184,24 @@ public class SettingsController : ControllerBase
             if (request.OrderBookDepth.HasValue && TradingStateService.ValidBookDepths.Contains(request.OrderBookDepth.Value))
             {
                 await SaveOrUpdateSetting("OrderBookDepth", request.OrderBookDepth.Value.ToString(), "Number of price levels shown in the order book (10, 25, 100, 500, 1000)");
+            }
+
+            // Save price download schedule and update Hangfire job
+            if (!string.IsNullOrWhiteSpace(request.PriceDownloadTime))
+            {
+                var parts = request.PriceDownloadTime.Split(':');
+                if (parts.Length == 2 && int.TryParse(parts[0], out var h) && int.TryParse(parts[1], out var m)
+                    && h is >= 0 and <= 23 && m is >= 0 and <= 59)
+                {
+                    var timeStr = $"{h:D2}:{m:D2}";
+                    await SaveOrUpdateSetting("PriceDownloadTime", timeStr, "Daily price download time (HH:MM, 24-hour)");
+                    var cron = $"{m} {h} * * *";
+                    _jobManager.AddOrUpdate<DailyPriceRefreshJob>(
+                        "daily-price-download",
+                        job => job.ExecuteAsync(CancellationToken.None),
+                        cron,
+                        new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+                }
             }
 
             // Save asset normalizations

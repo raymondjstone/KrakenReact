@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api/apiClient';
 
 const SETTINGS_KEY = 'kraken_app_settings';
@@ -57,6 +57,12 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   // Order book
   const [orderBookDepth, setOrderBookDepth] = useState(25);
 
+  // Schedule
+  const [priceDownloadTime, setPriceDownloadTime] = useState('04:00');
+  const [scheduleInfo, setScheduleInfo] = useState(null);
+  const [triggerStatus, setTriggerStatus] = useState('');
+  const triggerTimerRef = useRef(null);
+
   // Asset Normalizations
   const [normalizations, setNormalizations] = useState('');
 
@@ -91,12 +97,26 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     setAutoSellPercentage(data.autoSellPercentage ?? 10);
     setAutoAddStakingToOrder(!!data.autoAddStakingToOrder);
     setOrderBookDepth(data.orderBookDepth || 25);
+    setPriceDownloadTime(data.priceDownloadTime || '04:00');
     setLoaded(true);
   }, [serverSettings]);
 
   useEffect(() => {
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (triggerTimerRef.current) clearTimeout(triggerTimerRef.current);
+    };
   }, []);
+
+  const fetchScheduleInfo = useCallback(() => {
+    api.get('/schedule/price-download')
+      .then(r => setScheduleInfo(r.data))
+      .catch(() => setScheduleInfo(null));
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'schedule') fetchScheduleInfo();
+  }, [activeTab, fetchScheduleInfo]);
 
   const handleThresholdChange = (val) => {
     const num = Math.max(0, Math.min(100, Number(val) || 0));
@@ -135,6 +155,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     payload.autoSellPercentage = autoSellPercentage;
     payload.autoAddStakingToOrder = autoAddStakingToOrder;
     payload.orderBookDepth = orderBookDepth;
+    payload.priceDownloadTime = priceDownloadTime;
 
     // Parse normalizations
     const normDict = {};
@@ -156,6 +177,24 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
         console.error(err);
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => setSaveStatus(''), 3000);
+      });
+  };
+
+  const handleTriggerNow = () => {
+    setTriggerStatus('Running...');
+    api.post('/schedule/price-download/trigger')
+      .then(() => {
+        setTriggerStatus('Job triggered! Check Hangfire dashboard for progress.');
+        if (triggerTimerRef.current) clearTimeout(triggerTimerRef.current);
+        triggerTimerRef.current = setTimeout(() => {
+          setTriggerStatus('');
+          fetchScheduleInfo();
+        }, 5000);
+      })
+      .catch(() => {
+        setTriggerStatus('Error triggering job');
+        if (triggerTimerRef.current) clearTimeout(triggerTimerRef.current);
+        triggerTimerRef.current = setTimeout(() => setTriggerStatus(''), 3000);
       });
   };
 
@@ -186,10 +225,15 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
           style={{ padding: '8px 16px', background: activeTab === 'lists' ? 'var(--bg-card)' : 'transparent', border: 'none', borderBottom: activeTab === 'lists' ? '2px solid var(--green)' : '2px solid transparent', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600 }}>
           Trading Lists
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('normalizations')}
           style={{ padding: '8px 16px', background: activeTab === 'normalizations' ? 'var(--bg-card)' : 'transparent', border: 'none', borderBottom: activeTab === 'normalizations' ? '2px solid var(--green)' : '2px solid transparent', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600 }}>
           Asset Normalizations
+        </button>
+        <button
+          onClick={() => setActiveTab('schedule')}
+          style={{ padding: '8px 16px', background: activeTab === 'schedule' ? 'var(--bg-card)' : 'transparent', border: 'none', borderBottom: activeTab === 'schedule' ? '2px solid var(--green)' : '2px solid transparent', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600 }}>
+          Schedule
         </button>
       </div>
 
@@ -519,6 +563,84 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
 
           <button onClick={handleSave} style={buttonStyle}>Save Normalizations</button>
           {saveStatus && <span style={{ marginLeft: 12, color: saveStatus.includes('Error') ? 'var(--red)' : 'var(--green)' }}>{saveStatus}</span>}
+        </>
+      )}
+
+      {activeTab === 'schedule' && (
+        <>
+          <div style={cardStyle}>
+            <div style={labelStyle}>Daily Price Download Time</div>
+            <div style={hintStyle}>
+              The app refreshes all coin prices once per day by fetching fresh OHLC data from Kraken. Choose when this runs — off-peak hours (e.g. 4am) are recommended.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+              <input
+                type="time"
+                value={priceDownloadTime}
+                onChange={e => setPriceDownloadTime(e.target.value)}
+                style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 16, width: 140 }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              {[['00:00', 'Midnight'], ['02:00', '2 AM'], ['04:00', '4 AM'], ['06:00', '6 AM'], ['08:00', '8 AM'], ['12:00', 'Noon']].map(([t, label]) => (
+                <button
+                  key={t}
+                  onClick={() => setPriceDownloadTime(t)}
+                  style={{
+                    padding: '4px 12px', border: '1px solid var(--border)', borderRadius: 4,
+                    background: priceDownloadTime === t ? 'var(--green)' : 'var(--bg-primary)',
+                    color: priceDownloadTime === t ? 'white' : 'var(--text-primary)',
+                    cursor: 'pointer', fontSize: 13
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ ...hintStyle, marginTop: 8 }}>
+              Cron: <code style={{ background: 'var(--bg-primary)', padding: '1px 6px', borderRadius: 3, fontSize: 12 }}>
+                {(() => { const [hh, mm] = priceDownloadTime.split(':'); return `${parseInt(mm || 0)} ${parseInt(hh || 4)} * * *`; })()}
+              </code>
+            </div>
+          </div>
+
+          {scheduleInfo && (
+            <div style={cardStyle}>
+              <div style={labelStyle}>Current Schedule Status</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', marginTop: 8 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Next run</span>
+                <span style={{ fontSize: 13 }}>{scheduleInfo.nextExecution ? new Date(scheduleInfo.nextExecution).toLocaleString() : '—'}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Last run</span>
+                <span style={{ fontSize: 13 }}>{scheduleInfo.lastExecution ? new Date(scheduleInfo.lastExecution).toLocaleString() : 'Never'}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Last result</span>
+                <span style={{ fontSize: 13, color: scheduleInfo.lastJobState === 'Succeeded' ? 'var(--green)' : scheduleInfo.lastJobState ? 'var(--red)' : 'var(--text-muted)' }}>
+                  {scheduleInfo.lastJobState || 'No runs yet'}
+                </span>
+              </div>
+              <button
+                onClick={fetchScheduleInfo}
+                style={{ marginTop: 12, padding: '4px 12px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13 }}>
+                Refresh Status
+              </button>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <button onClick={handleSave} style={buttonStyle}>Save Schedule</button>
+            <button
+              onClick={handleTriggerNow}
+              style={{ ...buttonStyle, background: 'var(--blue, #3b82f6)' }}>
+              Run Now
+            </button>
+            <a
+              href="/hangfire"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ ...buttonStyle, background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border)', textDecoration: 'none', display: 'inline-block' }}>
+              Hangfire Dashboard ↗
+            </a>
+          </div>
+          {saveStatus && <span style={{ marginLeft: 0, marginTop: 8, display: 'block', color: saveStatus.includes('Error') ? 'var(--red)' : 'var(--green)' }}>{saveStatus}</span>}
+          {triggerStatus && <span style={{ marginTop: 8, display: 'block', color: triggerStatus.includes('Error') ? 'var(--red)' : 'var(--green)' }}>{triggerStatus}</span>}
         </>
       )}
     </div>

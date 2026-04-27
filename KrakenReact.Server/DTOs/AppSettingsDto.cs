@@ -24,6 +24,7 @@ public class AppSettingsDto
     public decimal AutoSellPercentage { get; set; }
     public bool AutoAddStakingToOrder { get; set; }
     public int OrderBookDepth { get; set; }
+    public string PriceDownloadTime { get; set; } = "04:00";
 }
 
 public class SaveSettingsRequest
@@ -50,4 +51,5 @@ public class SaveSettingsRequest
     public decimal? AutoSellPercentage { get; set; }
     public bool? AutoAddStakingToOrder { get; set; }
     public int? OrderBookDepth { get; set; }
+    public string? PriceDownloadTime { get; set; }
 }

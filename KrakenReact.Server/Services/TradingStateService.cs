@@ -542,7 +542,8 @@ public class TradingStateService
             new() { Key = "HideAlmostZeroBalances", Value = "false", Description = "Hide balance rows with less than 0.0001 units or less than $0.01 value" },
             new() { Key = "OrderProximityNotifications", Value = "true", Description = "Send Pushover notifications when an order is near the current price" },
             new() { Key = "OrderProximityThreshold", Value = "2.0", Description = "Percentage threshold for order proximity notifications (0.1 to 20.0)" },
-            new() { Key = "Theme", Value = "dark", Description = "UI theme (dark or light)" }
+            new() { Key = "Theme", Value = "dark", Description = "UI theme (dark or light)" },
+            new() { Key = "PriceDownloadTime", Value = "04:00", Description = "Daily price download time (HH:MM, 24-hour)" }
         };
 
         await db.AppSettings.AddRangeAsync(defaultSettings);
@@ -749,6 +750,7 @@ public class TradingStateService
             ["AutoSellOnBuyFill"] = ("false", "Automatically create a sell order when a buy order fills"),
             ["AutoSellPercentage"] = ("10", "Percentage above buy price for the automatic sell order (1 to 500)"),
             ["AutoAddStakingToOrder"] = ("false", "Automatically add staking reward quantity to the newest open sell order for that asset"),
+            ["PriceDownloadTime"] = ("04:00", "Daily price download time (HH:MM, 24-hour)"),
         };
 
         var changed = false;
