@@ -10,6 +10,7 @@ import LedgerPage from '../pages/LedgerPage';
 import ChartPage from '../pages/ChartPage';
 import DelistedPairsPage from '../pages/DelistedPairsPage';
 import SettingsPage, { loadSettings, saveSettings } from '../pages/SettingsPage';
+import PredictionPage from '../pages/PredictionPage';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
@@ -31,6 +32,7 @@ const fixedTabs = [
   { id: 'orders', label: 'Orders' },
   { id: 'ledger', label: 'Ledger' },
   { id: 'delisted', label: 'Delisted Pairs' },
+  { id: 'predictions', label: 'Predictions' },
 ];
 
 export default function TabLayout({ totalValue, totalValueGbp }) {
@@ -211,6 +213,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'ledger' && <LedgerPage />}
         {activeTab === 'delisted' && <DelistedPairsPage />}
         {chartTabs.find(t => t.id === activeTab) && <ChartPage symbol={activeTab} displaySymbol={chartTabs.find(t => t.id === activeTab)?.label} />}
+        {activeTab === 'predictions' && <PredictionPage onSymbolClick={openChart} />}
         {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>
 

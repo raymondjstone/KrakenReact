@@ -81,6 +81,18 @@ public class SettingsController : ControllerBase
             var priceDownloadTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PriceDownloadTime");
             settings.PriceDownloadTime = priceDownloadTime?.Value ?? "04:00";
 
+            var predSymbols = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionSymbols");
+            settings.PredictionSymbols = predSymbols?.Value ?? "XBT/USD,ETH/USD,SOL/USD";
+
+            var predInterval = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionInterval");
+            settings.PredictionInterval = predInterval?.Value ?? "OneHour";
+
+            var predMode = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionMode");
+            settings.PredictionMode = predMode?.Value ?? "specific";
+
+            var predCurrency = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionCurrency");
+            settings.PredictionCurrency = predCurrency?.Value ?? "USD";
+
             return Ok(settings);
         }
         catch (Exception ex)
@@ -203,6 +215,20 @@ public class SettingsController : ControllerBase
                         new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
                 }
             }
+
+            // Save ML prediction settings
+            if (!string.IsNullOrWhiteSpace(request.PredictionSymbols))
+                await SaveOrUpdateSetting("PredictionSymbols", request.PredictionSymbols, "Comma-separated symbols for ML prediction job");
+
+            var validIntervals = new[] { "OneMinute", "FiveMinutes", "FifteenMinutes", "ThirtyMinutes", "OneHour", "FourHour", "OneDay" };
+            if (!string.IsNullOrWhiteSpace(request.PredictionInterval) && validIntervals.Contains(request.PredictionInterval))
+                await SaveOrUpdateSetting("PredictionInterval", request.PredictionInterval, "Kline interval for ML training data");
+
+            if (request.PredictionMode == "all" || request.PredictionMode == "specific")
+                await SaveOrUpdateSetting("PredictionMode", request.PredictionMode, "Prediction symbol mode: 'specific' or 'all'");
+
+            if (!string.IsNullOrWhiteSpace(request.PredictionCurrency))
+                await SaveOrUpdateSetting("PredictionCurrency", request.PredictionCurrency.Trim().ToUpper(), "Quote currency for 'all' prediction mode");
 
             // Save asset normalizations
             if (request.AssetNormalizations != null)

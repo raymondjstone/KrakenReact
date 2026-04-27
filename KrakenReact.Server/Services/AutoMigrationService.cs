@@ -53,13 +53,18 @@ public static class AutoMigrationService
             {
                 canConnectToAssetNormalizations = db.AssetNormalizations.Any();
             }
-            catch
+            catch { }
+
+            // Check if PredictionResults table exists
+            var canConnectToPredictions = false;
+            try
             {
-                // Table doesn't exist
+                canConnectToPredictions = db.PredictionResults.Any();
             }
+            catch { }
 
             // If tables are missing, create them
-            if (!canConnectToAppSettings || !canConnectToAssetNormalizations)
+            if (!canConnectToAppSettings || !canConnectToAssetNormalizations || !canConnectToPredictions)
             {
                 Log.Information("[AutoMigration] Missing tables detected, creating schema...");
                 CreateMissingTables(db);
@@ -107,6 +112,31 @@ public static class AutoMigrationService
                     [KrakenName] nvarchar(450) NOT NULL,
                     [NormalizedName] nvarchar(max) NOT NULL,
                     CONSTRAINT [PK_AssetNormalizations] PRIMARY KEY ([KrakenName])
+                )
+            END
+        ");
+
+        // Create PredictionResults table if it doesn't exist
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PredictionResults')
+            BEGIN
+                CREATE TABLE [PredictionResults] (
+                    [Symbol]           nvarchar(450) NOT NULL,
+                    [Interval]         nvarchar(max) NOT NULL DEFAULT '',
+                    [ComputedAt]       datetime2 NOT NULL,
+                    [Status]           nvarchar(max) NOT NULL DEFAULT '',
+                    [PredictedUp]      bit NOT NULL DEFAULT 0,
+                    [Probability]      real NOT NULL DEFAULT 0,
+                    [ModelAccuracy]    real NOT NULL DEFAULT 0,
+                    [ModelAuc]         real NOT NULL DEFAULT 0,
+                    [LogRegAccuracy]   real NOT NULL DEFAULT 0,
+                    [BenchmarkBuyHold] real NOT NULL DEFAULT 0,
+                    [BenchmarkSma]     real NOT NULL DEFAULT 0,
+                    [TrainSamples]     int NOT NULL DEFAULT 0,
+                    [TestSamples]      int NOT NULL DEFAULT 0,
+                    [TotalCandles]     int NOT NULL DEFAULT 0,
+                    [ErrorMessage]     nvarchar(max) NULL,
+                    CONSTRAINT [PK_PredictionResults] PRIMARY KEY ([Symbol])
                 )
             END
         ");

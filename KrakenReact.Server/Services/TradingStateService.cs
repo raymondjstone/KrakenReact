@@ -263,6 +263,12 @@ public class TradingStateService
     public void SetCachedTrades(IEnumerable<KrakenUserTrade> trades) => CachedTrades = trades.ToList();
     public void SetCachedLedgers(IEnumerable<KrakenLedgerEntry> ledgers) => CachedLedgers = ledgers.ToList();
 
+    // ML prediction settings
+    public string PredictionSymbols { get; set; } = "XBT/USD,ETH/USD,SOL/USD";
+    public string PredictionInterval { get; set; } = "OneHour";
+    public string PredictionMode { get; set; } = "specific";   // "specific" | "all"
+    public string PredictionCurrency { get; set; } = "USD";    // quote currency when mode="all"
+
     // Order book state
     public static readonly int[] ValidBookDepths = { 10, 25, 100, 500, 1000 };
     public int OrderBookDepth { get; set; } = 25;
@@ -733,6 +739,18 @@ public class TradingStateService
         {
             AssetAliases = new Dictionary<string, string>(normalizations, StringComparer.OrdinalIgnoreCase);
         }
+
+        var predSymbols = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionSymbols");
+        PredictionSymbols = predSymbols?.Value ?? "XBT/USD,ETH/USD,SOL/USD";
+
+        var predInterval = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionInterval");
+        PredictionInterval = predInterval?.Value ?? "OneHour";
+
+        var predMode = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionMode");
+        PredictionMode = predMode?.Value ?? "specific";
+
+        var predCurrency = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionCurrency");
+        PredictionCurrency = predCurrency?.Value ?? "USD";
     }
 
     /// <summary>Ensures required settings exist in DB for databases created before new settings were added</summary>
@@ -751,6 +769,10 @@ public class TradingStateService
             ["AutoSellPercentage"] = ("10", "Percentage above buy price for the automatic sell order (1 to 500)"),
             ["AutoAddStakingToOrder"] = ("false", "Automatically add staking reward quantity to the newest open sell order for that asset"),
             ["PriceDownloadTime"] = ("04:00", "Daily price download time (HH:MM, 24-hour)"),
+            ["PredictionSymbols"] = ("XBT/USD,ETH/USD,SOL/USD", "Comma-separated symbols for ML prediction job"),
+            ["PredictionInterval"] = ("OneHour", "Kline interval for ML training data (OneMinute/FifteenMinutes/OneHour/FourHour/OneDay)"),
+            ["PredictionMode"] = ("specific", "Prediction symbol mode: 'specific' (list) or 'all' (all active pairs for a currency)"),
+            ["PredictionCurrency"] = ("USD", "Quote currency to use when PredictionMode is 'all'"),
         };
 
         var changed = false;

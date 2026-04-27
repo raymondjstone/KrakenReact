@@ -15,6 +15,7 @@ public class KrakenDbContext : DbContext
     public DbSet<DerivedKline> DerivedKlines { get; set; }
     public DbSet<AppSettings> AppSettings { get; set; }
     public DbSet<AssetNormalization> AssetNormalizations { get; set; }
+    public DbSet<PredictionResult> PredictionResults { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 
@@ -91,6 +92,10 @@ public class KrakenDbContext : DbContext
         modelBuilder.Entity<AssetNormalization>(entity =>
         {
             entity.HasKey(e => e.KrakenName);
+        });
+        modelBuilder.Entity<PredictionResult>(entity =>
+        {
+            entity.HasKey(e => e.Symbol);
         });
     }
 }

@@ -44,6 +44,7 @@ builder.Services.AddHangfire(config => config
     }));
 builder.Services.AddHangfireServer();
 builder.Services.AddTransient<DailyPriceRefreshJob>();
+builder.Services.AddTransient<PredictionJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -160,10 +161,18 @@ app.Lifetime.ApplicationStarted.Register(() =>
             cron,
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
         Log.Information("[Hangfire] Daily price download scheduled at {Time} (cron: {Cron})", timeSetting?.Value ?? "04:00", cron);
+
+        // Schedule prediction job daily at 5:00 AM local time
+        manager.AddOrUpdate<PredictionJob>(
+            "daily-prediction",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "0 5 * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+        Log.Information("[Hangfire] ML prediction job scheduled daily at 05:00");
     }
     catch (Exception ex)
     {
-        Log.Error(ex, "[Hangfire] Failed to schedule daily price download job");
+        Log.Error(ex, "[Hangfire] Failed to schedule Hangfire jobs");
     }
 });
 

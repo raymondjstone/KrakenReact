@@ -1,0 +1,284 @@
+using KrakenReact.Server.Models;
+using Microsoft.ML.Data;
+
+namespace KrakenReact.Server.Services;
+
+/// <summary>ML.NET input schema — individual float properties so Concatenate() can reference them by name.</summary>
+public class CandleFeatures
+{
+    public float Rsi14 { get; set; }
+    public float MacdHistogram { get; set; }
+    public float MacdSignal { get; set; }
+    public float AtrNorm { get; set; }         // ATR / close
+    public float VolumeSmaRatio { get; set; }  // volume / SMA14(volume), clamped [0,5]
+    public float BbPosition { get; set; }      // position within Bollinger Bands [0,1]
+    public float Sma20Ratio { get; set; }      // close / SMA20 - 1
+    public float Return1 { get; set; }         // 1-period log return
+    public float Return5 { get; set; }         // 5-period log return
+    public float Return20 { get; set; }        // 20-period log return
+    public float Volatility20 { get; set; }    // rolling std of 20 log-returns
+    public float VwapRatio { get; set; }       // close / VWAP - 1
+    public float HighLowRange { get; set; }    // (high - low) / close
+    public bool Label { get; set; }            // true = next candle close > this candle close
+}
+
+public class BinaryPrediction
+{
+    [ColumnName("PredictedLabel")]
+    public bool PredictedLabel { get; set; }
+    public float Probability { get; set; }
+    public float Score { get; set; }
+}
+
+public class FeatureSet
+{
+    public List<CandleFeatures> Rows { get; set; } = new();
+    public CandleFeatures? LatestFeatures { get; set; }
+    public int TotalCandles { get; set; }
+    // Raw closes for benchmark SMA computation in the job
+    public float[] Closes { get; set; } = [];
+    public float[] Sma5 { get; set; } = [];
+    public float[] Sma20 { get; set; } = [];
+}
+
+public static class FeatureEngineering
+{
+    public const int Warmup = 36; // periods needed before first valid feature row (MACD slow=26 + signal=9 + 1)
+
+    public static readonly string[] FeatureColumnNames =
+    [
+        nameof(CandleFeatures.Rsi14),
+        nameof(CandleFeatures.MacdHistogram),
+        nameof(CandleFeatures.MacdSignal),
+        nameof(CandleFeatures.AtrNorm),
+        nameof(CandleFeatures.VolumeSmaRatio),
+        nameof(CandleFeatures.BbPosition),
+        nameof(CandleFeatures.Sma20Ratio),
+        nameof(CandleFeatures.Return1),
+        nameof(CandleFeatures.Return5),
+        nameof(CandleFeatures.Return20),
+        nameof(CandleFeatures.Volatility20),
+        nameof(CandleFeatures.VwapRatio),
+        nameof(CandleFeatures.HighLowRange),
+    ];
+
+    public static FeatureSet BuildFeatures(List<DerivedKline> klines)
+    {
+        int n = klines.Count;
+        var closes = klines.Select(k => (float)k.Close).ToArray();
+        var highs  = klines.Select(k => (float)k.High).ToArray();
+        var lows   = klines.Select(k => (float)k.Low).ToArray();
+        var vols   = klines.Select(k => (float)k.Volume).ToArray();
+        var vwaps  = klines.Select(k => (float)k.VolumeWeightedAveragePrice).ToArray();
+
+        var rsi14            = ComputeRsi(closes, 14);
+        var (_, signal, hist) = ComputeMacd(closes);
+        var atr14            = ComputeAtr(highs, lows, closes, 14);
+        var volSma14         = ComputeSma(vols, 14);
+        var sma5             = ComputeSma(closes, 5);
+        var sma20            = ComputeSma(closes, 20);
+        var (bbUp, _, bbDn)  = ComputeBollingerBands(closes, 20);
+
+        // Log returns
+        var logRet = new float[n];
+        for (int i = 1; i < n; i++)
+            if (closes[i - 1] > 0) logRet[i] = MathF.Log(closes[i] / closes[i - 1]);
+
+        var rows = new List<CandleFeatures>(n);
+
+        // Training rows: indices [Warmup .. n-2] — each needs closes[i+1] for the label
+        for (int i = Warmup; i < n - 1; i++)
+        {
+            var row = BuildRow(i, closes, highs, lows, vols, vwaps,
+                               rsi14, hist, signal, atr14, volSma14,
+                               sma20, bbUp, bbDn, logRet);
+
+            row.Label = closes[i + 1] > closes[i];
+            rows.Add(row);
+        }
+
+        // Latest features: index n-1 (no next candle, so no label — used for live prediction)
+        CandleFeatures? latest = null;
+        if (n - 1 >= Warmup)
+            latest = BuildRow(n - 1, closes, highs, lows, vols, vwaps,
+                              rsi14, hist, signal, atr14, volSma14,
+                              sma20, bbUp, bbDn, logRet);
+
+        return new FeatureSet
+        {
+            Rows = rows,
+            LatestFeatures = latest,
+            TotalCandles = n,
+            Closes = closes,
+            Sma5 = sma5,
+            Sma20 = sma20,
+        };
+    }
+
+    private static CandleFeatures BuildRow(
+        int i,
+        float[] closes, float[] highs, float[] lows, float[] vols, float[] vwaps,
+        float[] rsi14, float[] hist, float[] signal, float[] atr14, float[] volSma14,
+        float[] sma20, float[] bbUp, float[] bbDn, float[] logRet)
+    {
+        float c = closes[i];
+
+        float ret5  = i >= 5  && closes[i - 5]  > 0 ? (c - closes[i - 5])  / closes[i - 5]  : 0f;
+        float ret20 = i >= 20 && closes[i - 20] > 0 ? (c - closes[i - 20]) / closes[i - 20] : 0f;
+
+        // 20-period rolling volatility (population std of log returns)
+        float vol20 = 0f;
+        if (i >= 20)
+        {
+            float sum = 0f, sumSq = 0f;
+            for (int j = i - 19; j <= i; j++) { sum += logRet[j]; sumSq += logRet[j] * logRet[j]; }
+            float mean = sum / 20f;
+            float variance = sumSq / 20f - mean * mean;
+            vol20 = variance > 0 ? MathF.Sqrt(variance) : 0f;
+        }
+
+        float bbRange = bbUp[i] - bbDn[i];
+        float bbPos   = bbRange > 0 ? Math.Clamp((c - bbDn[i]) / bbRange, 0f, 1f) : 0.5f;
+        float volRatio = volSma14[i] > 0 ? Math.Clamp(vols[i] / volSma14[i], 0f, 5f) : 1f;
+        float vwapRatio = vwaps[i] > 0 ? c / vwaps[i] - 1f : 0f;
+        float atrNorm  = c > 0 ? atr14[i] / c : 0f;
+        float sma20Ratio = sma20[i] > 0 ? c / sma20[i] - 1f : 0f;
+        float hlRange  = c > 0 ? (highs[i] - lows[i]) / c : 0f;
+
+        return new CandleFeatures
+        {
+            Rsi14          = Safe(rsi14[i] / 100f),
+            MacdHistogram  = Safe(hist[i]),
+            MacdSignal     = Safe(signal[i]),
+            AtrNorm        = Safe(atrNorm),
+            VolumeSmaRatio = Safe(volRatio),
+            BbPosition     = Safe(bbPos),
+            Sma20Ratio     = Safe(sma20Ratio),
+            Return1        = Safe(logRet[i]),
+            Return5        = Safe(ret5),
+            Return20       = Safe(ret20),
+            Volatility20   = Safe(vol20),
+            VwapRatio      = Safe(vwapRatio),
+            HighLowRange   = Safe(hlRange),
+        };
+    }
+
+    private static float Safe(float v) => float.IsFinite(v) ? v : 0f;
+
+    // ── Technical Indicators ────────────────────────────────────────────────────
+
+    public static float[] ComputeRsi(float[] closes, int period = 14)
+    {
+        var rsi = new float[closes.Length];
+        if (closes.Length <= period) return rsi;
+
+        float avgGain = 0f, avgLoss = 0f;
+        for (int i = 1; i <= period; i++)
+        {
+            float d = closes[i] - closes[i - 1];
+            if (d > 0) avgGain += d; else avgLoss -= d;
+        }
+        avgGain /= period;
+        avgLoss /= period;
+        rsi[period] = avgLoss == 0 ? 100f : 100f - 100f / (1f + avgGain / avgLoss);
+
+        for (int i = period + 1; i < closes.Length; i++)
+        {
+            float d = closes[i] - closes[i - 1];
+            float gain = d > 0 ? d : 0f;
+            float loss = d < 0 ? -d : 0f;
+            avgGain = (avgGain * (period - 1) + gain) / period;
+            avgLoss = (avgLoss * (period - 1) + loss) / period;
+            rsi[i] = avgLoss == 0 ? 100f : 100f - 100f / (1f + avgGain / avgLoss);
+        }
+        return rsi;
+    }
+
+    public static float[] ComputeEma(float[] values, int period)
+    {
+        var ema = new float[values.Length];
+        if (values.Length < period) return ema;
+
+        float mult = 2f / (period + 1);
+        float seed = 0f;
+        for (int i = 0; i < period; i++) seed += values[i];
+        ema[period - 1] = seed / period;
+
+        for (int i = period; i < values.Length; i++)
+            ema[i] = (values[i] - ema[i - 1]) * mult + ema[i - 1];
+
+        return ema;
+    }
+
+    public static (float[] Macd, float[] Signal, float[] Histogram) ComputeMacd(
+        float[] closes, int fast = 12, int slow = 26, int signalPeriod = 9)
+    {
+        var emaFast = ComputeEma(closes, fast);
+        var emaSlow = ComputeEma(closes, slow);
+        var macd    = new float[closes.Length];
+        for (int i = slow - 1; i < closes.Length; i++)
+            macd[i] = emaFast[i] - emaSlow[i];
+
+        var sig  = ComputeEma(macd, signalPeriod);
+        var hist = new float[closes.Length];
+        for (int i = 0; i < closes.Length; i++)
+            hist[i] = macd[i] - sig[i];
+
+        return (macd, sig, hist);
+    }
+
+    public static float[] ComputeAtr(float[] highs, float[] lows, float[] closes, int period = 14)
+    {
+        int n = closes.Length;
+        var tr  = new float[n];
+        var atr = new float[n];
+        tr[0] = highs[0] - lows[0];
+        for (int i = 1; i < n; i++)
+            tr[i] = MathF.Max(highs[i] - lows[i],
+                    MathF.Max(MathF.Abs(highs[i] - closes[i - 1]),
+                              MathF.Abs(lows[i]  - closes[i - 1])));
+
+        float seed = 0f;
+        for (int i = 0; i < period; i++) seed += tr[i];
+        atr[period - 1] = seed / period;
+        for (int i = period; i < n; i++)
+            atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period;
+
+        return atr;
+    }
+
+    public static float[] ComputeSma(float[] values, int period)
+    {
+        var sma = new float[values.Length];
+        float sum = 0f;
+        for (int i = 0; i < values.Length; i++)
+        {
+            sum += values[i];
+            if (i >= period) sum -= values[i - period];
+            if (i >= period - 1) sma[i] = sum / period;
+        }
+        return sma;
+    }
+
+    public static (float[] Upper, float[] Middle, float[] Lower) ComputeBollingerBands(
+        float[] closes, int period = 20, float stdMult = 2f)
+    {
+        var mid = ComputeSma(closes, period);
+        var up  = new float[closes.Length];
+        var dn  = new float[closes.Length];
+
+        for (int i = period - 1; i < closes.Length; i++)
+        {
+            float sumSq = 0f;
+            for (int j = i - period + 1; j <= i; j++)
+            {
+                float d = closes[j] - mid[i];
+                sumSq += d * d;
+            }
+            float std = MathF.Sqrt(sumSq / period);
+            up[i] = mid[i] + stdMult * std;
+            dn[i] = mid[i] - stdMult * std;
+        }
+        return (up, mid, dn);
+    }
+}
