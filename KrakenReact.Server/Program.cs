@@ -162,13 +162,15 @@ app.Lifetime.ApplicationStarted.Register(() =>
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
         Log.Information("[Hangfire] Daily price download scheduled at {Time} (cron: {Cron})", timeSetting?.Value ?? "04:00", cron);
 
-        // Schedule prediction job daily at 5:00 AM local time
+        // Schedule prediction job from DB setting (default 05:00)
+        var predTimeSetting = db.AppSettings.FirstOrDefault(s => s.Key == "PredictionJobTime");
+        var predCron = TimeToCron(predTimeSetting?.Value ?? "05:00");
         manager.AddOrUpdate<PredictionJob>(
             "daily-prediction",
             job => job.ExecuteAsync(CancellationToken.None),
-            "0 5 * * *",
+            predCron,
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
-        Log.Information("[Hangfire] ML prediction job scheduled daily at 05:00");
+        Log.Information("[Hangfire] ML prediction job scheduled at {Time} (cron: {Cron})", predTimeSetting?.Value ?? "05:00", predCron);
     }
     catch (Exception ex)
     {

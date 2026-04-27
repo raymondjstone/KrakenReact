@@ -81,6 +81,9 @@ public class SettingsController : ControllerBase
             var priceDownloadTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PriceDownloadTime");
             settings.PriceDownloadTime = priceDownloadTime?.Value ?? "04:00";
 
+            var predJobTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionJobTime");
+            settings.PredictionJobTime = predJobTime?.Value ?? "05:00";
+
             var predSymbols = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionSymbols");
             settings.PredictionSymbols = predSymbols?.Value ?? "XBT/USD,ETH/USD,SOL/USD";
 
@@ -210,6 +213,24 @@ public class SettingsController : ControllerBase
                     var cron = $"{m} {h} * * *";
                     _jobManager.AddOrUpdate<DailyPriceRefreshJob>(
                         "daily-price-download",
+                        job => job.ExecuteAsync(CancellationToken.None),
+                        cron,
+                        new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+                }
+            }
+
+            // Save prediction job schedule and update Hangfire job
+            if (!string.IsNullOrWhiteSpace(request.PredictionJobTime))
+            {
+                var parts = request.PredictionJobTime.Split(':');
+                if (parts.Length == 2 && int.TryParse(parts[0], out var h) && int.TryParse(parts[1], out var m)
+                    && h is >= 0 and <= 23 && m is >= 0 and <= 59)
+                {
+                    var timeStr = $"{h:D2}:{m:D2}";
+                    await SaveOrUpdateSetting("PredictionJobTime", timeStr, "Daily ML prediction job time (HH:MM, 24-hour)");
+                    var cron = $"{m} {h} * * *";
+                    _jobManager.AddOrUpdate<PredictionJob>(
+                        "daily-prediction",
                         job => job.ExecuteAsync(CancellationToken.None),
                         cron,
                         new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });

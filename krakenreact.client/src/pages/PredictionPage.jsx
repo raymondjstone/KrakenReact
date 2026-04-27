@@ -28,7 +28,7 @@ export default function PredictionPage({ onSymbolClick }) {
   const [currency, setCurrency] = useState('USD');
   const [availableCurrencies, setAvailableCurrencies] = useState([]);
   const [configStatus, setConfigStatus] = useState('');
-  const [sortBy, setSortBy] = useState('symbol');
+  const [sortBy, setSortBy] = useState(() => localStorage.getItem('predictions_sortBy') || 'symbol');
   const triggerTimerRef = useRef(null);
   const configTimerRef = useRef(null);
 
@@ -170,7 +170,7 @@ export default function PredictionPage({ onSymbolClick }) {
           <label style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Sort by</label>
           <select
             value={sortBy}
-            onChange={e => setSortBy(e.target.value)}
+            onChange={e => { setSortBy(e.target.value); localStorage.setItem('predictions_sortBy', e.target.value); }}
             style={{ padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer' }}>
             <option value="symbol">Symbol A→Z</option>
             <option value="confidence">Confidence ↓</option>

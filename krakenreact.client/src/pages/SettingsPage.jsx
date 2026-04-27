@@ -59,6 +59,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
 
   // Schedule
   const [priceDownloadTime, setPriceDownloadTime] = useState('04:00');
+  const [predictionJobTime, setPredictionJobTime] = useState('05:00');
   const [scheduleInfo, setScheduleInfo] = useState(null);
   const [triggerStatus, setTriggerStatus] = useState('');
   const triggerTimerRef = useRef(null);
@@ -98,6 +99,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     setAutoAddStakingToOrder(!!data.autoAddStakingToOrder);
     setOrderBookDepth(data.orderBookDepth || 25);
     setPriceDownloadTime(data.priceDownloadTime || '04:00');
+    setPredictionJobTime(data.predictionJobTime || '05:00');
     setLoaded(true);
   }, [serverSettings]);
 
@@ -156,6 +158,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     payload.autoAddStakingToOrder = autoAddStakingToOrder;
     payload.orderBookDepth = orderBookDepth;
     payload.priceDownloadTime = priceDownloadTime;
+    payload.predictionJobTime = predictionJobTime;
 
     // Parse normalizations
     const normDict = {};
@@ -599,6 +602,41 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
             <div style={{ ...hintStyle, marginTop: 8 }}>
               Cron: <code style={{ background: 'var(--bg-primary)', padding: '1px 6px', borderRadius: 3, fontSize: 12 }}>
                 {(() => { const [hh, mm] = priceDownloadTime.split(':'); return `${parseInt(mm || 0)} ${parseInt(hh || 4)} * * *`; })()}
+              </code>
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={labelStyle}>Daily ML Prediction Job Time</div>
+            <div style={hintStyle}>
+              When the prediction model training and inference job runs each day. Choose a time after the price download completes.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+              <input
+                type="time"
+                value={predictionJobTime}
+                onChange={e => setPredictionJobTime(e.target.value)}
+                style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 16, width: 140 }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              {[['01:00', '1 AM'], ['03:00', '3 AM'], ['05:00', '5 AM'], ['06:00', '6 AM'], ['08:00', '8 AM'], ['12:00', 'Noon']].map(([t, label]) => (
+                <button
+                  key={t}
+                  onClick={() => setPredictionJobTime(t)}
+                  style={{
+                    padding: '4px 12px', border: '1px solid var(--border)', borderRadius: 4,
+                    background: predictionJobTime === t ? 'var(--green)' : 'var(--bg-primary)',
+                    color: predictionJobTime === t ? 'white' : 'var(--text-primary)',
+                    cursor: 'pointer', fontSize: 13
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ ...hintStyle, marginTop: 8 }}>
+              Cron: <code style={{ background: 'var(--bg-primary)', padding: '1px 6px', borderRadius: 3, fontSize: 12 }}>
+                {(() => { const [hh, mm] = predictionJobTime.split(':'); return `${parseInt(mm || 0)} ${parseInt(hh || 5)} * * *`; })()}
               </code>
             </div>
           </div>

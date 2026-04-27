@@ -25,6 +25,7 @@ public class AppSettingsDto
     public bool AutoAddStakingToOrder { get; set; }
     public int OrderBookDepth { get; set; }
     public string PriceDownloadTime { get; set; } = "04:00";
+    public string PredictionJobTime { get; set; } = "05:00";
     public string PredictionSymbols { get; set; } = "XBT/USD,ETH/USD,SOL/USD";
     public string PredictionInterval { get; set; } = "OneHour";
     public string PredictionMode { get; set; } = "specific";
@@ -56,6 +57,7 @@ public class SaveSettingsRequest
     public bool? AutoAddStakingToOrder { get; set; }
     public int? OrderBookDepth { get; set; }
     public string? PriceDownloadTime { get; set; }
+    public string? PredictionJobTime { get; set; }
     public string? PredictionSymbols { get; set; }
     public string? PredictionInterval { get; set; }
     public string? PredictionMode { get; set; }

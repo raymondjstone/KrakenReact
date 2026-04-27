@@ -773,6 +773,7 @@ public class TradingStateService
             ["PredictionInterval"] = ("OneHour", "Kline interval for ML training data (OneMinute/FifteenMinutes/OneHour/FourHour/OneDay)"),
             ["PredictionMode"] = ("specific", "Prediction symbol mode: 'specific' (list) or 'all' (all active pairs for a currency)"),
             ["PredictionCurrency"] = ("USD", "Quote currency to use when PredictionMode is 'all'"),
+            ["PredictionJobTime"] = ("05:00", "Daily ML prediction job time (HH:MM, 24-hour)"),
         };
 
         var changed = false;
