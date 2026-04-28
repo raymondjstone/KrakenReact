@@ -45,6 +45,7 @@ builder.Services.AddHangfire(config => config
 builder.Services.AddHangfireServer();
 builder.Services.AddTransient<DailyPriceRefreshJob>();
 builder.Services.AddTransient<PredictionJob>();
+builder.Services.AddTransient<StalePredictionRefreshJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -171,6 +172,17 @@ app.Lifetime.ApplicationStarted.Register(() =>
             predCron,
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
         Log.Information("[Hangfire] ML prediction job scheduled at {Time} (cron: {Cron})", predTimeSetting?.Value ?? "05:00", predCron);
+
+        // Schedule stale-prediction auto-refresh job
+        var autoRefreshSetting = db.AppSettings.FirstOrDefault(s => s.Key == "PredictionAutoRefreshIntervalMinutes");
+        var autoRefreshMins = autoRefreshSetting != null && int.TryParse(autoRefreshSetting.Value, out var arm) && arm >= 5 ? arm : 15;
+        var autoRefreshCron = IntervalToCron(autoRefreshMins);
+        manager.AddOrUpdate<StalePredictionRefreshJob>(
+            "stale-prediction-refresh",
+            job => job.ExecuteAsync(CancellationToken.None),
+            autoRefreshCron,
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Log.Information("[Hangfire] Stale prediction refresh scheduled every {Mins} min (cron: {Cron})", autoRefreshMins, autoRefreshCron);
     }
     catch (Exception ex)
     {
@@ -185,6 +197,14 @@ static string TimeToCron(string hhmm)
         && h is >= 0 and <= 23 && m is >= 0 and <= 59)
         return $"{m} {h} * * *";
     return "0 4 * * *";
+}
+
+static string IntervalToCron(int intervalMins)
+{
+    intervalMins = Math.Max(1, intervalMins);
+    var minutes = new List<int>();
+    for (var m = 1; m < 60; m += intervalMins) minutes.Add(m);
+    return $"{string.Join(",", minutes)} * * * *";
 }
 
 // Log static file diagnostics

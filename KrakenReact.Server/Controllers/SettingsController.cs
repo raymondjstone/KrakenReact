@@ -96,6 +96,10 @@ public class SettingsController : ControllerBase
             var predCurrency = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionCurrency");
             settings.PredictionCurrency = predCurrency?.Value ?? "USD";
 
+            var predAutoRefresh = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionAutoRefreshIntervalMinutes");
+            settings.PredictionAutoRefreshIntervalMinutes = predAutoRefresh != null && int.TryParse(predAutoRefresh.Value, out var autoMins)
+                ? autoMins : 15;
+
             return Ok(settings);
         }
         catch (Exception ex)
@@ -245,11 +249,23 @@ public class SettingsController : ControllerBase
             if (!string.IsNullOrWhiteSpace(request.PredictionInterval) && validIntervals.Contains(request.PredictionInterval))
                 await SaveOrUpdateSetting("PredictionInterval", request.PredictionInterval, "Kline interval for ML training data");
 
-            if (request.PredictionMode == "all" || request.PredictionMode == "specific")
-                await SaveOrUpdateSetting("PredictionMode", request.PredictionMode, "Prediction symbol mode: 'specific' or 'all'");
+            if (request.PredictionMode is "all" or "specific" or "existing")
+                await SaveOrUpdateSetting("PredictionMode", request.PredictionMode, "Prediction symbol mode: 'specific', 'all', or 'existing'");
 
             if (!string.IsNullOrWhiteSpace(request.PredictionCurrency))
                 await SaveOrUpdateSetting("PredictionCurrency", request.PredictionCurrency.Trim().ToUpper(), "Quote currency for 'all' prediction mode");
+
+            if (request.PredictionAutoRefreshIntervalMinutes.HasValue)
+            {
+                var interval = Math.Max(5, request.PredictionAutoRefreshIntervalMinutes.Value);
+                await SaveOrUpdateSetting("PredictionAutoRefreshIntervalMinutes", interval.ToString(),
+                    "How often (minutes) the stale-prediction auto-refresh job runs (minimum 5)");
+                _jobManager.AddOrUpdate<StalePredictionRefreshJob>(
+                    "stale-prediction-refresh",
+                    job => job.ExecuteAsync(CancellationToken.None),
+                    IntervalToCron(interval),
+                    new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+            }
 
             // Save asset normalizations
             if (request.AssetNormalizations != null)
@@ -278,6 +294,15 @@ public class SettingsController : ControllerBase
             _logger.LogError(ex, "Error saving settings");
             return StatusCode(500, "Error saving settings");
         }
+    }
+
+    /// <summary>Builds a cron that fires at minute 1 and repeats every <paramref name="intervalMins"/> minutes within each hour.</summary>
+    private static string IntervalToCron(int intervalMins)
+    {
+        intervalMins = Math.Max(1, intervalMins);
+        var minutes = new List<int>();
+        for (var m = 1; m < 60; m += intervalMins) minutes.Add(m);
+        return $"{string.Join(",", minutes)} * * * *";
     }
 
     private async Task<List<string>?> GetSettingList(string key)

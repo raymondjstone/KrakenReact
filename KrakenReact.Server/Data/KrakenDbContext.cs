@@ -96,6 +96,11 @@ public class KrakenDbContext : DbContext
         modelBuilder.Entity<PredictionResult>(entity =>
         {
             entity.HasKey(e => e.Symbol);
+            // SQLite loses DateTimeKind on round-trip; restore it so JSON serialises with 'Z'
+            entity.Property(e => e.ComputedAt)
+                  .HasConversion(
+                      v => v,
+                      v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
         });
     }
 }

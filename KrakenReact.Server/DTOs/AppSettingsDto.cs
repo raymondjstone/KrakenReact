@@ -30,6 +30,7 @@ public class AppSettingsDto
     public string PredictionInterval { get; set; } = "OneHour";
     public string PredictionMode { get; set; } = "specific";
     public string PredictionCurrency { get; set; } = "USD";
+    public int PredictionAutoRefreshIntervalMinutes { get; set; } = 15;
 }
 
 public class SaveSettingsRequest
@@ -62,4 +63,5 @@ public class SaveSettingsRequest
     public string? PredictionInterval { get; set; }
     public string? PredictionMode { get; set; }
     public string? PredictionCurrency { get; set; }
+    public int? PredictionAutoRefreshIntervalMinutes { get; set; }
 }

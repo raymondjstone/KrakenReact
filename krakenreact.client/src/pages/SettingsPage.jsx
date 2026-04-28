@@ -60,6 +60,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   // Schedule
   const [priceDownloadTime, setPriceDownloadTime] = useState('04:00');
   const [predictionJobTime, setPredictionJobTime] = useState('05:00');
+  const [predictionAutoRefreshInterval, setPredictionAutoRefreshInterval] = useState(15);
   const [scheduleInfo, setScheduleInfo] = useState(null);
   const [triggerStatus, setTriggerStatus] = useState('');
   const triggerTimerRef = useRef(null);
@@ -100,6 +101,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     setOrderBookDepth(data.orderBookDepth || 25);
     setPriceDownloadTime(data.priceDownloadTime || '04:00');
     setPredictionJobTime(data.predictionJobTime || '05:00');
+    setPredictionAutoRefreshInterval(data.predictionAutoRefreshIntervalMinutes ?? 15);
     setLoaded(true);
   }, [serverSettings]);
 
@@ -159,6 +161,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     payload.orderBookDepth = orderBookDepth;
     payload.priceDownloadTime = priceDownloadTime;
     payload.predictionJobTime = predictionJobTime;
+    payload.predictionAutoRefreshIntervalMinutes = Math.max(5, Number(predictionAutoRefreshInterval) || 15);
 
     // Parse normalizations
     const normDict = {};
@@ -637,6 +640,50 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
             <div style={{ ...hintStyle, marginTop: 8 }}>
               Cron: <code style={{ background: 'var(--bg-primary)', padding: '1px 6px', borderRadius: 3, fontSize: 12 }}>
                 {(() => { const [hh, mm] = predictionJobTime.split(':'); return `${parseInt(mm || 0)} ${parseInt(hh || 5)} * * *`; })()}
+              </code>
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={labelStyle}>Auto-Refresh Stale Predictions</div>
+            <div style={hintStyle}>
+              Runs at 1 minute past the hour and repeats at this interval. Any prediction card older than {' '}
+              <strong>30 minutes</strong> will be automatically re-generated.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+              <input
+                type="number"
+                min={5}
+                max={60}
+                value={predictionAutoRefreshInterval}
+                onChange={e => setPredictionAutoRefreshInterval(Math.max(5, Math.min(60, Number(e.target.value) || 15)))}
+                style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 16, width: 80 }}
+              />
+              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>minutes</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              {[5, 10, 15, 20, 30].map(v => (
+                <button
+                  key={v}
+                  onClick={() => setPredictionAutoRefreshInterval(v)}
+                  style={{
+                    padding: '4px 12px', border: '1px solid var(--border)', borderRadius: 4,
+                    background: predictionAutoRefreshInterval === v ? 'var(--green)' : 'var(--bg-primary)',
+                    color: predictionAutoRefreshInterval === v ? 'white' : 'var(--text-primary)',
+                    cursor: 'pointer', fontSize: 13
+                  }}>
+                  {v} min
+                </button>
+              ))}
+            </div>
+            <div style={{ ...hintStyle, marginTop: 8 }}>
+              Cron: <code style={{ background: 'var(--bg-primary)', padding: '1px 6px', borderRadius: 3, fontSize: 12 }}>
+                {(() => {
+                  const n = Math.max(1, predictionAutoRefreshInterval);
+                  const mins = [];
+                  for (let m = 1; m < 60; m += n) mins.push(m);
+                  return `${mins.join(',')} * * * *`;
+                })()}
               </code>
             </div>
           </div>

@@ -95,10 +95,12 @@ export default function PredictionPage({ onSymbolClick }) {
 
   const symbolList = mode === 'specific'
     ? symbols.split(',').map(s => s.trim()).filter(Boolean)
-    : results.map(r => r.symbol); // show what was actually run
+    : results.map(r => r.symbol);
 
   const headerSummary = mode === 'all'
     ? `All active */${currency} pairs`
+    : mode === 'existing'
+    ? `${results.length} existing card${results.length !== 1 ? 's' : ''}`
     : `${symbolList.length} symbol${symbolList.length !== 1 ? 's' : ''}`;
 
   const sortedResults = useMemo(() => {
@@ -192,9 +194,10 @@ export default function PredictionPage({ onSymbolClick }) {
 
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Symbol mode</div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {modeBtn('specific', 'Specific symbols')}
               {modeBtn('all', 'All active pairs')}
+              {modeBtn('existing', 'Existing cards')}
             </div>
           </div>
 
@@ -262,6 +265,8 @@ export default function PredictionPage({ onSymbolClick }) {
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 12 }}>
             {mode === 'all'
               ? `"All active pairs" will run predictions for every non-delisted */${currency} pair currently in your Kraken Symbols table. This can take a while for large universes — 1h interval is recommended.`
+              : mode === 'existing'
+              ? '"Existing cards" re-runs predictions only for symbols that already have a prediction card. Useful for keeping your current set fresh without managing a manual list.'
               : 'Changes take effect on the next run. Click Run Now after saving to see results immediately.'}
           </div>
         </div>
@@ -278,7 +283,19 @@ export default function PredictionPage({ onSymbolClick }) {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 20 }}>
-        {sortedResults.map(r => <PredictionCard key={r.symbol} result={r} onSymbolClick={onSymbolClick} />)}
+        {sortedResults.map(r => (
+          <PredictionCard
+            key={r.symbol}
+            result={r}
+            onSymbolClick={onSymbolClick}
+            onRefreshDone={fetchResults}
+            onDelete={() => {
+              api.delete(`/predictions?symbol=${encodeURIComponent(r.symbol)}`)
+                .then(() => setResults(prev => prev.filter(x => x.symbol !== r.symbol)))
+                .catch(() => {});
+            }}
+          />
+        ))}
       </div>
 
       <div style={{ marginTop: 32, padding: 16, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
@@ -293,21 +310,72 @@ export default function PredictionPage({ onSymbolClick }) {
   );
 }
 
-function PredictionCard({ result, onSymbolClick }) {
+// Parse a server DateTime string as UTC regardless of whether the 'Z' suffix is present.
+// SQLite round-trips strip DateTimeKind so older rows may lack the suffix.
+function parseUtc(s) {
+  if (!s) return new Date(0);
+  return new Date(/[Zz]|[+-]\d{2}:\d{2}$/.test(s) ? s : s + 'Z');
+}
+
+function ageLabel(computedAt) {
+  const mins = Math.floor((Date.now() - parseUtc(computedAt)) / 60000);
+  if (mins < 1)  return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hrs}h ${rem}m ago` : `${hrs}h ago`;
+}
+
+function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const [refreshing, setRefreshing] = useState(false);
+  const [, forceAge] = useState(0);
+  const pollRef = useRef(null);
+  const originalComputedAtRef = useRef(null);
   const isSuccess = result.status === 'success';
   const hasError  = result.status === 'error';
+  // Clear expired state immediately when a refresh is in flight
+  const isExpired = !refreshing && (Date.now() - parseUtc(result.computedAt)) > 3_600_000;
   const pct = v => `${(v * 100).toFixed(1)}%`;
   const intervalLabel = INTERVAL_LABELS[result.interval] || result.interval;
 
-  const statusColor = isSuccess ? 'var(--green)' : hasError ? 'var(--red)' : 'var(--text-muted)';
-  const statusLabel = isSuccess ? 'success' : hasError ? 'error' : 'insufficient data';
+  // Re-render every minute so the age label and expired flag stay current
+  useEffect(() => {
+    const t = setInterval(() => forceAge(n => n + 1), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Single badge — priority: refreshing > expired > success/error/insufficient data
+  const badgeLabel = refreshing ? 'updating' : isExpired ? 'expired'
+    : isSuccess ? 'success' : hasError ? 'error' : 'insufficient data';
+  const badgeColor = refreshing ? 'var(--text-muted)' : isExpired ? '#b45309'
+    : isSuccess ? 'var(--green)' : hasError ? 'var(--red)' : 'var(--text-muted)';
+
+  // Detect when the parent re-fetches and this card's computedAt changes
+  useEffect(() => {
+    if (refreshing && originalComputedAtRef.current && result.computedAt !== originalComputedAtRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+      setRefreshing(false);
+    }
+  }, [result.computedAt, refreshing]);
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
 
   const handleRefresh = (e) => {
     e.stopPropagation();
+    originalComputedAtRef.current = result.computedAt;
     setRefreshing(true);
     api.post(`/predictions/trigger/single?symbol=${encodeURIComponent(result.symbol)}`)
-      .finally(() => setRefreshing(false));
+      .then(() => {
+        // Poll fetchResults every 3s until computedAt changes (effect above stops the interval)
+        pollRef.current = setInterval(() => onRefreshDone?.(), 3000);
+        // Safety stop after 2 minutes
+        setTimeout(() => {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          setRefreshing(false);
+        }, 120000);
+      })
+      .catch(() => setRefreshing(false));
   };
 
   const iconBtn = (title, content, onClick, disabled) => (
@@ -332,18 +400,22 @@ function PredictionCard({ result, onSymbolClick }) {
     <div
       style={{
         background: 'var(--bg-card)',
-        border: '1px solid var(--border)',
+        border: `1px solid ${isExpired ? '#b45309' : 'var(--border)'}`,
         borderRadius: 8, padding: 20, display: 'flex', flexDirection: 'column', gap: 14,
+        opacity: isExpired ? 0.85 : 1,
       }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+      {/* Row 1: symbol + single status badge */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontWeight: 700, fontSize: 20, color: 'var(--text-primary)' }}>{result.symbol}</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, border: `1px solid ${statusColor}`, color: statusColor, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            {statusLabel}
-          </span>
-          {iconBtn(`Open ${result.symbol} chart`, '📈', (e) => { e.stopPropagation(); onSymbolClick?.(result.symbol); }, false)}
-          {iconBtn(refreshing ? 'Refreshing…' : `Refresh ${result.symbol} prediction`, refreshing ? '⏳' : '↻', handleRefresh, refreshing)}
-        </div>
+        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, border: `1px solid ${badgeColor}`, color: badgeColor, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+          {badgeLabel}
+        </span>
+      </div>
+      {/* Row 2: action buttons */}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        {iconBtn(`Open ${result.symbol} chart`, '📈', (e) => { e.stopPropagation(); onSymbolClick?.(result.symbol); }, false)}
+        {iconBtn(refreshing ? 'Refreshing…' : `Refresh ${result.symbol} prediction`, refreshing ? '⏳' : '↻', handleRefresh, refreshing)}
+        {iconBtn(`Delete ${result.symbol} prediction`, '🗑', (e) => { e.stopPropagation(); onDelete?.(); }, false)}
       </div>
 
       {isSuccess && (
@@ -378,8 +450,10 @@ function PredictionCard({ result, onSymbolClick }) {
         <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>{result.errorMessage}</div>
       )}
 
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-        {new Date(result.computedAt).toLocaleString()}
+      <div style={{ fontSize: 11, color: isExpired ? '#b45309' : 'var(--text-muted)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+        {refreshing
+          ? 'Updating…'
+          : `${parseUtc(result.computedAt).toLocaleString()} · ${ageLabel(result.computedAt)}`}
       </div>
     </div>
   );

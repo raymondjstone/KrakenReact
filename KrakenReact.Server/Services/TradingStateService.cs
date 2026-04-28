@@ -266,8 +266,9 @@ public class TradingStateService
     // ML prediction settings
     public string PredictionSymbols { get; set; } = "XBT/USD,ETH/USD,SOL/USD";
     public string PredictionInterval { get; set; } = "OneHour";
-    public string PredictionMode { get; set; } = "specific";   // "specific" | "all"
+    public string PredictionMode { get; set; } = "specific";   // "specific" | "all" | "existing"
     public string PredictionCurrency { get; set; } = "USD";    // quote currency when mode="all"
+    public int PredictionAutoRefreshIntervalMinutes { get; set; } = 15;
 
     // Order book state
     public static readonly int[] ValidBookDepths = { 10, 25, 100, 500, 1000 };
@@ -751,6 +752,10 @@ public class TradingStateService
 
         var predCurrency = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionCurrency");
         PredictionCurrency = predCurrency?.Value ?? "USD";
+
+        var predAutoRefresh = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionAutoRefreshIntervalMinutes");
+        PredictionAutoRefreshIntervalMinutes = predAutoRefresh != null && int.TryParse(predAutoRefresh.Value, out var mins) && mins >= 5
+            ? mins : 15;
     }
 
     /// <summary>Ensures required settings exist in DB for databases created before new settings were added</summary>
@@ -774,6 +779,7 @@ public class TradingStateService
             ["PredictionMode"] = ("specific", "Prediction symbol mode: 'specific' (list) or 'all' (all active pairs for a currency)"),
             ["PredictionCurrency"] = ("USD", "Quote currency to use when PredictionMode is 'all'"),
             ["PredictionJobTime"] = ("05:00", "Daily ML prediction job time (HH:MM, 24-hour)"),
+            ["PredictionAutoRefreshIntervalMinutes"] = ("15", "How often (minutes) the stale-prediction auto-refresh job runs (minimum 5)"),
         };
 
         var changed = false;

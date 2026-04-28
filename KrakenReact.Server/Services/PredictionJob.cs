@@ -55,7 +55,7 @@ public class PredictionJob
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
-        var symbols  = GetSymbols();
+        var symbols  = await GetSymbolsAsync(ct);
         var interval = GetInterval();
         var intervalStr = interval.ToString();
 
@@ -298,7 +298,7 @@ public class PredictionJob
 
     // ── Settings helpers ──────────────────────────────────────────────────────
 
-    private List<string> GetSymbols()
+    private async Task<List<string>> GetSymbolsAsync(CancellationToken ct = default)
     {
         if (_state.PredictionMode == "all")
         {
@@ -309,6 +309,16 @@ public class PredictionJob
                 .Select(s => s.WebsocketName)
                 .OrderBy(s => s)
                 .ToList();
+        }
+
+        if (_state.PredictionMode == "existing")
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            return await db.PredictionResults
+                .AsNoTracking()
+                .Select(r => r.Symbol)
+                .OrderBy(r => r)
+                .ToListAsync(ct);
         }
 
         var raw = _state.PredictionSymbols;

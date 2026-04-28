@@ -48,6 +48,21 @@ public class PredictionController : ControllerBase
         return Ok(new { message = $"Prediction enqueued for {symbol}" });
     }
 
+    /// <summary>DELETE /api/predictions?symbol=XBT/USD — remove a prediction result</summary>
+    [HttpDelete]
+    public async Task<IActionResult> DeletePrediction([FromQuery] string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+            return BadRequest(new { message = "symbol is required" });
+
+        var existing = await _db.PredictionResults.FindAsync(symbol);
+        if (existing == null) return NotFound();
+
+        _db.PredictionResults.Remove(existing);
+        await _db.SaveChangesAsync();
+        return NoContent();
+    }
+
     /// <summary>GET /api/predictions/settings — current prediction config</summary>
     [HttpGet("settings")]
     public IActionResult GetSettings()
