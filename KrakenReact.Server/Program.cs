@@ -46,6 +46,7 @@ builder.Services.AddHangfireServer();
 builder.Services.AddTransient<DailyPriceRefreshJob>();
 builder.Services.AddTransient<PredictionJob>();
 builder.Services.AddTransient<StalePredictionRefreshJob>();
+builder.Services.AddTransient<PortfolioSnapshotJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -172,6 +173,14 @@ app.Lifetime.ApplicationStarted.Register(() =>
             predCron,
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
         Log.Information("[Hangfire] ML prediction job scheduled at {Time} (cron: {Cron})", predTimeSetting?.Value ?? "05:00", predCron);
+
+        // Schedule nightly portfolio snapshot at 23:55 local time
+        manager.AddOrUpdate<PortfolioSnapshotJob>(
+            "portfolio-snapshot",
+            job => job.ExecuteAsync(),
+            "55 23 * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+        Log.Information("[Hangfire] Portfolio snapshot scheduled at 23:55");
 
         // Schedule stale-prediction auto-refresh job
         var autoRefreshSetting = db.AppSettings.FirstOrDefault(s => s.Key == "PredictionAutoRefreshIntervalMinutes");

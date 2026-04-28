@@ -141,6 +141,11 @@ public class DailyPriceRefreshJob
             newAssets.Add(b.Asset);
             var latestPrice = _state.LatestPrice(b.Asset);
             var price = latestPrice?.Close ?? 0;
+
+            // Preserve last-known price if the live lookup returns nothing
+            if (price == 0 && _state.Balances.TryGetValue(b.Asset, out var prevBal) && prevBal.LatestPrice > 0)
+                price = prevBal.LatestPrice;
+
             var valueUsd = Math.Round(b.Total * price, 2);
             var valueGbp = usdGbpRate > 0 ? Math.Round(valueUsd * usdGbpRate, 2) : 0;
 

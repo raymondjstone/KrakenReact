@@ -113,6 +113,7 @@ export default function Watchlist({ tickers, heldAssets, selectedSymbol, onSelec
               <div className="watchlist-symbol">
                 {t.displaySymbol || t.symbol}
                 {isHeld && <span style={{ marginLeft: 4, fontSize: 9, color: 'var(--yellow)', verticalAlign: 'middle' }}>*</span>}
+                {t.priceOutdated && <span style={{ marginLeft: 4, fontSize: 9, color: 'var(--red)', verticalAlign: 'middle' }} title="Price data is stale">⚠</span>}
               </div>
               <div className="watchlist-price">{formatPrice(t.closePrice)}</div>
               <div className={`watchlist-change ${change >= 0 ? 'positive' : 'negative'}`}>

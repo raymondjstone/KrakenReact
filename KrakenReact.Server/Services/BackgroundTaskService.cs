@@ -116,6 +116,7 @@ public class BackgroundTaskService : BackgroundService
         // Phase 4: Start periodic timers
         _ = Task.Run(async () => { try { await OrderRefreshLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] OrderRefreshLoop crashed"); } }, stoppingToken);
         _ = Task.Run(async () => { try { await TransactionRefreshLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] TransactionRefreshLoop crashed"); } }, stoppingToken);
+        _ = Task.Run(async () => { try { await PriceAlertLoop(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] PriceAlertLoop crashed"); } }, stoppingToken);
         try { await Task.Delay(Timeout.Infinite, stoppingToken); }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -390,6 +391,12 @@ public class BackgroundTaskService : BackgroundService
             newAssets.Add(b.Asset);
             var latestPrice = _state.LatestPrice(b.Asset);
             var price = latestPrice?.Close ?? 0;
+
+            // If the live lookup returned nothing (e.g. klines not loaded yet at startup),
+            // preserve the last-known price so significant holdings don't temporarily vanish.
+            if (price == 0 && _state.Balances.TryGetValue(b.Asset, out var prevBal) && prevBal.LatestPrice > 0)
+                price = prevBal.LatestPrice;
+
             var valueUsd = Math.Round(b.Total * price, 2);
             var valueGbp = usdGbpRate > 0 ? Math.Round(valueUsd * usdGbpRate, 2) : 0;
 
@@ -474,5 +481,52 @@ public class BackgroundTaskService : BackgroundService
             try { await RefreshTransactions(); } catch (Exception ex) { _logger.LogError(ex, "[BG] Transaction refresh error"); }
         }
     }
+
+    private async Task PriceAlertLoop(CancellationToken ct)
+    {
+        // Wait 2 minutes after startup before first check so prices are loaded
+        await Task.Delay(TimeSpan.FromMinutes(2), ct);
+
+        while (!ct.IsCancellationRequested)
+        {
+            try { await CheckPriceAlerts(ct); }
+            catch (Exception ex) { _logger.LogError(ex, "[BG] PriceAlertLoop error"); }
+            await Task.Delay(TimeSpan.FromMinutes(1), ct);
+        }
+    }
+
+    private async Task CheckPriceAlerts(CancellationToken ct)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var activeAlerts = await db.PriceAlerts
+            .Where(a => a.Active)
+            .ToListAsync(ct);
+        if (!activeAlerts.Any()) return;
+
+        foreach (var alert in activeAlerts)
+        {
+            if (!_state.Prices.TryGetValue(alert.Symbol, out var priceItem)) continue;
+            var latestPrice = priceItem.LatestKline?.Close;
+            if (latestPrice == null || latestPrice == 0) continue;
+
+            bool triggered = alert.Direction == "below"
+                ? latestPrice <= alert.TargetPrice
+                : latestPrice >= alert.TargetPrice;
+
+            if (!triggered) continue;
+
+            alert.Active = false;
+            alert.TriggeredAt = DateTime.UtcNow;
+
+            var dir = alert.Direction == "below" ? "dropped below" : "rose above";
+            var title = $"Price alert: {alert.Symbol}";
+            var text = $"{alert.Symbol} {dir} ${alert.TargetPrice:F4} (current: ${latestPrice:F4}){(string.IsNullOrEmpty(alert.Note) ? "" : $" — {alert.Note}")}";
+            await _notify.Pushover(title, text, Altairis.Pushover.Client.MessageSound.Falling);
+            _logger.LogInformation("[PriceAlert] {Symbol} alert triggered at {Price}", alert.Symbol, latestPrice);
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
 
 }

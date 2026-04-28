@@ -16,6 +16,10 @@ public class KrakenDbContext : DbContext
     public DbSet<AppSettings> AppSettings { get; set; }
     public DbSet<AssetNormalization> AssetNormalizations { get; set; }
     public DbSet<PredictionResult> PredictionResults { get; set; }
+    public DbSet<PortfolioSnapshot> PortfolioSnapshots { get; set; }
+    public DbSet<AlertLog> AlertLogs { get; set; }
+    public DbSet<PriceAlert> PriceAlerts { get; set; }
+    public DbSet<PredictionHistory> PredictionHistories { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 
@@ -96,11 +100,31 @@ public class KrakenDbContext : DbContext
         modelBuilder.Entity<PredictionResult>(entity =>
         {
             entity.HasKey(e => e.Symbol);
-            // SQLite loses DateTimeKind on round-trip; restore it so JSON serialises with 'Z'
             entity.Property(e => e.ComputedAt)
                   .HasConversion(
                       v => v,
                       v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+        });
+        modelBuilder.Entity<PortfolioSnapshot>(entity =>
+        {
+            entity.HasKey(e => e.Date);
+            entity.Property(e => e.TotalUsd).HasColumnType("decimal(38,2)");
+            entity.Property(e => e.TotalGbp).HasColumnType("decimal(38,2)");
+        });
+        modelBuilder.Entity<AlertLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+        });
+        modelBuilder.Entity<PriceAlert>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TargetPrice).HasColumnType("decimal(38,9)");
+        });
+        modelBuilder.Entity<PredictionHistory>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Symbol);
+            entity.HasIndex(e => new { e.Symbol, e.ComputedAt });
         });
     }
 }

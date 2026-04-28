@@ -67,7 +67,8 @@ public class PricesController : ControllerBase
                 AverageBuyPrice = avgBuyPrice,
                 PriceLowerThanBuy = avgBuyPrice > 0 && avgBuyPrice >= (latest?.Close ?? 0) && p.KrakenNewPricesLoadedEver,
                 BestBid = p.TickerData?.BestBidPrice,
-                BestAsk = p.TickerData?.BestAskPrice
+                BestAsk = p.TickerData?.BestAskPrice,
+                PriceOutdated = p.PriceOutdated,
             };
         }).ToList();
         return Ok(prices);

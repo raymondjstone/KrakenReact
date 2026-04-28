@@ -114,7 +114,6 @@ export default function PredictionPage({ onSymbolClick }) {
       case 'auc':
         return arr.sort((a, b) => (b.modelAuc ?? 0) - (a.modelAuc ?? 0));
       case 'direction':
-        // UP first, then sort by probability within each group
         return arr.sort((a, b) => {
           if (a.predictedUp !== b.predictedUp) return a.predictedUp ? -1 : 1;
           return (b.probability ?? 0) - (a.probability ?? 0);
@@ -126,7 +125,7 @@ export default function PredictionPage({ onSymbolClick }) {
           const sr = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
           return sr !== 0 ? sr : a.symbol.localeCompare(b.symbol);
         });
-      default: // 'symbol'
+      default:
         return arr.sort((a, b) => a.symbol.localeCompare(b.symbol));
     }
   }, [results, sortBy]);
@@ -282,7 +281,7 @@ export default function PredictionPage({ onSymbolClick }) {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 20 }}>
         {sortedResults.map(r => (
           <PredictionCard
             key={r.symbol}
@@ -301,18 +300,19 @@ export default function PredictionPage({ onSymbolClick }) {
       <div style={{ marginTop: 32, padding: 16, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
         <strong style={{ color: 'var(--text-primary)' }}>How it works</strong>
         <br />
-        Fetches OHLCV kline data from Kraken and computes technical indicators plus regime/context features such as BTC trend, BTC volatility, volume percentile, and time-of-week seasonality.
-        Predictions are generated for 1, 3, and 6 candles ahead. Two models are trained on the most recent 70% of data and evaluated on the remaining 30% — strictly chronological, no data leakage.
-        The FastTree card also shows rolling walk-forward validation so you can compare one hold-out split with repeated forward-only checks.
-        The gradient-boosted model (FastTree) generates the directional prediction; logistic regression is shown for comparison.
-        Accuracy above ~55% in a noisy market is genuinely useful — the benchmark columns show context for what random-chance looks like for each asset.
+        Fetches OHLCV kline data from Kraken and computes 23 technical features: RSI, MACD, ATR, Bollinger Bands,
+        volume percentile, OBV, ADX(14), ROC(10), VWAP ratio, time-of-week seasonality, and BTC market context (zeroed for XBT/USD itself).
+        Predictions are generated for 1, 3, and 6 candles ahead.
+        Two models (FastTree gradient boosted trees and logistic regression) are evaluated on a strict 70/30 chronological split
+        plus walk-forward cross-validation — both models are assessed in each fold.
+        A consensus signal shows when multiple horizons agree on direction.
+        Accuracy above ~55% in a noisy market is genuinely useful — the benchmark columns show what random-chance looks like for each asset.
       </div>
     </div>
   );
 }
 
-// Parse a server DateTime string as UTC regardless of whether the 'Z' suffix is present.
-// SQLite round-trips strip DateTimeKind so older rows may lack the suffix.
+// Parse a server DateTime string as UTC regardless of whether the 'Z' suffix is present
 function parseUtc(s) {
   if (!s) return new Date(0);
   return new Date(/[Zz]|[+-]\d{2}:\d{2}$/.test(s) ? s : s + 'Z');
@@ -329,13 +329,13 @@ function ageLabel(computedAt) {
 
 function intervalToMs(interval) {
   switch (interval) {
-    case 'OneMinute': return 60_000;
-    case 'FiveMinutes': return 5 * 60_000;
+    case 'OneMinute':      return 60_000;
+    case 'FiveMinutes':    return 5  * 60_000;
     case 'FifteenMinutes': return 15 * 60_000;
-    case 'ThirtyMinutes': return 30 * 60_000;
-    case 'FourHour': return 4 * 60 * 60_000;
-    case 'OneDay': return 24 * 60 * 60_000;
-    default: return 60 * 60_000;
+    case 'ThirtyMinutes':  return 30 * 60_000;
+    case 'FourHour':       return 4  * 60 * 60_000;
+    case 'OneDay':         return 24 * 60 * 60_000;
+    default:               return 60 * 60_000;
   }
 }
 
@@ -348,37 +348,14 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const [, forceAge] = useState(0);
   const pollRef = useRef(null);
   const originalComputedAtRef = useRef(null);
+
   const isSuccess = result.status === 'success';
   const hasError  = result.status === 'error';
-  // Clear expired state immediately when a refresh is in flight
   const isExpired = !refreshing && (Date.now() - parseUtc(result.computedAt)) > predictionExpiryMs(result.interval, 1);
-  const pct = v => `${(v * 100).toFixed(1)}%`;
+  const pct = v => `${((v ?? 0) * 100).toFixed(1)}%`;
   const intervalLabel = INTERVAL_LABELS[result.interval] || result.interval;
-  const horizonRows = [
-    {
-      label: '1c',
-      predictedUp: result.predictedUp,
-      probability: result.probability,
-      holdoutAccuracy: result.modelAccuracy,
-      walkForwardAccuracy: result.walkForwardAccuracy,
-    },
-    {
-      label: '3c',
-      predictedUp: result.predictedUp3,
-      probability: result.probability3,
-      holdoutAccuracy: result.modelAccuracy3,
-      walkForwardAccuracy: result.walkForwardAccuracy3,
-    },
-    {
-      label: '6c',
-      predictedUp: result.predictedUp6,
-      probability: result.probability6,
-      holdoutAccuracy: result.modelAccuracy6,
-      walkForwardAccuracy: result.walkForwardAccuracy6,
-    },
-  ];
 
-  // Re-render every minute so the age label and expired flag stay current
+  // Re-render every minute so age label and expired flag stay current
   useEffect(() => {
     const t = setInterval(() => forceAge(n => n + 1), 60000);
     return () => clearInterval(t);
@@ -390,7 +367,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const badgeColor = refreshing ? 'var(--text-muted)' : isExpired ? '#b45309'
     : isSuccess ? 'var(--green)' : hasError ? 'var(--red)' : 'var(--text-muted)';
 
-  // Detect when the parent re-fetches and this card's computedAt changes
+  // Detect when the parent re-fetches and this card's computedAt changes (stops polling)
   useEffect(() => {
     if (refreshing && originalComputedAtRef.current && result.computedAt !== originalComputedAtRef.current) {
       clearInterval(pollRef.current);
@@ -407,9 +384,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
     setRefreshing(true);
     api.post(`/predictions/trigger/single?symbol=${encodeURIComponent(result.symbol)}`)
       .then(() => {
-        // Poll fetchResults every 3s until computedAt changes (effect above stops the interval)
         pollRef.current = setInterval(() => onRefreshDone?.(), 3000);
-        // Safety stop after 2 minutes
         setTimeout(() => {
           if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
           setRefreshing(false);
@@ -436,6 +411,15 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
     </button>
   );
 
+  // Consensus: count how many horizons agree on the majority direction
+  const horizonDirections = isSuccess ? [result.predictedUp, result.predictedUp3, result.predictedUp6] : [];
+  const upVotes   = horizonDirections.filter(Boolean).length;
+  const downVotes = horizonDirections.length - upVotes;
+  const consensusDir   = upVotes >= downVotes ? 'UP' : 'DOWN';
+  const consensusCount = Math.max(upVotes, downVotes);
+  const consensusTotal = horizonDirections.length;
+  const consensusStrong = consensusCount === consensusTotal; // all 3 agree
+
   return (
     <div
       style={{
@@ -460,6 +444,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
 
       {isSuccess && (
         <>
+          {/* Main direction + confidence */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
             <div style={{ fontSize: 34, fontWeight: 700, color: result.predictedUp ? 'var(--green)' : 'var(--red)', lineHeight: 1 }}>
               {result.predictedUp ? '↑ UP' : '↓ DOWN'}
@@ -472,45 +457,65 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
 
           <ProbBar value={result.probability} isUp={result.predictedUp} />
 
+          {/* Consensus badge */}
+          {consensusTotal > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                fontSize: 11, padding: '3px 10px', borderRadius: 10,
+                border: `1px solid ${consensusStrong ? (consensusDir === 'UP' ? 'var(--green)' : 'var(--red)') : '#d97706'}`,
+                color: consensusStrong ? (consensusDir === 'UP' ? 'var(--green)' : 'var(--red)') : '#d97706',
+                fontWeight: 600, letterSpacing: '0.04em',
+              }}>
+                {consensusCount}/{consensusTotal} horizons → {consensusDir}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                {consensusStrong ? 'strong consensus' : 'partial consensus'}
+              </span>
+            </div>
+          )}
+
+          {/* Per-horizon boxes */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-            {horizonRows.map(h => (
+            {[
+              { label: '1c', up: result.predictedUp,  prob: result.probability,  acc: result.modelAccuracy,  wfAcc: result.walkForwardAccuracy,  auc: result.modelAuc,  wfAuc: result.walkForwardAuc,  lrAcc: result.logRegAccuracy,  wfLrAcc: result.walkForwardLogRegAccuracy,  wfLrAuc: result.walkForwardLogRegAuc  },
+              { label: '3c', up: result.predictedUp3, prob: result.probability3, acc: result.modelAccuracy3, wfAcc: result.walkForwardAccuracy3, auc: result.modelAuc3, wfAuc: result.walkForwardAuc3, lrAcc: result.logRegAccuracy3, wfLrAcc: result.walkForwardLogRegAccuracy3, wfLrAuc: result.walkForwardLogRegAuc3 },
+              { label: '6c', up: result.predictedUp6, prob: result.probability6, acc: result.modelAccuracy6, wfAcc: result.walkForwardAccuracy6, auc: result.modelAuc6, wfAuc: result.walkForwardAuc6, lrAcc: result.logRegAccuracy6, wfLrAcc: result.walkForwardLogRegAccuracy6, wfLrAuc: result.walkForwardLogRegAuc6 },
+            ].map(h => (
               <div
                 key={h.label}
                 style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  padding: '10px 8px',
-                  background: 'var(--bg-primary)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 4,
-                  alignItems: 'center',
+                  border: `1px solid ${h.up ? 'color-mix(in srgb, var(--green) 30%, var(--border))' : 'color-mix(in srgb, var(--red) 30%, var(--border))'}`,
+                  borderRadius: 8, padding: '10px 8px', background: 'var(--bg-primary)',
+                  display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'center',
                 }}>
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h.label}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: h.predictedUp ? 'var(--green)' : 'var(--red)' }}>
-                  {h.predictedUp ? 'UP' : 'DOWN'}
+                <div style={{ fontSize: 15, fontWeight: 700, color: h.up ? 'var(--green)' : 'var(--red)' }}>
+                  {h.up ? '↑ UP' : '↓ DOWN'}
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{pct(h.probability ?? 0)}</div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center' }}>
-                  acc {pct(h.holdoutAccuracy ?? 0)} / wf {pct(h.walkForwardAccuracy ?? 0)}
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{pct(h.prob)}</div>
+                <div style={{ width: '100%', height: 3, borderRadius: 2, background: 'var(--border)', overflow: 'hidden', margin: '2px 0' }}>
+                  <div style={{ height: '100%', width: `${Math.round((h.prob ?? 0) * 100)}%`, background: h.up ? 'var(--green)' : 'var(--red)', borderRadius: 2 }} />
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.4 }}>
+                  <div>FT acc {pct(h.acc)} · AUC {(h.auc ?? 0).toFixed(3)}</div>
+                  <div>WF acc {pct(h.wfAcc)} · AUC {(h.wfAuc ?? 0).toFixed(3)}</div>
+                  <div style={{ color: accuracyColor(h.lrAcc ?? 0) }}>LR {pct(h.lrAcc)} · WF {pct(h.wfLrAcc)}</div>
                 </div>
               </div>
             ))}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 0', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-            <MetricRow label="1c Hold-out AUC" value={result.modelAuc.toFixed(3)} accent={aucColor(result.modelAuc)} />
-            <MetricRow label="3c Hold-out AUC" value={(result.modelAuc3 ?? 0).toFixed(3)} accent={aucColor(result.modelAuc3 ?? 0)} />
-            <MetricRow label="1c Walk-forward AUC" value={(result.walkForwardAuc ?? 0).toFixed(3)} accent={aucColor(result.walkForwardAuc ?? 0)} />
-            <MetricRow label="6c Hold-out AUC" value={(result.modelAuc6 ?? 0).toFixed(3)} accent={aucColor(result.modelAuc6 ?? 0)} />
-            <MetricRow label="1c LogReg acc" value={pct(result.logRegAccuracy)} accent={accuracyColor(result.logRegAccuracy)} />
-            <MetricRow label="WF folds" value={String(result.walkForwardFoldCount ?? 0)} />
+          {/* Confidence trend sparkline */}
+          <ConfidenceSparkline symbol={result.symbol} currentProb={result.probability} currentUp={result.predictedUp} />
+
+          {/* Benchmarks + summary stats */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 0', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
             <MetricRow label="1c Buy & Hold" value={pct(result.benchmarkBuyHold)} />
             <MetricRow label="1c SMA crossover" value={pct(result.benchmarkSma)} />
-          </div>
-
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            {intervalLabel} candles &middot; {result.trainSamples} train / {result.testSamples} test / {result.totalCandles} total
+            <MetricRow label="3c Buy & Hold" value={pct(result.benchmarkBuyHold3)} />
+            <MetricRow label="6c Buy & Hold" value={pct(result.benchmarkBuyHold6)} />
+            <MetricRow label="WF folds" value={String(result.walkForwardFoldCount ?? 0)} />
+            <MetricRow label="Candles" value={`${result.trainSamples}tr / ${result.testSamples}te / ${result.totalCandles}`} />
           </div>
         </>
       )}
@@ -529,7 +534,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
 }
 
 function ProbBar({ value, isUp }) {
-  const pct = Math.round(value * 100);
+  const pct = Math.round((value ?? 0) * 100);
   return (
     <div style={{ height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden' }}>
       <div style={{ height: '100%', width: `${pct}%`, background: isUp ? 'var(--green)' : 'var(--red)', borderRadius: 3, transition: 'width 0.4s' }} />
@@ -552,8 +557,43 @@ function accuracyColor(acc) {
   return 'var(--red)';
 }
 
-function aucColor(auc) {
-  if (auc >= 0.60) return 'var(--green)';
-  if (auc >= 0.52) return '#f59e0b';
-  return 'var(--red)';
+function ConfidenceSparkline({ symbol, currentProb, currentUp }) {
+  const [history, setHistory] = useState(null);
+
+  useEffect(() => {
+    api.get(`/predictions/history/${encodeURIComponent(symbol)}?limit=20`)
+      .then(r => setHistory(r.data || []))
+      .catch(() => setHistory([]));
+  }, [symbol]);
+
+  if (!history || history.length < 2) return null;
+
+  const W = 100, H = 30, PAD = 2;
+  const probs = history.map(h => h.probability);
+  const minP = Math.min(...probs, 0.4);
+  const maxP = Math.max(...probs, 0.7);
+  const range = maxP - minP || 0.1;
+  const pts = probs.map((p, i) => {
+    const x = PAD + (i / (probs.length - 1)) * (W - PAD * 2);
+    const y = PAD + (1 - (p - minP) / range) * (H - PAD * 2);
+    return `${x},${y}`;
+  }).join(' ');
+
+  const trend = probs[probs.length - 1] >= probs[0] ? 'var(--green)' : 'var(--red)';
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>
+        Confidence trend · last {history.length} runs
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: 30, display: 'block' }}>
+        {history.map((h, i) => {
+          const x = PAD + (i / (probs.length - 1)) * (W - PAD * 2);
+          const y = PAD + (1 - (h.probability - minP) / range) * (H - PAD * 2);
+          return <circle key={i} cx={x} cy={y} r={1.2} fill={h.predictedUp ? 'var(--green)' : 'var(--red)'} vectorEffect="non-scaling-stroke" />;
+        })}
+        <polyline points={pts} fill="none" stroke={trend} strokeWidth="1" strokeDasharray="2,1" vectorEffect="non-scaling-stroke" />
+      </svg>
+    </div>
+  );
 }

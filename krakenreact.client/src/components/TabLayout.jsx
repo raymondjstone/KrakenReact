@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import Dashboard from './Dashboard';
+import AlertCentre from './AlertCentre';
 import InfoPage from '../pages/InfoPage';
 import BalancesPage from '../pages/BalancesPage';
 import AutoTradePage from '../pages/AutoTradePage';
@@ -11,6 +12,7 @@ import ChartPage from '../pages/ChartPage';
 import DelistedPairsPage from '../pages/DelistedPairsPage';
 import SettingsPage, { loadSettings, saveSettings } from '../pages/SettingsPage';
 import PredictionPage from '../pages/PredictionPage';
+import PriceAlertsPage from '../pages/PriceAlertsPage';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
@@ -33,6 +35,7 @@ const fixedTabs = [
   { id: 'ledger', label: 'Ledger' },
   { id: 'delisted', label: 'Delisted Pairs' },
   { id: 'predictions', label: 'Predictions' },
+  { id: 'pricealerts', label: 'Price Alerts' },
 ];
 
 export default function TabLayout({ totalValue, totalValueGbp }) {
@@ -178,6 +181,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
               {statusText}
             </div>
           )}
+          <AlertCentre />
           <button className="settings-btn" onClick={toggleTheme} title="Toggle light/dark mode">
             {isDark ? '\u2600' : '\u263E'}
           </button>
@@ -214,6 +218,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'delisted' && <DelistedPairsPage />}
         {chartTabs.find(t => t.id === activeTab) && <ChartPage symbol={activeTab} displaySymbol={chartTabs.find(t => t.id === activeTab)?.label} />}
         {activeTab === 'predictions' && <PredictionPage onSymbolClick={openChart} />}
+        {activeTab === 'pricealerts' && <PriceAlertsPage />}
         {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>
 

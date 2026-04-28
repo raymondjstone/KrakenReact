@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
 import OrderDialog from '../components/OrderDialog';
+import PortfolioHistoryChart from '../components/PortfolioHistoryChart';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -17,6 +18,9 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
   const [symbols, setSymbols] = useState([]);
   const [orderDialogOpen, setOrderDialogOpen] = useState(false);
   const [orderBalanceCtx, setOrderBalanceCtx] = useState(null);
+  const [periodPl, setPeriodPl] = useState({});
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyData, setHistoryData] = useState([]);
   const { gridTheme } = useTheme();
 
   const updateFromBalances = (balances) => {
@@ -33,6 +37,13 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     };
     loadBalances();
     api.get('/symbols').then(r => { if (!disposed) setSymbols(r.data.map(s => s.websocketName)); }).catch(() => {});
+    api.get('/balances/period-pl').then(r => {
+      if (!disposed) {
+        const map = {};
+        (r.data || []).forEach(p => { map[p.asset] = p; });
+        setPeriodPl(map);
+      }
+    }).catch(() => {});
 
     const refreshInterval = setInterval(loadBalances, 60000);
 
@@ -60,11 +71,34 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
 
   const loadOrders = () => api.get('/orders').then(() => {}).catch(() => {});
 
+  const loadHistory = useCallback(() => {
+    api.get('/portfolio/history?days=30')
+      .then(r => setHistoryData(r.data || []))
+      .catch(() => {});
+  }, []);
+
+  const handleToggleHistory = () => {
+    if (!showHistory && historyData.length === 0) loadHistory();
+    setShowHistory(v => !v);
+  };
+
   const columnDefs = useMemo(() => [
     { headerName: '', flex: 0, width: 65, cellRenderer: p => {
       if (!p.data || FIAT_ASSETS.has(p.data.asset)) return null;
       return <button onClick={() => openBalanceOrder(p.data)} style={{ padding: '2px 6px', fontSize: 10, cursor: 'pointer', fontWeight: 600 }}>Order</button>;
     }},
+    { headerName: '1d%', minWidth: 80,
+      valueGetter: p => periodPl[p.data?.asset]?.pl1d ?? null,
+      valueFormatter: p => p.value != null ? (p.value >= 0 ? '+' : '') + Number(p.value).toFixed(1) + '%' : '',
+      cellStyle: p => p.value > 0 ? { color: 'var(--green)' } : p.value < 0 ? { color: 'var(--red)' } : {} },
+    { headerName: '7d%', minWidth: 80,
+      valueGetter: p => periodPl[p.data?.asset]?.pl7d ?? null,
+      valueFormatter: p => p.value != null ? (p.value >= 0 ? '+' : '') + Number(p.value).toFixed(1) + '%' : '',
+      cellStyle: p => p.value > 0 ? { color: 'var(--green)' } : p.value < 0 ? { color: 'var(--red)' } : {} },
+    { headerName: '30d%', minWidth: 80,
+      valueGetter: p => periodPl[p.data?.asset]?.pl30d ?? null,
+      valueFormatter: p => p.value != null ? (p.value >= 0 ? '+' : '') + Number(p.value).toFixed(1) + '%' : '',
+      cellStyle: p => p.value > 0 ? { color: 'var(--green)' } : p.value < 0 ? { color: 'var(--red)' } : {} },
     { field: 'asset', headerName: 'Asset', minWidth: 100 },
     { field: 'total', headerName: 'Total', minWidth: 120, valueFormatter: p => Number(p.value).toFixed(4) },
     { field: 'locked', headerName: 'Locked', minWidth: 120, valueFormatter: p => Number(p.value).toFixed(4) },
@@ -73,7 +107,7 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     { field: 'latestValue', headerName: 'Value ($)', minWidth: 110, sort: 'desc',
       valueFormatter: p => Number(p.value).toFixed(2) },
     { field: 'latestValueGbp', headerName: 'Value (£)', minWidth: 110,
-      valueFormatter: p => p.value ? '\u00A3' + Number(p.value).toFixed(2) : '' },
+      valueFormatter: p => p.value ? '£' + Number(p.value).toFixed(2) : '' },
     { field: 'totalCostBasis', headerName: 'Cost Basis', minWidth: 110,
       valueFormatter: p => p.value != null ? '$' + Number(p.value).toFixed(2) : '' },
     { field: 'totalFees', headerName: 'Fees', minWidth: 90,
@@ -96,22 +130,39 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     { field: 'orderUncoveredValue', headerName: 'Uncvrd $', minWidth: 100,
       valueFormatter: p => p.value != null ? Number(p.value).toFixed(2) : '',
       cellStyle: p => p.value > 0 ? { color: 'var(--yellow)' } : {} },
-  ], []);
+  ], [periodPl]);
 
   const defaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '8px 16px', background: 'var(--bg-secondary)', color: 'var(--green)', fontWeight: 'bold', fontSize: 16, borderBottom: '1px solid var(--border)' }}>
-        Total Portfolio Value: ${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-        {totalGbp > 0 && (
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85em', marginLeft: 8 }}>
-            ({'\u00A3'}{totalGbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
-          </span>
-        )}
+      <div style={{ padding: '8px 16px', background: 'var(--bg-secondary)', color: 'var(--green)', fontWeight: 'bold', fontSize: 16, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 16 }}>
+        <span>
+          Total Portfolio Value: ${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+          {totalGbp > 0 && (
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.85em', marginLeft: 8 }}>
+              ('£'{totalGbp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+            </span>
+          )}
+        </span>
+        <button
+          onClick={handleToggleHistory}
+          style={{ marginLeft: 'auto', padding: '3px 10px', fontSize: 12, background: showHistory ? 'var(--green)' : 'var(--bg-input)', color: showHistory ? 'white' : 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontWeight: 500 }}
+        >
+          {showHistory ? 'Hide Chart' : '30d Chart'}
+        </button>
       </div>
+      {showHistory && (
+        <div style={{ height: 160, flexShrink: 0, borderBottom: '1px solid var(--border)', padding: '8px 16px', background: 'var(--bg-card)' }}>
+          <PortfolioHistoryChart data={historyData} />
+        </div>
+      )}
       <div style={{ flex: 1 }}>
-        <AgGridReact theme={gridTheme} rowData={hideAlmostZeroBalances ? rowData.filter(b => b.total >= 0.0001 && (b.latestValue || 0) >= 0.01) : rowData} columnDefs={columnDefs} defaultColDef={defaultColDef} />
+        <AgGridReact theme={gridTheme} rowData={hideAlmostZeroBalances ? rowData.filter(b => {
+            if ((b.total || 0) < 0.0001) return false;
+            if (!b.latestPrice || b.latestPrice === 0) return true;
+            return (b.latestValue || 0) >= 0.01;
+          }) : rowData} columnDefs={columnDefs} defaultColDef={defaultColDef} />
       </div>
       <OrderDialog
         isOpen={orderDialogOpen}

@@ -33,4 +33,5 @@ public class PriceDto
     public bool PriceLowerThanBuy { get; set; }
     public decimal? BestBid { get; set; }
     public decimal? BestAsk { get; set; }
+    public bool PriceOutdated { get; set; }
 }

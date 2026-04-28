@@ -75,6 +75,9 @@ public static class AutoMigrationService
                 Log.Information("[AutoMigration] Database schema is up to date");
             }
 
+            // Always attempt to create new feature tables (idempotent IF NOT EXISTS)
+            CreateNewFeatureTables(db);
+
             // Apply performance optimizations (idempotent)
             ApplyPerformanceOptimizations(db);
         }
@@ -213,6 +216,73 @@ public static class AutoMigrationService
         }
     }
 
+    private static void CreateNewFeatureTables(KrakenDbContext db)
+    {
+        try
+        {
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PortfolioSnapshots')
+                BEGIN
+                    CREATE TABLE [PortfolioSnapshots] (
+                        [Date]     datetime2 NOT NULL,
+                        [TotalUsd] decimal(38,2) NOT NULL DEFAULT 0,
+                        [TotalGbp] decimal(38,2) NOT NULL DEFAULT 0,
+                        CONSTRAINT [PK_PortfolioSnapshots] PRIMARY KEY ([Date])
+                    )
+                END
+
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AlertLogs')
+                BEGIN
+                    CREATE TABLE [AlertLogs] (
+                        [Id]        int IDENTITY(1,1) NOT NULL,
+                        [Title]     nvarchar(max) NOT NULL DEFAULT '',
+                        [Text]      nvarchar(max) NOT NULL DEFAULT '',
+                        [Type]      nvarchar(50) NOT NULL DEFAULT 'info',
+                        [CreatedAt] datetime2 NOT NULL,
+                        CONSTRAINT [PK_AlertLogs] PRIMARY KEY ([Id])
+                    )
+                END
+
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PriceAlerts')
+                BEGIN
+                    CREATE TABLE [PriceAlerts] (
+                        [Id]          int IDENTITY(1,1) NOT NULL,
+                        [Symbol]      nvarchar(100) NOT NULL DEFAULT '',
+                        [TargetPrice] decimal(38,9) NOT NULL DEFAULT 0,
+                        [Direction]   nvarchar(10) NOT NULL DEFAULT 'above',
+                        [Active]      bit NOT NULL DEFAULT 1,
+                        [TriggeredAt] datetime2 NULL,
+                        [Note]        nvarchar(max) NOT NULL DEFAULT '',
+                        [CreatedAt]   datetime2 NOT NULL,
+                        CONSTRAINT [PK_PriceAlerts] PRIMARY KEY ([Id])
+                    )
+                END
+
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PredictionHistories')
+                BEGIN
+                    CREATE TABLE [PredictionHistories] (
+                        [Id]                  int IDENTITY(1,1) NOT NULL,
+                        [Symbol]              nvarchar(100) NOT NULL DEFAULT '',
+                        [ComputedAt]          datetime2 NOT NULL,
+                        [PredictedUp]         bit NOT NULL DEFAULT 0,
+                        [Probability]         real NOT NULL DEFAULT 0,
+                        [ModelAccuracy]       real NOT NULL DEFAULT 0,
+                        [WalkForwardAccuracy] real NOT NULL DEFAULT 0,
+                        [Interval]            nvarchar(50) NOT NULL DEFAULT '',
+                        CONSTRAINT [PK_PredictionHistories] PRIMARY KEY ([Id])
+                    )
+                    CREATE INDEX [IX_PredictionHistories_Symbol] ON [PredictionHistories] ([Symbol])
+                    CREATE INDEX [IX_PredictionHistories_Symbol_ComputedAt] ON [PredictionHistories] ([Symbol], [ComputedAt])
+                END
+            ");
+            Log.Information("[AutoMigration] New feature tables ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create new feature tables");
+        }
+    }
+
     private static void EnsurePredictionResultColumns(KrakenDbContext db)
     {
         try
@@ -276,6 +346,19 @@ public static class AutoMigrationService
                     ALTER TABLE [PredictionResults] ADD [TrainSamples6] int NOT NULL CONSTRAINT [DF_PredictionResults_TrainSamples6] DEFAULT 0;
                 IF COL_LENGTH('PredictionResults', 'TestSamples6') IS NULL
                     ALTER TABLE [PredictionResults] ADD [TestSamples6] int NOT NULL CONSTRAINT [DF_PredictionResults_TestSamples6] DEFAULT 0;
+
+                IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAccuracy') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAccuracy] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAccuracy] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAuc') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAuc] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAuc] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAccuracy3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAccuracy3] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAccuracy3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAuc3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAuc3] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAuc3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAccuracy6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAccuracy6] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAccuracy6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAuc6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAuc6] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAuc6] DEFAULT 0;
             ");
         }
         catch (Exception ex)

@@ -44,6 +44,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
   );
   const [loading, setLoading] = useState(true);
   const [noData, setNoData] = useState(false);
+  const [orderSummary, setOrderSummary] = useState({ buys: [], sells: [] });
 
   const changeInterval = (iv) => {
     setInterval_(iv);
@@ -95,6 +96,12 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
             orderLinesRef.current.push(line);
           } catch { /* ignore draw error */ }
         });
+        if (!disposed) {
+          setOrderSummary({
+            buys: openOrders.filter(o => o.side === 'Buy'),
+            sells: openOrders.filter(o => o.side === 'Sell'),
+          });
+        }
       }).catch(() => {});
     }
 
@@ -296,7 +303,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
 
   return (
     <div style={{ height: '100%', background: 'var(--bg-primary)', padding: 8, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexShrink: 0, flexWrap: 'wrap' }}>
         <span style={{ color: 'var(--yellow)', fontSize: 14, fontWeight: 600 }}>
           {displaySymbol || symbol}
         </span>
@@ -315,6 +322,21 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
             </button>
           ))}
         </div>
+        {(orderSummary.buys.length > 0 || orderSummary.sells.length > 0) && (
+          <div style={{ display: 'flex', gap: 6, marginLeft: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Orders:</span>
+            {orderSummary.buys.length > 0 && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#0ecb81', padding: '1px 6px', background: 'rgba(14,203,129,0.1)', borderRadius: 3, border: '1px solid rgba(14,203,129,0.3)' }}>
+                {orderSummary.buys.length} buy{orderSummary.buys.length !== 1 ? 's' : ''}
+              </span>
+            )}
+            {orderSummary.sells.length > 0 && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#f6465d', padding: '1px 6px', background: 'rgba(246,70,93,0.1)', borderRadius: 3, border: '1px solid rgba(246,70,93,0.3)' }}>
+                {orderSummary.sells.length} sell{orderSummary.sells.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />

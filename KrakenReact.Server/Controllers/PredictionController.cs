@@ -63,6 +63,21 @@ public class PredictionController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>GET /api/predictions/history/{symbol} — last N historical snapshots</summary>
+    [HttpGet("history/{symbol}")]
+    public async Task<IActionResult> GetHistory(string symbol, [FromQuery] int limit = 30)
+    {
+        symbol = Uri.UnescapeDataString(symbol);
+        limit = Math.Clamp(limit, 1, 200);
+        var history = await _db.PredictionHistories
+            .Where(h => h.Symbol == symbol)
+            .OrderByDescending(h => h.ComputedAt)
+            .Take(limit)
+            .Select(h => new { h.ComputedAt, h.PredictedUp, h.Probability, h.ModelAccuracy, h.WalkForwardAccuracy, h.Interval })
+            .ToListAsync();
+        return Ok(history);
+    }
+
     /// <summary>GET /api/predictions/settings — current prediction config</summary>
     [HttpGet("settings")]
     public IActionResult GetSettings()

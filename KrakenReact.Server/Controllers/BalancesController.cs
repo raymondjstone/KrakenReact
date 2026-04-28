@@ -201,6 +201,47 @@ public class BalancesController : ControllerBase
         }
     }
 
+    /// <summary>GET /api/balances/period-pl — P/L for each held asset over 1d, 7d, 30d</summary>
+    [HttpGet("period-pl")]
+    public ActionResult GetPeriodPl()
+    {
+        var result = new List<object>();
+        var balances = _state.Balances.Values.Where(b => b.Total > 0 && b.LatestPrice > 0).ToList();
+        var fiat = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "USD", "USDT", "USDC", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF" };
+
+        foreach (var bal in balances)
+        {
+            if (fiat.Contains(bal.Asset)) continue;
+            if (!_state.Prices.TryGetValue(bal.Asset + "/USD", out var priceItem))
+            {
+                // Try via symbols lookup
+                priceItem = _state.Prices.Values.FirstOrDefault(p =>
+                    TradingStateService.NormalizeAsset(p.Base) == bal.Asset && p.CCY is "USD" or "ZUSD");
+            }
+            if (priceItem == null) continue;
+
+            var klines = priceItem.GetKlineSnapshot()
+                .Where(k => k.Interval == "OneDay")
+                .OrderByDescending(k => k.OpenTime)
+                .ToList();
+
+            decimal? price1d = klines.Skip(1).FirstOrDefault()?.Close;
+            decimal? price7d = klines.Skip(7).FirstOrDefault()?.Close;
+            decimal? price30d = klines.Skip(30).FirstOrDefault()?.Close;
+            var current = bal.LatestPrice;
+
+            result.Add(new
+            {
+                asset  = bal.Asset,
+                pl1d   = price1d > 0 ? Math.Round((current - price1d.Value) / price1d.Value * 100, 2) : (decimal?)null,
+                pl7d   = price7d > 0 ? Math.Round((current - price7d.Value) / price7d.Value * 100, 2) : (decimal?)null,
+                pl30d  = price30d > 0 ? Math.Round((current - price30d.Value) / price30d.Value * 100, 2) : (decimal?)null,
+            });
+        }
+
+        return Ok(result);
+    }
+
     private static string GetQuoteCurrency(string symbol)
     {
         if (string.IsNullOrEmpty(symbol)) return "USD";
