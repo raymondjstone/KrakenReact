@@ -37,6 +37,17 @@ public class PredictionController : ControllerBase
         return Ok(new { message = "Prediction job enqueued" });
     }
 
+    /// <summary>POST /api/predictions/trigger/single?symbol=XBT/USD — enqueue for one symbol</summary>
+    [HttpPost("trigger/single")]
+    public IActionResult TriggerSingle([FromQuery] string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+            return BadRequest(new { message = "symbol is required" });
+
+        _backgroundJobClient.Enqueue<PredictionJob>(j => j.ExecuteSingleAsync(symbol, CancellationToken.None));
+        return Ok(new { message = $"Prediction enqueued for {symbol}" });
+    }
+
     /// <summary>GET /api/predictions/settings — current prediction config</summary>
     [HttpGet("settings")]
     public IActionResult GetSettings()

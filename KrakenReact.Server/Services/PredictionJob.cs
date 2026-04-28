@@ -34,6 +34,24 @@ public class PredictionJob
         _logger = logger;
     }
 
+    public async Task ExecuteSingleAsync(string symbol, CancellationToken ct = default)
+    {
+        var interval = GetInterval();
+        var intervalStr = interval.ToString();
+        _logger.LogInformation("[Predict] Single-symbol job starting — {Symbol} @ {Interval}", symbol, intervalStr);
+        try
+        {
+            var result = await ProcessSymbolAsync(symbol, interval, intervalStr, ct);
+            await UpsertResultAsync(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Predict] Error processing {Symbol}", symbol);
+        }
+        try { await _hub.Clients.All.SendAsync("PredictionsUpdated", ct); }
+        catch { /* non-critical */ }
+    }
+
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task ExecuteAsync(CancellationToken ct = default)
     {

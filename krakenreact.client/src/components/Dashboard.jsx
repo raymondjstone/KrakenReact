@@ -460,6 +460,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
               onClick={selectSymbol}
               onRemove={onUnpin}
               onOrder={openTickerOrder}
+              onPredict={(symbol) => api.post(`/predictions/trigger/single?symbol=${encodeURIComponent(symbol)}`)}
             />
           ))}
           {tempPinned.map(t => (
@@ -470,6 +471,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
               onClick={selectSymbol}
               tempPinned
               onOrder={openTickerOrder}
+              onPredict={(symbol) => api.post(`/predictions/trigger/single?symbol=${encodeURIComponent(symbol)}`)}
             />
           ))}
         </div>

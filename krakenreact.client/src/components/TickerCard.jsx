@@ -1,8 +1,16 @@
+import { useState } from 'react';
 import { formatPrice } from '../utils/formatters';
 
-export default function TickerCard({ data, selected, onClick, onRemove, onOrder, tempPinned }) {
+export default function TickerCard({ data, selected, onClick, onRemove, onOrder, onPredict, tempPinned }) {
+  const [predicting, setPredicting] = useState(false);
   const change = data.closePriceMovement ?? 0;
   const isPositive = change >= 0;
+
+  const handlePredict = (e) => {
+    e.stopPropagation();
+    setPredicting(true);
+    onPredict(data.symbol).finally(() => setPredicting(false));
+  };
 
   return (
     <div
@@ -12,6 +20,15 @@ export default function TickerCard({ data, selected, onClick, onRemove, onOrder,
       <div className="ticker-symbol">
         {data.displaySymbol || data.symbol}
         <span className="ticker-actions">
+          {onPredict && (
+            <button
+              className="ticker-order"
+              onClick={handlePredict}
+              disabled={predicting}
+              title={predicting ? 'Generating prediction…' : 'Generate ML prediction'}
+              style={{ opacity: predicting ? 0.5 : 1 }}
+            >{predicting ? '⏳' : '⚡'}</button>
+          )}
           {onOrder && (
             <button
               className="ticker-order"

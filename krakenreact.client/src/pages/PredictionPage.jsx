@@ -294,7 +294,7 @@ export default function PredictionPage({ onSymbolClick }) {
 }
 
 function PredictionCard({ result, onSymbolClick }) {
-  const [hovered, setHovered] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const isSuccess = result.status === 'success';
   const hasError  = result.status === 'error';
   const pct = v => `${(v * 100).toFixed(1)}%`;
@@ -303,23 +303,47 @@ function PredictionCard({ result, onSymbolClick }) {
   const statusColor = isSuccess ? 'var(--green)' : hasError ? 'var(--red)' : 'var(--text-muted)';
   const statusLabel = isSuccess ? 'success' : hasError ? 'error' : 'insufficient data';
 
+  const handleRefresh = (e) => {
+    e.stopPropagation();
+    setRefreshing(true);
+    api.post(`/predictions/trigger/single?symbol=${encodeURIComponent(result.symbol)}`)
+      .finally(() => setRefreshing(false));
+  };
+
+  const iconBtn = (title, content, onClick, disabled) => (
+    <button
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        background: 'none', border: '1px solid var(--border)', borderRadius: 4,
+        color: 'var(--text-muted)', cursor: disabled ? 'default' : 'pointer',
+        padding: '2px 6px', fontSize: 14, lineHeight: 1.4, opacity: disabled ? 0.5 : 1,
+        transition: 'color 0.15s, border-color 0.15s',
+      }}
+      onMouseEnter={e => { if (!disabled) { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--text-primary)'; } }}
+      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border)'; }}
+    >
+      {content}
+    </button>
+  );
+
   return (
     <div
-      onClick={() => onSymbolClick?.(result.symbol)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      title={`Open ${result.symbol} chart`}
       style={{
-        background: hovered ? 'var(--bg-hover, var(--bg-card))' : 'var(--bg-card)',
-        border: `1px solid ${hovered ? 'var(--green)' : 'var(--border)'}`,
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border)',
         borderRadius: 8, padding: 20, display: 'flex', flexDirection: 'column', gap: 14,
-        cursor: 'pointer', transition: 'border-color 0.15s',
       }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <span style={{ fontWeight: 700, fontSize: 20, color: 'var(--text-primary)' }}>{result.symbol}</span>
-        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, border: `1px solid ${statusColor}`, color: statusColor, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          {statusLabel}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, border: `1px solid ${statusColor}`, color: statusColor, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            {statusLabel}
+          </span>
+          {iconBtn(`Open ${result.symbol} chart`, '📈', (e) => { e.stopPropagation(); onSymbolClick?.(result.symbol); }, false)}
+          {iconBtn(refreshing ? 'Refreshing…' : `Refresh ${result.symbol} prediction`, refreshing ? '⏳' : '↻', handleRefresh, refreshing)}
+        </div>
       </div>
 
       {isSuccess && (
