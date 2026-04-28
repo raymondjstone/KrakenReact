@@ -88,7 +88,7 @@ public class KrakenWebSocketV1Service : BackgroundService
                 catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error processing message"); }
             });
 
-            _socket.Start();
+            await _socket.Start();
 
             // Start ping timer
             _pingTimer = new System.Timers.Timer(60000);

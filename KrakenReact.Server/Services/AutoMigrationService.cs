@@ -129,9 +129,36 @@ public static class AutoMigrationService
                     [Probability]      real NOT NULL DEFAULT 0,
                     [ModelAccuracy]    real NOT NULL DEFAULT 0,
                     [ModelAuc]         real NOT NULL DEFAULT 0,
+                    [WalkForwardAccuracy] real NOT NULL DEFAULT 0,
+                    [WalkForwardAuc]      real NOT NULL DEFAULT 0,
+                    [WalkForwardFoldCount] int NOT NULL DEFAULT 0,
                     [LogRegAccuracy]   real NOT NULL DEFAULT 0,
                     [BenchmarkBuyHold] real NOT NULL DEFAULT 0,
                     [BenchmarkSma]     real NOT NULL DEFAULT 0,
+                    [PredictedUp3]      bit NOT NULL DEFAULT 0,
+                    [Probability3]      real NOT NULL DEFAULT 0,
+                    [ModelAccuracy3]    real NOT NULL DEFAULT 0,
+                    [ModelAuc3]         real NOT NULL DEFAULT 0,
+                    [WalkForwardAccuracy3] real NOT NULL DEFAULT 0,
+                    [WalkForwardAuc3]      real NOT NULL DEFAULT 0,
+                    [WalkForwardFoldCount3] int NOT NULL DEFAULT 0,
+                    [LogRegAccuracy3]   real NOT NULL DEFAULT 0,
+                    [BenchmarkBuyHold3] real NOT NULL DEFAULT 0,
+                    [BenchmarkSma3]     real NOT NULL DEFAULT 0,
+                    [TrainSamples3]     int NOT NULL DEFAULT 0,
+                    [TestSamples3]      int NOT NULL DEFAULT 0,
+                    [PredictedUp6]      bit NOT NULL DEFAULT 0,
+                    [Probability6]      real NOT NULL DEFAULT 0,
+                    [ModelAccuracy6]    real NOT NULL DEFAULT 0,
+                    [ModelAuc6]         real NOT NULL DEFAULT 0,
+                    [WalkForwardAccuracy6] real NOT NULL DEFAULT 0,
+                    [WalkForwardAuc6]      real NOT NULL DEFAULT 0,
+                    [WalkForwardFoldCount6] int NOT NULL DEFAULT 0,
+                    [LogRegAccuracy6]   real NOT NULL DEFAULT 0,
+                    [BenchmarkBuyHold6] real NOT NULL DEFAULT 0,
+                    [BenchmarkSma6]     real NOT NULL DEFAULT 0,
+                    [TrainSamples6]     int NOT NULL DEFAULT 0,
+                    [TestSamples6]      int NOT NULL DEFAULT 0,
                     [TrainSamples]     int NOT NULL DEFAULT 0,
                     [TestSamples]      int NOT NULL DEFAULT 0,
                     [TotalCandles]     int NOT NULL DEFAULT 0,
@@ -149,11 +176,15 @@ public static class AutoMigrationService
     /// </summary>
     private static void ApplyPerformanceOptimizations(KrakenDbContext db)
     {
+        EnsurePredictionResultColumns(db);
+
         try
         {
             // Enable forced parameterization to improve query plan caching
             var dbName = db.Database.GetDbConnection().Database;
-            db.Database.ExecuteSqlRaw($"ALTER DATABASE [{dbName}] SET PARAMETERIZATION FORCED");
+#pragma warning disable EF1003
+            db.Database.ExecuteSqlRaw("ALTER DATABASE " + QuoteSqlIdentifier(dbName) + " SET PARAMETERIZATION FORCED");
+#pragma warning restore EF1003
             Log.Information("[AutoMigration] Forced parameterization enabled");
         }
         catch (Exception ex)
@@ -180,5 +211,84 @@ public static class AutoMigrationService
         {
             Log.Warning(ex, "[AutoMigration] Could not create DerivedKlines index");
         }
+    }
+
+    private static void EnsurePredictionResultColumns(KrakenDbContext db)
+    {
+        try
+        {
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('PredictionResults', 'WalkForwardAccuracy') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardAccuracy] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardAccuracy] DEFAULT 0;
+
+                IF COL_LENGTH('PredictionResults', 'WalkForwardAuc') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardAuc] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardAuc] DEFAULT 0;
+
+                IF COL_LENGTH('PredictionResults', 'WalkForwardFoldCount') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardFoldCount] int NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardFoldCount] DEFAULT 0;
+
+                IF COL_LENGTH('PredictionResults', 'PredictedUp3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [PredictedUp3] bit NOT NULL CONSTRAINT [DF_PredictionResults_PredictedUp3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'Probability3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [Probability3] real NOT NULL CONSTRAINT [DF_PredictionResults_Probability3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'ModelAccuracy3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [ModelAccuracy3] real NOT NULL CONSTRAINT [DF_PredictionResults_ModelAccuracy3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'ModelAuc3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [ModelAuc3] real NOT NULL CONSTRAINT [DF_PredictionResults_ModelAuc3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardAccuracy3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardAccuracy3] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardAccuracy3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardAuc3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardAuc3] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardAuc3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardFoldCount3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardFoldCount3] int NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardFoldCount3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'LogRegAccuracy3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [LogRegAccuracy3] real NOT NULL CONSTRAINT [DF_PredictionResults_LogRegAccuracy3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'BenchmarkBuyHold3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [BenchmarkBuyHold3] real NOT NULL CONSTRAINT [DF_PredictionResults_BenchmarkBuyHold3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'BenchmarkSma3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [BenchmarkSma3] real NOT NULL CONSTRAINT [DF_PredictionResults_BenchmarkSma3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'TrainSamples3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [TrainSamples3] int NOT NULL CONSTRAINT [DF_PredictionResults_TrainSamples3] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'TestSamples3') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [TestSamples3] int NOT NULL CONSTRAINT [DF_PredictionResults_TestSamples3] DEFAULT 0;
+
+                IF COL_LENGTH('PredictionResults', 'PredictedUp6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [PredictedUp6] bit NOT NULL CONSTRAINT [DF_PredictionResults_PredictedUp6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'Probability6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [Probability6] real NOT NULL CONSTRAINT [DF_PredictionResults_Probability6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'ModelAccuracy6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [ModelAccuracy6] real NOT NULL CONSTRAINT [DF_PredictionResults_ModelAccuracy6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'ModelAuc6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [ModelAuc6] real NOT NULL CONSTRAINT [DF_PredictionResults_ModelAuc6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardAccuracy6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardAccuracy6] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardAccuracy6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardAuc6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardAuc6] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardAuc6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'WalkForwardFoldCount6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [WalkForwardFoldCount6] int NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardFoldCount6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'LogRegAccuracy6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [LogRegAccuracy6] real NOT NULL CONSTRAINT [DF_PredictionResults_LogRegAccuracy6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'BenchmarkBuyHold6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [BenchmarkBuyHold6] real NOT NULL CONSTRAINT [DF_PredictionResults_BenchmarkBuyHold6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'BenchmarkSma6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [BenchmarkSma6] real NOT NULL CONSTRAINT [DF_PredictionResults_BenchmarkSma6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'TrainSamples6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [TrainSamples6] int NOT NULL CONSTRAINT [DF_PredictionResults_TrainSamples6] DEFAULT 0;
+                IF COL_LENGTH('PredictionResults', 'TestSamples6') IS NULL
+                    ALTER TABLE [PredictionResults] ADD [TestSamples6] int NOT NULL CONSTRAINT [DF_PredictionResults_TestSamples6] DEFAULT 0;
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure PredictionResults walk-forward columns");
+        }
+    }
+
+    private static string QuoteSqlIdentifier(string identifier)
+    {
+        if (string.IsNullOrWhiteSpace(identifier))
+            throw new ArgumentException("Identifier cannot be empty.", nameof(identifier));
+
+        return "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
     }
 }

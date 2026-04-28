@@ -301,8 +301,9 @@ export default function PredictionPage({ onSymbolClick }) {
       <div style={{ marginTop: 32, padding: 16, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
         <strong style={{ color: 'var(--text-primary)' }}>How it works</strong>
         <br />
-        Fetches OHLCV kline data from Kraken and computes technical indicators (RSI, MACD, ATR, Bollinger Bands, volume signals).
-        Two models are trained on the most recent 70% of data and evaluated on the remaining 30% — strictly chronological, no data leakage.
+        Fetches OHLCV kline data from Kraken and computes technical indicators plus regime/context features such as BTC trend, BTC volatility, volume percentile, and time-of-week seasonality.
+        Predictions are generated for 1, 3, and 6 candles ahead. Two models are trained on the most recent 70% of data and evaluated on the remaining 30% — strictly chronological, no data leakage.
+        The FastTree card also shows rolling walk-forward validation so you can compare one hold-out split with repeated forward-only checks.
         The gradient-boosted model (FastTree) generates the directional prediction; logistic regression is shown for comparison.
         Accuracy above ~55% in a noisy market is genuinely useful — the benchmark columns show context for what random-chance looks like for each asset.
       </div>
@@ -326,6 +327,22 @@ function ageLabel(computedAt) {
   return rem > 0 ? `${hrs}h ${rem}m ago` : `${hrs}h ago`;
 }
 
+function intervalToMs(interval) {
+  switch (interval) {
+    case 'OneMinute': return 60_000;
+    case 'FiveMinutes': return 5 * 60_000;
+    case 'FifteenMinutes': return 15 * 60_000;
+    case 'ThirtyMinutes': return 30 * 60_000;
+    case 'FourHour': return 4 * 60 * 60_000;
+    case 'OneDay': return 24 * 60 * 60_000;
+    default: return 60 * 60_000;
+  }
+}
+
+function predictionExpiryMs(interval, horizonCandles = 1) {
+  return intervalToMs(interval) * horizonCandles * 2;
+}
+
 function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const [refreshing, setRefreshing] = useState(false);
   const [, forceAge] = useState(0);
@@ -334,9 +351,32 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const isSuccess = result.status === 'success';
   const hasError  = result.status === 'error';
   // Clear expired state immediately when a refresh is in flight
-  const isExpired = !refreshing && (Date.now() - parseUtc(result.computedAt)) > 3_600_000;
+  const isExpired = !refreshing && (Date.now() - parseUtc(result.computedAt)) > predictionExpiryMs(result.interval, 1);
   const pct = v => `${(v * 100).toFixed(1)}%`;
   const intervalLabel = INTERVAL_LABELS[result.interval] || result.interval;
+  const horizonRows = [
+    {
+      label: '1c',
+      predictedUp: result.predictedUp,
+      probability: result.probability,
+      holdoutAccuracy: result.modelAccuracy,
+      walkForwardAccuracy: result.walkForwardAccuracy,
+    },
+    {
+      label: '3c',
+      predictedUp: result.predictedUp3,
+      probability: result.probability3,
+      holdoutAccuracy: result.modelAccuracy3,
+      walkForwardAccuracy: result.walkForwardAccuracy3,
+    },
+    {
+      label: '6c',
+      predictedUp: result.predictedUp6,
+      probability: result.probability6,
+      holdoutAccuracy: result.modelAccuracy6,
+      walkForwardAccuracy: result.walkForwardAccuracy6,
+    },
+  ];
 
   // Re-render every minute so the age label and expired flag stay current
   useEffect(() => {
@@ -432,12 +472,41 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
 
           <ProbBar value={result.probability} isUp={result.predictedUp} />
 
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+            {horizonRows.map(h => (
+              <div
+                key={h.label}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 8px',
+                  background: 'var(--bg-primary)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  alignItems: 'center',
+                }}>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h.label}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: h.predictedUp ? 'var(--green)' : 'var(--red)' }}>
+                  {h.predictedUp ? 'UP' : 'DOWN'}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{pct(h.probability ?? 0)}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center' }}>
+                  acc {pct(h.holdoutAccuracy ?? 0)} / wf {pct(h.walkForwardAccuracy ?? 0)}
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 0', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-            <MetricRow label="FastTree acc" value={pct(result.modelAccuracy)} accent={accuracyColor(result.modelAccuracy)} />
-            <MetricRow label="AUC-ROC" value={result.modelAuc.toFixed(3)} accent={aucColor(result.modelAuc)} />
-            <MetricRow label="LogReg acc" value={pct(result.logRegAccuracy)} accent={accuracyColor(result.logRegAccuracy)} />
-            <MetricRow label="Buy & Hold" value={pct(result.benchmarkBuyHold)} />
-            <MetricRow label="SMA crossover" value={pct(result.benchmarkSma)} />
+            <MetricRow label="1c Hold-out AUC" value={result.modelAuc.toFixed(3)} accent={aucColor(result.modelAuc)} />
+            <MetricRow label="3c Hold-out AUC" value={(result.modelAuc3 ?? 0).toFixed(3)} accent={aucColor(result.modelAuc3 ?? 0)} />
+            <MetricRow label="1c Walk-forward AUC" value={(result.walkForwardAuc ?? 0).toFixed(3)} accent={aucColor(result.walkForwardAuc ?? 0)} />
+            <MetricRow label="6c Hold-out AUC" value={(result.modelAuc6 ?? 0).toFixed(3)} accent={aucColor(result.modelAuc6 ?? 0)} />
+            <MetricRow label="1c LogReg acc" value={pct(result.logRegAccuracy)} accent={accuracyColor(result.logRegAccuracy)} />
+            <MetricRow label="WF folds" value={String(result.walkForwardFoldCount ?? 0)} />
+            <MetricRow label="1c Buy & Hold" value={pct(result.benchmarkBuyHold)} />
+            <MetricRow label="1c SMA crossover" value={pct(result.benchmarkSma)} />
           </div>
 
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>

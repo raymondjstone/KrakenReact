@@ -19,7 +19,6 @@ public class BackgroundTaskService : BackgroundService
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly IHubContext<TradingHub> _hub;
     private readonly ILogger<BackgroundTaskService> _logger;
-    private volatile bool _klinesDone = false;
     private bool _initialLedgerSeeded = false;
 
     public BackgroundTaskService(
@@ -129,7 +128,6 @@ public class BackgroundTaskService : BackgroundService
         try
         {
             await LoadKlines(ct);
-            _klinesDone = true;
 
             // Add prices for balance assets that may not have been in the symbol list
             foreach (var bal in _state.Balances.Values.Where(b => !b.Asset.Contains("USD")))

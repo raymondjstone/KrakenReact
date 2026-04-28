@@ -184,7 +184,7 @@ public class PricesController : ControllerBase
                 var r = await _kraken.FetchKlinesInternalDirect(c, KlineInterval.OneDay, DateTime.UtcNow.AddDays(-3));
                 apiResults[c] = r;
             }
-            catch (Exception ex) { apiResults[c] = -1; }
+            catch { apiResults[c] = -1; }
         }
 
         var cached = _state.ApiPairNameCache.TryGetValue(cleanSymbol, out var cachedVal) ? cachedVal : null;
