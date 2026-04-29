@@ -50,6 +50,7 @@ builder.Services.AddTransient<PortfolioSnapshotJob>();
 builder.Services.AddTransient<DcaJob>();
 builder.Services.AddTransient<StopLossTakeProfitJob>();
 builder.Services.AddTransient<DrawdownAlertJob>();
+builder.Services.AddTransient<MultiTfPredictionJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -69,6 +70,7 @@ builder.Services.AddHostedService<KrakenWebSocketV2Service>();
 // Controllers + SignalR
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
+builder.Services.AddHttpClient();
 
 // CORS for React dev server + production origins (configurable via "Cors:AllowedOrigins")
 var defaultOrigins = new[] { "http://localhost:5173", "http://localhost:3000", "https://awakethekraken", "http://awakethekraken" };

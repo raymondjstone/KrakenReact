@@ -294,6 +294,29 @@ public class PredictionController : ControllerBase
         });
     }
 
+    /// <summary>GET /api/predictions/multitf/{symbol} — multi-timeframe results for a symbol</summary>
+    [HttpGet("multitf/{symbol}")]
+    public async Task<IActionResult> GetMultiTf(string symbol)
+    {
+        symbol = Uri.UnescapeDataString(symbol);
+        var results = await _db.MultiTfPredictionResults
+            .Where(r => r.Symbol == symbol)
+            .AsNoTracking()
+            .ToListAsync();
+        return Ok(results);
+    }
+
+    /// <summary>POST /api/predictions/multitf/{symbol}/trigger — enqueue multi-tf job for a symbol</summary>
+    [HttpPost("multitf/{symbol}/trigger")]
+    public IActionResult TriggerMultiTf(string symbol)
+    {
+        symbol = Uri.UnescapeDataString(symbol);
+        if (string.IsNullOrWhiteSpace(symbol))
+            return BadRequest(new { message = "symbol is required" });
+        _backgroundJobClient.Enqueue<MultiTfPredictionJob>(j => j.ExecuteAsync(symbol, CancellationToken.None));
+        return Ok(new { message = $"Multi-TF prediction enqueued for {symbol}" });
+    }
+
     /// <summary>GET /api/predictions/settings — current prediction config</summary>
     [HttpGet("settings")]
     public IActionResult GetSettings()

@@ -544,7 +544,7 @@ public class PredictionJob
                   .ToList();
     }
 
-    private KlineInterval GetInterval() => _state.PredictionInterval switch
+    internal static KlineInterval ParseIntervalName(string name) => name switch
     {
         "OneMinute"      => KlineInterval.OneMinute,
         "FiveMinutes"    => KlineInterval.FiveMinutes,
@@ -554,6 +554,56 @@ public class PredictionJob
         "OneDay"         => KlineInterval.OneDay,
         _                => KlineInterval.OneHour,
     };
+
+    private KlineInterval GetInterval() => ParseIntervalName(_state.PredictionInterval ?? "OneHour");
+
+    /// <summary>Run prediction for a specific symbol + interval and store to MultiTfPredictionResults.</summary>
+    public async Task ExecuteMultiTfAsync(string symbol, string intervalName, CancellationToken ct = default)
+    {
+        var interval    = ParseIntervalName(intervalName);
+        var intervalStr = interval.ToString();
+        _logger.LogInformation("[MultiTf] Processing {Symbol} @ {Interval}", symbol, intervalStr);
+        try
+        {
+            var result = await ProcessSymbolAsync(symbol, interval, intervalStr, ct);
+            await UpsertMultiTfResultAsync(result, intervalName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MultiTf] Error processing {Symbol} @ {Interval}", symbol, intervalName);
+        }
+    }
+
+    private async Task UpsertMultiTfResultAsync(PredictionResult r, string overrideInterval)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var intervalKey = string.IsNullOrWhiteSpace(overrideInterval) ? r.Interval : overrideInterval;
+        var existing = await db.MultiTfPredictionResults.FindAsync(r.Symbol, intervalKey);
+        var entity = new Models.MultiTfPredictionResult
+        {
+            Symbol             = r.Symbol,
+            Interval           = intervalKey,
+            ComputedAt         = r.ComputedAt,
+            Status             = r.Status,
+            PredictedUp        = r.PredictedUp,
+            Probability        = r.Probability,
+            ModelAccuracy      = r.ModelAccuracy,
+            ModelAuc           = r.ModelAuc,
+            WalkForwardAccuracy = r.WalkForwardAccuracy,
+            WalkForwardAuc     = r.WalkForwardAuc,
+            PredictedUp3       = r.PredictedUp3,
+            Probability3       = r.Probability3,
+            PredictedUp6       = r.PredictedUp6,
+            Probability6       = r.Probability6,
+            TotalCandles       = r.TotalCandles,
+            ErrorMessage       = r.ErrorMessage,
+        };
+        if (existing == null)
+            db.MultiTfPredictionResults.Add(entity);
+        else
+            db.Entry(existing).CurrentValues.SetValues(entity);
+        await db.SaveChangesAsync();
+    }
 
     private static PredictionResult MakeResult(string symbol, string interval, string status,
         int totalCandles, int train, int test, string? error = null) => new()

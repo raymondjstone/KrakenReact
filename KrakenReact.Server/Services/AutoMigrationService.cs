@@ -289,6 +289,45 @@ public static class AutoMigrationService
                         CONSTRAINT [PK_DcaRules] PRIMARY KEY ([Id])
                     )
                 END
+
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ProfitLadderRules')
+                BEGIN
+                    CREATE TABLE [ProfitLadderRules] (
+                        [Id]               int IDENTITY(1,1) NOT NULL,
+                        [Symbol]           nvarchar(100) NOT NULL DEFAULT '',
+                        [TriggerPct]       decimal(38,2) NOT NULL DEFAULT 0,
+                        [SellPct]          decimal(38,2) NOT NULL DEFAULT 25,
+                        [Active]           bit NOT NULL DEFAULT 1,
+                        [CreatedAt]        datetime2 NOT NULL,
+                        [LastTriggeredAt]  datetime2 NULL,
+                        [LastResult]       nvarchar(max) NOT NULL DEFAULT '',
+                        [CooldownHours]    int NOT NULL DEFAULT 24,
+                        CONSTRAINT [PK_ProfitLadderRules] PRIMARY KEY ([Id])
+                    )
+                END
+
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'MultiTfPredictionResults')
+                BEGIN
+                    CREATE TABLE [MultiTfPredictionResults] (
+                        [Symbol]              nvarchar(450) NOT NULL,
+                        [Interval]            nvarchar(50) NOT NULL,
+                        [ComputedAt]          datetime2 NOT NULL,
+                        [Status]              nvarchar(50) NOT NULL DEFAULT '',
+                        [PredictedUp]         bit NOT NULL DEFAULT 0,
+                        [Probability]         real NOT NULL DEFAULT 0,
+                        [ModelAccuracy]       real NOT NULL DEFAULT 0,
+                        [ModelAuc]            real NOT NULL DEFAULT 0,
+                        [WalkForwardAccuracy] real NOT NULL DEFAULT 0,
+                        [WalkForwardAuc]      real NOT NULL DEFAULT 0,
+                        [PredictedUp3]        bit NOT NULL DEFAULT 0,
+                        [Probability3]        real NOT NULL DEFAULT 0,
+                        [PredictedUp6]        bit NOT NULL DEFAULT 0,
+                        [Probability6]        real NOT NULL DEFAULT 0,
+                        [TotalCandles]        int NOT NULL DEFAULT 0,
+                        [ErrorMessage]        nvarchar(max) NULL,
+                        CONSTRAINT [PK_MultiTfPredictionResults] PRIMARY KEY ([Symbol], [Interval])
+                    )
+                END
             ");
             Log.Information("[AutoMigration] New feature tables ensured");
         }

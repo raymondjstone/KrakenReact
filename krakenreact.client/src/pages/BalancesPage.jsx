@@ -22,6 +22,9 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
   const [atrData, setAtrData] = useState({});
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState([]);
+  const [ladderBalance, setLadderBalance] = useState(null);
+  const [ladderOrders, setLadderOrders] = useState([]);
+  const [serverSettings, setServerSettings] = useState(null);
   const { gridTheme } = useTheme();
 
   const updateFromBalances = (balances) => {
@@ -53,6 +56,7 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
       }
     }).catch(() => {});
 
+    api.get('/settings').then(r => { if (!disposed) setServerSettings(r.data); }).catch(() => {});
     const refreshInterval = setInterval(loadBalances, 60000);
 
     const conn = getConnection();
@@ -78,6 +82,18 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
   };
 
   const loadOrders = () => api.get('/orders').then(() => {}).catch(() => {});
+
+  const openLadder = (balance) => {
+    setLadderBalance(balance);
+    api.get('/orders').then(r => {
+      const assetBase = balance.asset.toUpperCase();
+      const relevant = (r.data || []).filter(o => {
+        const sym = (o.symbol || o.websocketName || '').toUpperCase().replace('/', '');
+        return sym.startsWith(assetBase) && (o.status === 'Open' || o.status === 'PartiallyFilled');
+      });
+      setLadderOrders(relevant);
+    }).catch(() => setLadderOrders([]));
+  };
 
   const loadHistory = useCallback(() => {
     api.get('/portfolio/history?days=30')
@@ -109,6 +125,10 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     { headerName: 'Close', flex: 0, width: 60, cellRenderer: p => {
       if (!p.data || FIAT_ASSETS.has(p.data.asset) || (p.data.available || 0) <= 0) return null;
       return <button onClick={() => handleClosePosition(p.data)} style={{ padding: '2px 6px', fontSize: 10, cursor: 'pointer', color: 'var(--red)', fontWeight: 600 }}>Close</button>;
+    }},
+    { headerName: 'Ladder', flex: 0, width: 70, cellRenderer: p => {
+      if (!p.data || FIAT_ASSETS.has(p.data.asset) || !p.data.latestPrice) return null;
+      return <button onClick={() => openLadder(p.data)} style={{ padding: '2px 6px', fontSize: 10, cursor: 'pointer', color: 'var(--text-secondary)', fontWeight: 600 }}>Ladder</button>;
     }},
     { headerName: '1d%', minWidth: 80,
       valueGetter: p => periodPl[p.data?.asset]?.pl1d ?? null,
@@ -196,7 +216,116 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
         onClose={(ok) => { setOrderDialogOpen(false); setOrderBalanceCtx(null); if (ok) loadOrders(); }}
         symbols={symbols}
         balanceContext={orderBalanceCtx}
+        priceOffsets={serverSettings?.orderPriceOffsets}
+        qtyPercentages={serverSettings?.orderQtyPercentages}
       />
+      {ladderBalance && (
+        <OrderLadderModal
+          balance={ladderBalance}
+          orders={ladderOrders}
+          serverSettings={serverSettings}
+          onClose={() => { setLadderBalance(null); setLadderOrders([]); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function OrderLadderModal({ balance, orders, serverSettings, onClose }) {
+  const price = balance.latestPrice || 0;
+  const costBasis = balance.totalCostBasis && balance.total > 0 ? balance.totalCostBasis / balance.total : null;
+  const slPct = serverSettings?.stopLossEnabled ? (serverSettings?.stopLossPct || 0) : null;
+  const tpPct = serverSettings?.takeProfitEnabled ? (serverSettings?.takeProfitPct || 0) : null;
+
+  const slPrice = costBasis && slPct ? costBasis * (1 - slPct / 100) : null;
+  const tpPrice = costBasis && tpPct ? costBasis * (1 + tpPct / 100) : null;
+
+  // Collect all price levels
+  const levels = [];
+  if (price) levels.push({ price, type: 'current', label: `Current: $${price.toLocaleString(undefined, { maximumFractionDigits: 4 })}`, color: '#3b82f6' });
+  if (costBasis) levels.push({ price: costBasis, type: 'cost', label: `Avg Cost: $${costBasis.toLocaleString(undefined, { maximumFractionDigits: 4 })}`, color: '#f59e0b' });
+  if (slPrice) levels.push({ price: slPrice, type: 'sl', label: `Stop Loss (-${slPct}%): $${slPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}`, color: '#ef4444' });
+  if (tpPrice) levels.push({ price: tpPrice, type: 'tp', label: `Take Profit (+${tpPct}%): $${tpPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}`, color: '#22c55e' });
+
+  orders.forEach(o => {
+    const op = Number(o.price || o.orderDetailsPrice || 0);
+    if (op > 0) {
+      const side = (o.side || '').toLowerCase();
+      levels.push({
+        price: op, type: 'order',
+        label: `${side === 'sell' ? 'Sell' : 'Buy'} Order: $${op.toLocaleString(undefined, { maximumFractionDigits: 4 })} (${Number(o.quantity || 0).toFixed(4)})`,
+        color: side === 'sell' ? '#ef4444' : '#22c55e',
+        dashed: true,
+      });
+    }
+  });
+
+  const allPrices = levels.map(l => l.price).filter(p => p > 0);
+  const minP = Math.min(...allPrices);
+  const maxP = Math.max(...allPrices);
+  const range = maxP - minP || maxP * 0.1;
+  const padded = range * 0.15;
+  const lo = minP - padded;
+  const hi = maxP + padded;
+  const totalRange = hi - lo;
+
+  const pctFromBottom = (p) => ((p - lo) / totalRange) * 100;
+
+  const barH = 400;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }} onClick={onClose}>
+      <div style={{ background: 'var(--dialog-bg, var(--bg-card))', borderRadius: 8, padding: 24, width: 480, border: '1px solid var(--border)', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+          <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 15 }}>{balance.asset} Order Ladder</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 16 }}>
+          {/* Vertical price bar */}
+          <div style={{ width: 80, position: 'relative', height: barH, flexShrink: 0 }}>
+            {/* Background bar */}
+            <div style={{ position: 'absolute', left: 36, top: 0, bottom: 0, width: 8, background: 'var(--bg-input)', borderRadius: 4 }} />
+
+            {levels.map((lvl, i) => {
+              const pct = pctFromBottom(lvl.price);
+              const top = barH - (pct / 100) * barH;
+              return (
+                <div key={i} style={{ position: 'absolute', left: 0, top: top - 1, right: 0 }}>
+                  <div style={{
+                    position: 'absolute', left: 30, width: 20, height: 2,
+                    background: lvl.color,
+                    borderTop: lvl.dashed ? `2px dashed ${lvl.color}` : undefined,
+                  }} />
+                  <div style={{
+                    position: 'absolute', left: 55, fontSize: 10, color: lvl.color,
+                    whiteSpace: 'nowrap', transform: 'translateY(-50%)', fontWeight: lvl.type === 'current' ? 700 : 400,
+                  }}>
+                    {lvl.type === 'current' ? '●' : lvl.type === 'cost' ? '◆' : lvl.type === 'sl' ? '▼' : lvl.type === 'tp' ? '▲' : '○'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Legend */}
+          <div style={{ flex: 1 }}>
+            {[...levels].sort((a, b) => b.price - a.price).map((lvl, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 13 }}>
+                <div style={{ width: 12, height: 12, borderRadius: 2, background: lvl.color, flexShrink: 0, border: lvl.dashed ? `2px dashed ${lvl.color}` : 'none' }} />
+                <span style={{ color: 'var(--text-primary)', fontWeight: lvl.type === 'current' ? 700 : 400 }}>{lvl.label}</span>
+              </div>
+            ))}
+            {costBasis && price && (
+              <div style={{ marginTop: 16, padding: '8px 12px', background: 'var(--bg-primary)', borderRadius: 4, fontSize: 12, color: 'var(--text-muted)' }}>
+                Change from cost: <strong style={{ color: price >= costBasis ? '#22c55e' : '#ef4444' }}>
+                  {price >= costBasis ? '+' : ''}{((price - costBasis) / costBasis * 100).toFixed(2)}%
+                </strong>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

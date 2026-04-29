@@ -351,6 +351,9 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const [kelly, setKelly] = useState(null);
   const [confidence, setConfidence] = useState(null);
   const [showConfidence, setShowConfidence] = useState(false);
+  const [multiTfData, setMultiTfData] = useState(null);
+  const [showMultiTf, setShowMultiTf] = useState(false);
+  const [multiTfRunning, setMultiTfRunning] = useState(false);
   const pollRef = useRef(null);
   const originalComputedAtRef = useRef(null);
 
@@ -403,6 +406,32 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   }, [result.computedAt, refreshing]);
 
   useEffect(() => () => clearInterval(pollRef.current), []);
+
+  const handleMultiTf = async (e) => {
+    e.stopPropagation();
+    // Fetch existing data first
+    try {
+      const r = await api.get(`/predictions/multitf/${encodeURIComponent(result.symbol)}`);
+      setMultiTfData(r.data || []);
+      setShowMultiTf(true);
+    } catch {}
+    // Trigger background job to refresh
+    if (!multiTfRunning) {
+      setMultiTfRunning(true);
+      api.post(`/predictions/multitf/${encodeURIComponent(result.symbol)}/trigger`)
+        .then(() => {
+          // Poll for updated data
+          const poll = setInterval(async () => {
+            try {
+              const r = await api.get(`/predictions/multitf/${encodeURIComponent(result.symbol)}`);
+              if (r.data?.length > 0) { setMultiTfData(r.data); }
+            } catch {}
+          }, 5000);
+          setTimeout(() => { clearInterval(poll); setMultiTfRunning(false); }, 300000);
+        })
+        .catch(() => setMultiTfRunning(false));
+    }
+  };
 
   const handleRefresh = (e) => {
     e.stopPropagation();
@@ -465,6 +494,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
         {iconBtn(`Open ${result.symbol} chart`, '📈', (e) => { e.stopPropagation(); onSymbolClick?.(result.symbol); }, false)}
         {iconBtn(refreshing ? 'Refreshing…' : `Refresh ${result.symbol} prediction`, refreshing ? '⏳' : '↻', handleRefresh, refreshing)}
+        {iconBtn(multiTfRunning ? 'Computing multi-TF…' : 'Multi-timeframe consensus', multiTfRunning ? '⏳' : 'TF', handleMultiTf, multiTfRunning)}
         {iconBtn(`Delete ${result.symbol} prediction`, '🗑', (e) => { e.stopPropagation(); onDelete?.(); }, false)}
       </div>
 
@@ -584,6 +614,60 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
               </div>
             ))}
           </div>
+
+          {/* Multi-timeframe consensus panel */}
+          {showMultiTf && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', background: 'var(--bg-primary)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Multi-Timeframe Consensus</span>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{multiTfRunning ? 'Computing…' : ''}</span>
+              </div>
+              {!multiTfData || multiTfData.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No multi-TF data yet — computing in background…</div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 6 }}>
+                  {multiTfData.sort((a, b) => {
+                    const order = { OneMinute: 0, FiveMinutes: 1, FifteenMinutes: 2, ThirtyMinutes: 3, OneHour: 4, FourHour: 5, OneDay: 6 };
+                    return (order[a.interval] ?? 9) - (order[b.interval] ?? 9);
+                  }).map(tf => {
+                    const tfLabel = INTERVAL_LABELS[tf.interval] || tf.interval;
+                    const isOk = tf.status === 'success';
+                    return (
+                      <div key={tf.interval} style={{
+                        textAlign: 'center', padding: '6px 4px', borderRadius: 4,
+                        border: `1px solid ${isOk ? (tf.predictedUp ? 'color-mix(in srgb, var(--green) 40%, var(--border))' : 'color-mix(in srgb, var(--red) 40%, var(--border))') : 'var(--border)'}`,
+                        background: 'var(--bg-card)',
+                      }}>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{tfLabel}</div>
+                        {isOk ? (
+                          <>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: tf.predictedUp ? 'var(--green)' : 'var(--red)' }}>
+                              {tf.predictedUp ? '↑' : '↓'}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{((tf.probability ?? 0) * 100).toFixed(0)}%</div>
+                          </>
+                        ) : (
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>—</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {multiTfData && multiTfData.filter(tf => tf.status === 'success').length >= 2 && (() => {
+                const ok = multiTfData.filter(tf => tf.status === 'success');
+                const ups = ok.filter(tf => tf.predictedUp).length;
+                const dns = ok.length - ups;
+                const majority = ups > dns ? 'UP' : ups < dns ? 'DOWN' : 'MIXED';
+                const color = majority === 'UP' ? 'var(--green)' : majority === 'DOWN' ? 'var(--red)' : '#f59e0b';
+                return (
+                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
+                    Consensus: <strong style={{ color }}>{majority}</strong> ({ups} up / {dns} down across {ok.length} timeframes)
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {/* Confidence trend sparkline */}
           <ConfidenceSparkline symbol={result.symbol} currentProb={result.probability} currentUp={result.predictedUp} />

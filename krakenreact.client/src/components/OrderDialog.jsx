@@ -11,13 +11,26 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const [quantity, setQuantity] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [riskUsd, setRiskUsd] = useState('');
+  const [atrData, setAtrData] = useState(null);
 
   const pOffsets = priceOffsets?.length ? priceOffsets : DEFAULT_PRICE_OFFSETS;
   const qPcts = qtyPercentages?.length ? qtyPercentages : DEFAULT_QTY_PERCENTAGES;
 
+  // Fetch ATR data when dialog opens for a known asset
+  useEffect(() => {
+    if (!isOpen) return;
+    api.get('/balances/atr').then(r => {
+      const map = {};
+      (r.data || []).forEach(a => { map[a.asset] = a; });
+      setAtrData(map);
+    }).catch(() => {});
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen) return;
     setError('');
+    setRiskUsd('');
     if (editOrder) {
       setSymbol(editOrder.symbol);
       setSide(editOrder.side);
@@ -48,6 +61,25 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const uncoveredQty = balanceContext?.uncoveredQty || 0;
   const usdAvailable = balanceContext?.usdAvailable || 0;
   const orderValue = price && quantity ? (Number(price) * Number(quantity)).toFixed(2) : '';
+
+  // Derive ATR info for the current symbol's base asset
+  const baseAsset = (() => {
+    const s = symbol || '';
+    const part = s.split('/')[0].split('USD')[0];
+    return part.replace(/^X/, '') || '';
+  })();
+  const atrInfo = atrData ? (atrData[baseAsset] || null) : null;
+  const atrPct = atrInfo?.atrPct || 0;
+
+  const applyRiskSizing = () => {
+    const risk = Number(riskUsd);
+    if (!risk || risk <= 0 || atrPct <= 0) return;
+    const usePrice = Number(price) || currentPrice;
+    if (!usePrice) return;
+    // qty = risk / (atrPct/100 * price) — 1 ATR move as the risk unit
+    const qty = Number((risk / (atrPct / 100 * usePrice)).toPrecision(8));
+    if (qty > 0) setQuantity(String(qty));
+  };
   const enteredPrice = Number(price) || 0;
 
   const applyPriceOffset = (pct) => {
@@ -210,6 +242,30 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
             </div>
             <input type="number" step="any" min="0" value={quantity} onChange={e => handleQtyChange(e.target.value)} style={inputStyle} />
           </div>
+
+          {/* ATR-based position sizing */}
+          {!editOrder && side === 'Buy' && atrPct > 0 && (
+            <div style={{ padding: '10px 12px', background: 'var(--bg-secondary, var(--bg-input))', borderRadius: 4, border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6, fontWeight: 600 }}>
+                ATR Position Sizing — 14-day ATR: {atrPct.toFixed(2)}% of price
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="number" step="any" min="0"
+                  placeholder="Risk $ amount"
+                  value={riskUsd}
+                  onChange={e => setRiskUsd(e.target.value)}
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button onClick={applyRiskSizing} style={{ padding: '7px 12px', background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 12, whiteSpace: 'nowrap' }}>
+                  Apply
+                </button>
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 4 }}>
+                Qty = Risk $ ÷ (ATR% × Price). If you risk $100 with ATR 2%, qty ≈ 100 / (0.02 × price).
+              </div>
+            </div>
+          )}
 
           {/* Order value */}
           {orderValue && (

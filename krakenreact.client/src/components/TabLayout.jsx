@@ -16,6 +16,10 @@ import PriceAlertsPage from '../pages/PriceAlertsPage';
 import AnalyticsPage from '../pages/AnalyticsPage';
 import DcaPage from '../pages/DcaPage';
 import HealthPage from '../pages/HealthPage';
+import StakingPage from '../pages/StakingPage';
+import RebalancePage from '../pages/RebalancePage';
+import FundingRatesPage from '../pages/FundingRatesPage';
+import ProfitLadderPage from '../pages/ProfitLadderPage';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
@@ -41,6 +45,10 @@ const fixedTabs = [
   { id: 'pricealerts', label: 'Price Alerts' },
   { id: 'analytics', label: 'Analytics' },
   { id: 'dca', label: 'DCA' },
+  { id: 'profitladder', label: 'Profit Ladder' },
+  { id: 'staking', label: 'Staking' },
+  { id: 'rebalance', label: 'Rebalance' },
+  { id: 'funding', label: 'Funding Rates' },
   { id: 'health', label: 'Health' },
 ];
 
@@ -227,6 +235,10 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'pricealerts' && <PriceAlertsPage />}
         {activeTab === 'analytics' && <AnalyticsPage />}
         {activeTab === 'dca' && <DcaPage />}
+        {activeTab === 'profitladder' && <ProfitLadderPage />}
+        {activeTab === 'staking' && <StakingPage />}
+        {activeTab === 'rebalance' && <RebalancePage />}
+        {activeTab === 'funding' && <FundingRatesPage />}
         {activeTab === 'health' && <HealthPage />}
         {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>

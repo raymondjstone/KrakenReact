@@ -305,6 +305,56 @@ public class BalancesController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>GET /api/balances/rebalance?targets=BTC:40,ETH:30,USD:30 — drift vs target allocation</summary>
+    [HttpGet("rebalance")]
+    public ActionResult GetRebalance([FromQuery] string? targets)
+    {
+        if (string.IsNullOrWhiteSpace(targets))
+            return Ok(new List<object>());
+
+        var targetMap = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in targets.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = part.Split(':');
+            if (kv.Length == 2 && decimal.TryParse(kv[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var pct))
+                targetMap[kv[0].Trim()] = pct;
+        }
+
+        var balances = _state.Balances.Values.Where(b => b.Total > 0 && b.LatestValue > 0).ToList();
+        var totalUsd = balances.Sum(b => b.LatestValue);
+        if (totalUsd <= 0) return Ok(new List<object>());
+
+        var result = targetMap.Select(kvp =>
+        {
+            var asset = kvp.Key;
+            var targetPct = kvp.Value;
+            var bal = balances.FirstOrDefault(b => string.Equals(b.Asset, asset, StringComparison.OrdinalIgnoreCase));
+            var currentUsd = bal?.LatestValue ?? 0m;
+            var currentPct = totalUsd > 0 ? currentUsd / totalUsd * 100m : 0m;
+            var driftPct = currentPct - targetPct;
+            var targetUsd = totalUsd * targetPct / 100m;
+            var diffUsd = targetUsd - currentUsd;
+            var price = bal?.LatestPrice ?? 0m;
+            var diffQty = price > 0 ? diffUsd / price : 0m;
+
+            return new
+            {
+                asset,
+                targetPct           = Math.Round(targetPct, 2),
+                currentPct          = Math.Round(currentPct, 2),
+                driftPct            = Math.Round(driftPct, 2),
+                currentUsd          = Math.Round(currentUsd, 2),
+                targetUsd           = Math.Round(targetUsd, 2),
+                diffUsd             = Math.Round(diffUsd, 2),
+                diffQty             = Math.Round(diffQty, 6),
+                currentPrice        = price,
+                action              = diffUsd > 0 ? "BUY" : diffUsd < 0 ? "SELL" : "HOLD",
+            };
+        }).OrderByDescending(r => Math.Abs(r.driftPct)).ToList();
+
+        return Ok(new { totalUsd = Math.Round(totalUsd, 2), rows = result });
+    }
+
     private static string GetQuoteCurrency(string symbol)
     {
         if (string.IsNullOrEmpty(symbol)) return "USD";
