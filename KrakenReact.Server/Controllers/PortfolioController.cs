@@ -32,6 +32,60 @@ public class PortfolioController : ControllerBase
         return Ok(snapshots);
     }
 
+    /// <summary>GET /api/portfolio/metrics — Sharpe ratio and max drawdown from snapshot history</summary>
+    [HttpGet("metrics")]
+    public async Task<IActionResult> GetMetrics([FromQuery] int days = 365)
+    {
+        days = Math.Clamp(days, 14, 730);
+        var since = DateTime.UtcNow.Date.AddDays(-days);
+        var snapshots = await _db.PortfolioSnapshots
+            .Where(s => s.Date >= since)
+            .OrderBy(s => s.Date)
+            .Select(s => new { s.Date, s.TotalUsd })
+            .ToListAsync();
+
+        if (snapshots.Count < 5)
+            return Ok(new { sharpe = (double?)null, maxDrawdownPct = (double?)null, annualReturnPct = (double?)null, sampleDays = snapshots.Count });
+
+        var values = snapshots.Select(s => (double)s.TotalUsd).ToArray();
+
+        // Daily returns
+        var returns = new double[values.Length - 1];
+        for (int i = 1; i < values.Length; i++)
+            returns[i - 1] = values[i - 1] > 0 ? (values[i] - values[i - 1]) / values[i - 1] : 0;
+
+        var mean = returns.Average();
+        var variance = returns.Select(r => (r - mean) * (r - mean)).Average();
+        var stdDev = Math.Sqrt(variance);
+        var sharpe = stdDev > 0 ? Math.Round(mean / stdDev * Math.Sqrt(252), 3) : 0;
+
+        // Max drawdown
+        double peak = values[0], maxDd = 0;
+        foreach (var v in values)
+        {
+            if (v > peak) peak = v;
+            if (peak > 0)
+            {
+                var dd = (peak - v) / peak;
+                if (dd > maxDd) maxDd = dd;
+            }
+        }
+
+        // Annualised return
+        var totalReturn = values[0] > 0 ? (values[^1] - values[0]) / values[0] : 0;
+        var annualReturn = snapshots.Count > 1
+            ? Math.Pow(1 + totalReturn, 365.0 / snapshots.Count) - 1
+            : 0;
+
+        return Ok(new
+        {
+            sharpe = Math.Round(sharpe, 3),
+            maxDrawdownPct = Math.Round(maxDd * 100, 2),
+            annualReturnPct = Math.Round(annualReturn * 100, 2),
+            sampleDays = snapshots.Count,
+        });
+    }
+
     /// <summary>Manually trigger a portfolio snapshot (useful for testing)</summary>
     [HttpPost("snapshot")]
     public async Task<IActionResult> TakeSnapshot()

@@ -296,6 +296,12 @@ public class TradingStateService
     public bool AutoSellOnBuyFill { get; set; }
     public decimal AutoSellPercentage { get; set; } = 10m;
     public bool AutoAddStakingToOrder { get; set; }
+    public bool StopLossEnabled { get; set; }
+    public decimal StopLossPct { get; set; } = 5m;
+    public bool TakeProfitEnabled { get; set; }
+    public decimal TakeProfitPct { get; set; } = 15m;
+    public bool DrawdownAlertEnabled { get; set; }
+    public decimal DrawdownAlertThreshold { get; set; } = 10m;
 
     /// <summary>Cache of working Kraken API pair names. Key = internal symbol (e.g. "XBT/USD"), Value = API-accepted name (e.g. "BTCUSD").</summary>
     public ConcurrentDictionary<string, string> ApiPairNameCache { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -756,6 +762,27 @@ public class TradingStateService
         var predAutoRefresh = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionAutoRefreshIntervalMinutes");
         PredictionAutoRefreshIntervalMinutes = predAutoRefresh != null && int.TryParse(predAutoRefresh.Value, out var mins) && mins >= 5
             ? mins : 15;
+
+        var slEnabled = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StopLossEnabled");
+        StopLossEnabled = slEnabled != null && string.Equals(slEnabled.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var slPct = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StopLossPct");
+        if (slPct != null && decimal.TryParse(slPct.Value, System.Globalization.CultureInfo.InvariantCulture, out var slv))
+            StopLossPct = Math.Clamp(slv, 1m, 50m);
+
+        var tpEnabled = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "TakeProfitEnabled");
+        TakeProfitEnabled = tpEnabled != null && string.Equals(tpEnabled.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var tpPct = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "TakeProfitPct");
+        if (tpPct != null && decimal.TryParse(tpPct.Value, System.Globalization.CultureInfo.InvariantCulture, out var tpv))
+            TakeProfitPct = Math.Clamp(tpv, 1m, 500m);
+
+        var ddEnabled = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "DrawdownAlertEnabled");
+        DrawdownAlertEnabled = ddEnabled != null && string.Equals(ddEnabled.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var ddThreshold = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "DrawdownAlertThreshold");
+        if (ddThreshold != null && decimal.TryParse(ddThreshold.Value, System.Globalization.CultureInfo.InvariantCulture, out var ddv))
+            DrawdownAlertThreshold = Math.Clamp(ddv, 1m, 90m);
     }
 
     /// <summary>Ensures required settings exist in DB for databases created before new settings were added</summary>

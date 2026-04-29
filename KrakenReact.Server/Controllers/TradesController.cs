@@ -1,5 +1,6 @@
 using KrakenReact.Server.Data;
 using KrakenReact.Server.DTOs;
+using KrakenReact.Server.Services;
 using Kraken.Net.Enums;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,8 +11,13 @@ namespace KrakenReact.Server.Controllers;
 public class TradesController : ControllerBase
 {
     private readonly DbMethods _db;
+    private readonly TradingStateService _state;
 
-    public TradesController(DbMethods db) => _db = db;
+    public TradesController(DbMethods db, TradingStateService state)
+    {
+        _db = db;
+        _state = state;
+    }
 
     [HttpGet]
     public async Task<ActionResult<List<TradeDto>>> GetAll()
@@ -92,5 +98,50 @@ public class TradesController : ControllerBase
             };
         }).ToList();
         return Ok(grouped);
+    }
+
+    /// <summary>GET /api/trades/summary — realised P/L per symbol grouped by base asset</summary>
+    [HttpGet("summary")]
+    public async Task<IActionResult> GetSummary()
+    {
+        var trades = await _db.GetTradesAsync();
+        var result = trades
+            .GroupBy(t =>
+            {
+                var sym = t.Symbol ?? "";
+                return sym.Contains('/') ? sym.Split('/')[0] : _state.NormalizeOrderSymbolBase(sym);
+            })
+            .Select(g =>
+            {
+                var buys = g.Where(t => t.Side == OrderSide.Buy).ToList();
+                var sells = g.Where(t => t.Side == OrderSide.Sell).ToList();
+                var totalBoughtQty = buys.Sum(t => t.Quantity);
+                var totalSoldQty = sells.Sum(t => t.Quantity);
+                var totalCost = buys.Sum(t => t.QuoteQuantity > 0 ? t.QuoteQuantity : t.Price * t.Quantity);
+                var totalProceeds = sells.Sum(t => t.QuoteQuantity > 0 ? t.QuoteQuantity : t.Price * t.Quantity);
+                var totalFees = g.Sum(t => t.Fee);
+                var avgCost = totalBoughtQty > 0 ? totalCost / totalBoughtQty : 0m;
+                var realisedPl = sells.Sum(t => t.ClosedProfitLoss ?? 0m);
+                var lastTrade = g.Max(t => t.Timestamp);
+
+                return new
+                {
+                    asset = g.Key,
+                    tradeCount = g.Count(),
+                    totalBoughtQty = Math.Round(totalBoughtQty, 6),
+                    totalSoldQty = Math.Round(totalSoldQty, 6),
+                    netQty = Math.Round(totalBoughtQty - totalSoldQty, 6),
+                    totalCost = Math.Round(totalCost, 2),
+                    totalProceeds = Math.Round(totalProceeds, 2),
+                    totalFees = Math.Round(totalFees, 4),
+                    avgCostPerUnit = Math.Round(avgCost, 6),
+                    realisedPl = Math.Round(realisedPl, 2),
+                    lastTrade,
+                };
+            })
+            .OrderByDescending(s => s.lastTrade)
+            .ToList();
+
+        return Ok(result);
     }
 }

@@ -375,7 +375,29 @@ public class BackgroundTaskService : BackgroundService
         var bals = await _kraken.GetAvailableBalancesAsync(false);
         var grouped = bals.GroupBy(b => TradingStateService.NormalizeAsset(b.Asset))
             .Select(g => new { Asset = g.Key, Total = g.Sum(x => x.Total), Locked = g.Sum(x => x.Locked) })
-            .Where(b => b.Total > 0 || b.Locked > 0).ToList();
+            .Where(b => b.Total > 0 || b.Locked > 0)
+            .ToList();
+
+        // BalanceEx omits assets whose available balance is 0 (e.g. BTC 100% locked in sell orders).
+        // Supplement with the simple Balance endpoint (always returns total per asset, XBT/XXBT included).
+        var totalBals = await _kraken.GetTotalBalancesAsync();
+        if (totalBals.Any())
+        {
+            var groupedKeys = new HashSet<string>(grouped.Select(g => g.Asset), StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in totalBals)
+            {
+                if (kvp.Value <= 0) continue;
+                var normalizedAsset = TradingStateService.NormalizeAsset(kvp.Key);
+                if (!groupedKeys.Contains(normalizedAsset))
+                {
+                    // Asset is in total balance but absent from BalanceEx — treat entire balance as locked
+                    grouped.Add(new { Asset = normalizedAsset, Total = kvp.Value, Locked = kvp.Value });
+                    groupedKeys.Add(normalizedAsset);
+                    _logger.LogInformation("[BG] Balance supplement: {Asset} (raw={Raw}) total={Total} — absent from BalanceEx, treating as fully locked",
+                        normalizedAsset, kvp.Key, kvp.Value);
+                }
+            }
+        }
 
         var openOrders = _state.Orders.Values
             .Where(o => o.Status == "Open" || o.Status == "New" || o.Status == "PartiallyFilled")

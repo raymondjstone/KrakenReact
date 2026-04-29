@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
 import api from '../api/apiClient';
@@ -11,6 +11,9 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 export default function TradesPage() {
   const [rowData, setRowData] = useState([]);
   const [selectedTrade, setSelectedTrade] = useState(null);
+  const [summary, setSummary] = useState([]);
+  const [showSummary, setShowSummary] = useState(false);
+  const gridRef = useRef(null);
   const { gridTheme } = useTheme();
 
   const loadTrades = useCallback(() => {
@@ -23,6 +26,15 @@ export default function TradesPage() {
     conn.on('TradesUpdated', loadTrades);
     return () => conn.off('TradesUpdated', loadTrades);
   }, [loadTrades]);
+
+  const loadSummary = useCallback(() => {
+    api.get('/trades/summary').then(r => setSummary(r.data)).catch(() => {});
+  }, []);
+
+  const handleToggleSummary = () => {
+    if (!showSummary && summary.length === 0) loadSummary();
+    setShowSummary(v => !v);
+  };
 
   const columnDefs = useMemo(() => [
     { field: 'symbol', headerName: 'Symbol', minWidth: 100 },
@@ -66,8 +78,49 @@ export default function TradesPage() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, background: 'var(--bg-secondary)' }}>
+        <button onClick={() => gridRef.current?.api.exportDataAsCsv({ fileName: 'trades.csv' })}
+          style={{ padding: '3px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', cursor: 'pointer' }}>
+          Export CSV
+        </button>
+        <button onClick={handleToggleSummary}
+          style={{ padding: '3px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 4, background: showSummary ? 'var(--green)' : 'var(--bg-primary)', color: showSummary ? 'white' : 'var(--text-primary)', cursor: 'pointer' }}>
+          {showSummary ? 'Hide Summary' : 'P/L Summary'}
+        </button>
+      </div>
+      {showSummary && (
+        <div style={{ padding: '8px 12px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
+          <table style={{ fontSize: 12, borderCollapse: 'collapse', minWidth: 700 }}>
+            <thead>
+              <tr style={{ color: 'var(--text-muted)' }}>
+                {['Asset','Trades','Bought Qty','Sold Qty','Net Qty','Total Cost','Proceeds','Fees','Avg Cost','Realised P/L','Last Trade'].map(h => (
+                  <th key={h} style={{ padding: '4px 8px', textAlign: 'right', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map(s => (
+                <tr key={s.asset}>
+                  <td style={{ padding: '3px 8px', fontWeight: 600, textAlign: 'right' }}>{s.asset}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>{s.tradeCount}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>{Number(s.totalBoughtQty).toFixed(4)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>{Number(s.totalSoldQty).toFixed(4)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>{Number(s.netQty).toFixed(4)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>${Number(s.totalCost).toFixed(2)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>${Number(s.totalProceeds).toFixed(2)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>${Number(s.totalFees).toFixed(4)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>${Number(s.avgCostPerUnit).toFixed(4)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right', color: s.realisedPl >= 0 ? 'var(--green)' : 'var(--red)' }}>${Number(s.realisedPl).toFixed(2)}</td>
+                  <td style={{ padding: '3px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>{new Date(s.lastTrade).toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <div style={{ flex: selectedTrade ? '0 0 60%' : 1 }}>
         <AgGridReact
+          ref={gridRef}
           theme={gridTheme}
           rowData={rowData}
           columnDefs={columnDefs}

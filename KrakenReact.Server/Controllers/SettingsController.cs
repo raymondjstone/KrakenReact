@@ -77,6 +77,12 @@ public class SettingsController : ControllerBase
             settings.AutoSellPercentage = _state.AutoSellPercentage;
             settings.AutoAddStakingToOrder = _state.AutoAddStakingToOrder;
             settings.OrderBookDepth = _state.OrderBookDepth;
+            settings.StopLossEnabled = _state.StopLossEnabled;
+            settings.StopLossPct = _state.StopLossPct;
+            settings.TakeProfitEnabled = _state.TakeProfitEnabled;
+            settings.TakeProfitPct = _state.TakeProfitPct;
+            settings.DrawdownAlertEnabled = _state.DrawdownAlertEnabled;
+            settings.DrawdownAlertThreshold = _state.DrawdownAlertThreshold;
 
             var priceDownloadTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PriceDownloadTime");
             settings.PriceDownloadTime = priceDownloadTime?.Value ?? "04:00";
@@ -198,6 +204,40 @@ public class SettingsController : ControllerBase
             if (request.AutoAddStakingToOrder.HasValue)
             {
                 await SaveOrUpdateSetting("AutoAddStakingToOrder", request.AutoAddStakingToOrder.Value.ToString().ToLower(), "Automatically add staking reward quantity to the newest open sell order for that asset");
+            }
+
+            if (request.StopLossEnabled.HasValue)
+            {
+                _state.StopLossEnabled = request.StopLossEnabled.Value;
+                await SaveOrUpdateSetting("StopLossEnabled", request.StopLossEnabled.Value.ToString().ToLower(), "Automatically place a market sell when price drops below cost basis by StopLossPct");
+            }
+            if (request.StopLossPct.HasValue)
+            {
+                var pct = Math.Clamp(request.StopLossPct.Value, 1m, 50m);
+                _state.StopLossPct = pct;
+                await SaveOrUpdateSetting("StopLossPct", pct.ToString(System.Globalization.CultureInfo.InvariantCulture), "Stop-loss trigger percentage below average cost (1–50)");
+            }
+            if (request.TakeProfitEnabled.HasValue)
+            {
+                _state.TakeProfitEnabled = request.TakeProfitEnabled.Value;
+                await SaveOrUpdateSetting("TakeProfitEnabled", request.TakeProfitEnabled.Value.ToString().ToLower(), "Automatically place a limit sell when price rises above cost basis by TakeProfitPct");
+            }
+            if (request.TakeProfitPct.HasValue)
+            {
+                var pct = Math.Clamp(request.TakeProfitPct.Value, 1m, 500m);
+                _state.TakeProfitPct = pct;
+                await SaveOrUpdateSetting("TakeProfitPct", pct.ToString(System.Globalization.CultureInfo.InvariantCulture), "Take-profit trigger percentage above average cost (1–500)");
+            }
+            if (request.DrawdownAlertEnabled.HasValue)
+            {
+                _state.DrawdownAlertEnabled = request.DrawdownAlertEnabled.Value;
+                await SaveOrUpdateSetting("DrawdownAlertEnabled", request.DrawdownAlertEnabled.Value.ToString().ToLower(), "Send Pushover alert when portfolio drawdown exceeds threshold");
+            }
+            if (request.DrawdownAlertThreshold.HasValue)
+            {
+                var thr = Math.Clamp(request.DrawdownAlertThreshold.Value, 1m, 90m);
+                _state.DrawdownAlertThreshold = thr;
+                await SaveOrUpdateSetting("DrawdownAlertThreshold", thr.ToString(System.Globalization.CultureInfo.InvariantCulture), "Drawdown alert threshold percentage (1–90)");
             }
 
             if (request.OrderBookDepth.HasValue && TradingStateService.ValidBookDepths.Contains(request.OrderBookDepth.Value))

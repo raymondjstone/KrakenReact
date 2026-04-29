@@ -3,6 +3,59 @@ using KrakenReact.Server.Models;
 
 namespace KrakenReact.Tests;
 
+public class NewModelTests
+{
+    [Fact]
+    public void PortfolioSnapshot_DefaultValues()
+    {
+        var s = new PortfolioSnapshot();
+        Assert.Equal(default(DateTime), s.Date);
+        Assert.Equal(0m, s.TotalUsd);
+        Assert.Equal(0m, s.TotalGbp);
+    }
+
+    [Fact]
+    public void AlertLog_DefaultValues()
+    {
+        var a = new AlertLog();
+        Assert.Equal("", a.Title);
+        Assert.Equal("", a.Text);
+        Assert.Equal("info", a.Type);
+        Assert.Equal(0, a.Id);
+    }
+
+    [Fact]
+    public void PriceAlert_Defaults_ActiveAndAbove()
+    {
+        var p = new PriceAlert();
+        Assert.Equal("", p.Symbol);
+        Assert.Equal("above", p.Direction);
+        Assert.True(p.Active);
+        Assert.Null(p.TriggeredAt);
+        Assert.Equal("", p.Note);
+        Assert.Equal(0m, p.TargetPrice);
+    }
+
+    [Fact]
+    public void PriceAlert_CreatedAt_IsRecent()
+    {
+        var before = DateTime.UtcNow.AddSeconds(-1);
+        var p = new PriceAlert();
+        var after = DateTime.UtcNow.AddSeconds(1);
+        Assert.True(p.CreatedAt >= before && p.CreatedAt <= after);
+    }
+
+    [Fact]
+    public void PredictionHistory_DefaultValues()
+    {
+        var h = new PredictionHistory();
+        Assert.Equal("", h.Symbol);
+        Assert.Equal(0, h.Id);
+        Assert.False(h.PredictedUp);
+        Assert.Equal(0f, h.Probability);
+    }
+}
+
 public class DtoTests
 {
     // --- OrderDto ---

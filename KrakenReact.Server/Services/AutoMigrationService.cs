@@ -274,6 +274,21 @@ public static class AutoMigrationService
                     CREATE INDEX [IX_PredictionHistories_Symbol] ON [PredictionHistories] ([Symbol])
                     CREATE INDEX [IX_PredictionHistories_Symbol_ComputedAt] ON [PredictionHistories] ([Symbol], [ComputedAt])
                 END
+
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DcaRules')
+                BEGIN
+                    CREATE TABLE [DcaRules] (
+                        [Id]             int IDENTITY(1,1) NOT NULL,
+                        [Symbol]         nvarchar(100) NOT NULL DEFAULT '',
+                        [AmountUsd]      decimal(38,2) NOT NULL DEFAULT 0,
+                        [CronExpression] nvarchar(100) NOT NULL DEFAULT '0 9 * * 1',
+                        [Active]         bit NOT NULL DEFAULT 1,
+                        [CreatedAt]      datetime2 NOT NULL,
+                        [LastRunAt]      datetime2 NULL,
+                        [LastRunResult]  nvarchar(max) NOT NULL DEFAULT '',
+                        CONSTRAINT [PK_DcaRules] PRIMARY KEY ([Id])
+                    )
+                END
             ");
             Log.Information("[AutoMigration] New feature tables ensured");
         }

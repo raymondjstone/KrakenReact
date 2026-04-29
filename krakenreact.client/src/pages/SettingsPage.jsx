@@ -54,6 +54,16 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   // Auto-add staking to order
   const [autoAddStakingToOrder, setAutoAddStakingToOrder] = useState(false);
 
+  // Stop-loss / Take-profit
+  const [stopLossEnabled, setStopLossEnabled] = useState(false);
+  const [stopLossPct, setStopLossPct] = useState(5);
+  const [takeProfitEnabled, setTakeProfitEnabled] = useState(false);
+  const [takeProfitPct, setTakeProfitPct] = useState(15);
+
+  // Drawdown alert
+  const [drawdownAlertEnabled, setDrawdownAlertEnabled] = useState(false);
+  const [drawdownAlertThreshold, setDrawdownAlertThreshold] = useState(10);
+
   // Order book
   const [orderBookDepth, setOrderBookDepth] = useState(25);
 
@@ -98,6 +108,12 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     setAutoSellOnBuyFill(!!data.autoSellOnBuyFill);
     setAutoSellPercentage(data.autoSellPercentage ?? 10);
     setAutoAddStakingToOrder(!!data.autoAddStakingToOrder);
+    setStopLossEnabled(!!data.stopLossEnabled);
+    setStopLossPct(data.stopLossPct ?? 5);
+    setTakeProfitEnabled(!!data.takeProfitEnabled);
+    setTakeProfitPct(data.takeProfitPct ?? 15);
+    setDrawdownAlertEnabled(!!data.drawdownAlertEnabled);
+    setDrawdownAlertThreshold(data.drawdownAlertThreshold ?? 10);
     setOrderBookDepth(data.orderBookDepth || 25);
     setPriceDownloadTime(data.priceDownloadTime || '04:00');
     setPredictionJobTime(data.predictionJobTime || '05:00');
@@ -158,6 +174,12 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     payload.autoSellOnBuyFill = autoSellOnBuyFill;
     payload.autoSellPercentage = autoSellPercentage;
     payload.autoAddStakingToOrder = autoAddStakingToOrder;
+    payload.stopLossEnabled = stopLossEnabled;
+    payload.stopLossPct = stopLossPct;
+    payload.takeProfitEnabled = takeProfitEnabled;
+    payload.takeProfitPct = takeProfitPct;
+    payload.drawdownAlertEnabled = drawdownAlertEnabled;
+    payload.drawdownAlertThreshold = drawdownAlertThreshold;
     payload.orderBookDepth = orderBookDepth;
     payload.priceDownloadTime = priceDownloadTime;
     payload.predictionJobTime = predictionJobTime;
@@ -468,6 +490,72 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
                   <span style={{ color: 'var(--text-muted)' }}>%</span>
                 </div>
                 <div style={hintStyle}>Sell order will be placed at this percentage above the buy price (1% - 500%)</div>
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Stop-Loss</div>
+                <div style={hintStyle}>Automatically place a market sell when the price falls below your average cost basis by this percentage. Checked every 5 minutes.</div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input type="checkbox" checked={stopLossEnabled} onChange={e => setStopLossEnabled(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {stopLossEnabled && (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Trigger at</span>
+                <input type="number" min="1" max="50" step="0.5" value={stopLossPct}
+                  onChange={e => setStopLossPct(Math.min(50, Math.max(1, parseFloat(e.target.value) || 5)))}
+                  style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }} />
+                <span style={{ color: 'var(--text-muted)' }}>% below avg cost</span>
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Take-Profit</div>
+                <div style={hintStyle}>Automatically place a limit sell at the current price when the position has risen above your average cost by this percentage.</div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input type="checkbox" checked={takeProfitEnabled} onChange={e => setTakeProfitEnabled(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {takeProfitEnabled && (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Trigger at</span>
+                <input type="number" min="1" max="500" step="1" value={takeProfitPct}
+                  onChange={e => setTakeProfitPct(Math.min(500, Math.max(1, parseFloat(e.target.value) || 15)))}
+                  style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }} />
+                <span style={{ color: 'var(--text-muted)' }}>% above avg cost</span>
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Drawdown Alert</div>
+                <div style={hintStyle}>Send a Pushover notification when the portfolio drawdown from its 90-day peak exceeds this threshold.</div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input type="checkbox" checked={drawdownAlertEnabled} onChange={e => setDrawdownAlertEnabled(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {drawdownAlertEnabled && (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Alert at</span>
+                <input type="number" min="1" max="90" step="1" value={drawdownAlertThreshold}
+                  onChange={e => setDrawdownAlertThreshold(Math.min(90, Math.max(1, parseFloat(e.target.value) || 10)))}
+                  style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }} />
+                <span style={{ color: 'var(--text-muted)' }}>% drawdown</span>
               </div>
             )}
           </div>

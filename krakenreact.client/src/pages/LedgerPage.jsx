@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
 import api from '../api/apiClient';
@@ -9,6 +9,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 export default function LedgerPage() {
   const [rowData, setRowData] = useState([]);
+  const gridRef = useRef(null);
   const { gridTheme } = useTheme();
 
   const loadLedger = useCallback(() => {
@@ -37,8 +38,16 @@ export default function LedgerPage() {
   const defaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 
   return (
-    <div style={{ height: '100%' }}>
-      <AgGridReact theme={gridTheme} rowData={rowData} columnDefs={columnDefs} defaultColDef={defaultColDef} getRowId={p => p.data.id} />
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
+        <button onClick={() => gridRef.current?.api.exportDataAsCsv({ fileName: 'ledger.csv' })}
+          style={{ padding: '3px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', cursor: 'pointer' }}>
+          Export CSV
+        </button>
+      </div>
+      <div style={{ flex: 1 }}>
+        <AgGridReact ref={gridRef} theme={gridTheme} rowData={rowData} columnDefs={columnDefs} defaultColDef={defaultColDef} getRowId={p => p.data.id} />
+      </div>
     </div>
   );
 }

@@ -371,6 +371,25 @@ public class KrakenRestService
         return dbItems;
     }
 
+    /// <summary>
+    /// Returns the total balance (including locked amounts) for all assets via /0/private/Balance.
+    /// Used to catch assets omitted from BalanceEx when 100% locked in open orders.
+    /// </summary>
+    public async Task<Dictionary<string, decimal>> GetTotalBalancesAsync()
+    {
+        try
+        {
+            var krakenClient = await AuthenticatedClient();
+            var result = await krakenClient.SpotApi.Account.GetBalancesAsync();
+            return result.Success ? result.Data : new Dictionary<string, decimal>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching total balances");
+            return new Dictionary<string, decimal>();
+        }
+    }
+
     public async Task<WebCallResult<KrakenEditOrder>> AmendOrderValues(string orderId, string symbol, decimal newPrice, decimal newQty)
     {
         var krakenClient = await AuthenticatedClient();

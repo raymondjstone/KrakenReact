@@ -31,6 +31,12 @@ public class AppSettingsDto
     public string PredictionMode { get; set; } = "specific";
     public string PredictionCurrency { get; set; } = "USD";
     public int PredictionAutoRefreshIntervalMinutes { get; set; } = 15;
+    public bool StopLossEnabled { get; set; }
+    public decimal StopLossPct { get; set; } = 5m;
+    public bool TakeProfitEnabled { get; set; }
+    public decimal TakeProfitPct { get; set; } = 15m;
+    public bool DrawdownAlertEnabled { get; set; }
+    public decimal DrawdownAlertThreshold { get; set; } = 10m;
 }
 
 public class SaveSettingsRequest
@@ -64,4 +70,10 @@ public class SaveSettingsRequest
     public string? PredictionMode { get; set; }
     public string? PredictionCurrency { get; set; }
     public int? PredictionAutoRefreshIntervalMinutes { get; set; }
+    public bool? StopLossEnabled { get; set; }
+    public decimal? StopLossPct { get; set; }
+    public bool? TakeProfitEnabled { get; set; }
+    public decimal? TakeProfitPct { get; set; }
+    public bool? DrawdownAlertEnabled { get; set; }
+    public decimal? DrawdownAlertThreshold { get; set; }
 }

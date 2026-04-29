@@ -346,8 +346,34 @@ function predictionExpiryMs(interval, horizonCandles = 1) {
 function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const [refreshing, setRefreshing] = useState(false);
   const [, forceAge] = useState(0);
+  const [hitRate, setHitRate] = useState(null);
+  const [regime, setRegime] = useState(null);
+  const [kelly, setKelly] = useState(null);
+  const [confidence, setConfidence] = useState(null);
+  const [showConfidence, setShowConfidence] = useState(false);
   const pollRef = useRef(null);
   const originalComputedAtRef = useRef(null);
+
+  useEffect(() => {
+    api.get(`/predictions/accuracy/${encodeURIComponent(result.symbol)}`)
+      .then(r => setHitRate(r.data))
+      .catch(() => {});
+    api.get(`/predictions/regime/${encodeURIComponent(result.symbol)}`)
+      .then(r => setRegime(r.data))
+      .catch(() => {});
+    api.get(`/predictions/kelly/${encodeURIComponent(result.symbol)}`)
+      .then(r => setKelly(r.data))
+      .catch(() => {});
+  }, [result.symbol]);
+
+  const handleToggleConfidence = () => {
+    if (!showConfidence && !confidence) {
+      api.get(`/predictions/confidence/${encodeURIComponent(result.symbol)}`)
+        .then(r => setConfidence(r.data))
+        .catch(() => {});
+    }
+    setShowConfidence(v => !v);
+  };
 
   const isSuccess = result.status === 'success';
   const hasError  = result.status === 'error';
@@ -471,6 +497,60 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                 {consensusStrong ? 'strong consensus' : 'partial consensus'}
               </span>
+            </div>
+          )}
+
+          {/* Hit-rate + regime row */}
+          {(hitRate || regime) && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {hitRate?.hitRate !== null && hitRate?.hitRate !== undefined && (
+                <span title={`${hitRate.evaluatedCount} evaluated predictions`} style={{
+                  fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                  border: `1px solid ${hitRate.hitRate >= 55 ? 'var(--green)' : hitRate.hitRate >= 45 ? '#f59e0b' : 'var(--red)'}`,
+                  color: hitRate.hitRate >= 55 ? 'var(--green)' : hitRate.hitRate >= 45 ? '#f59e0b' : 'var(--red)',
+                }}>
+                  {hitRate.hitRate.toFixed(1)}% actual hit-rate ({hitRate.evaluatedCount} checked)
+                </span>
+              )}
+              {regime?.regime && regime.regime !== 'unknown' && (
+                <span style={{
+                  fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                  border: '1px solid var(--border)', color: 'var(--text-muted)',
+                }}>
+                  {regime.regime} · ADX {regime.adx} · BB {regime.bbWidth}%
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Kelly + confidence histogram */}
+          {kelly?.kellyFraction !== null && kelly?.kellyFraction !== undefined && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                Kelly {kelly.halfKellyFraction?.toFixed(1)}% · suggest ${kelly.suggestedUsd?.toFixed(0) ?? '—'}
+              </span>
+              <button onClick={handleToggleConfidence}
+                style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, border: '1px solid var(--border)', background: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                {showConfidence ? 'Hide confidence chart' : 'Confidence histogram'}
+              </button>
+            </div>
+          )}
+          {showConfidence && confidence?.buckets && (
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Hit-rate by confidence bucket</div>
+              <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 60 }}>
+                {confidence.buckets.map(b => {
+                  const height = b.count > 0 ? Math.max(4, (b.hitRate ?? 50) / 100 * 60) : 4;
+                  const color = b.hitRate == null ? 'var(--border)' : b.hitRate >= 55 ? 'var(--green)' : b.hitRate >= 45 ? '#f59e0b' : 'var(--red)';
+                  return (
+                    <div key={b.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                      <div title={`${b.label}: ${b.count} predictions, ${b.hitRate?.toFixed(0) ?? '—'}% hit`}
+                        style={{ width: '100%', height, background: color, borderRadius: 2, minHeight: 4 }} />
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)', transform: 'rotate(-45deg)', marginTop: 2 }}>{b.label.split('–')[0]}</div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 

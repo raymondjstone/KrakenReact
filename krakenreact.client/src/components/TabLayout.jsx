@@ -13,6 +13,9 @@ import DelistedPairsPage from '../pages/DelistedPairsPage';
 import SettingsPage, { loadSettings, saveSettings } from '../pages/SettingsPage';
 import PredictionPage from '../pages/PredictionPage';
 import PriceAlertsPage from '../pages/PriceAlertsPage';
+import AnalyticsPage from '../pages/AnalyticsPage';
+import DcaPage from '../pages/DcaPage';
+import HealthPage from '../pages/HealthPage';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
@@ -36,6 +39,9 @@ const fixedTabs = [
   { id: 'delisted', label: 'Delisted Pairs' },
   { id: 'predictions', label: 'Predictions' },
   { id: 'pricealerts', label: 'Price Alerts' },
+  { id: 'analytics', label: 'Analytics' },
+  { id: 'dca', label: 'DCA' },
+  { id: 'health', label: 'Health' },
 ];
 
 export default function TabLayout({ totalValue, totalValueGbp }) {
@@ -219,6 +225,9 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {chartTabs.find(t => t.id === activeTab) && <ChartPage symbol={activeTab} displaySymbol={chartTabs.find(t => t.id === activeTab)?.label} />}
         {activeTab === 'predictions' && <PredictionPage onSymbolClick={openChart} />}
         {activeTab === 'pricealerts' && <PriceAlertsPage />}
+        {activeTab === 'analytics' && <AnalyticsPage />}
+        {activeTab === 'dca' && <DcaPage />}
+        {activeTab === 'health' && <HealthPage />}
         {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>
 

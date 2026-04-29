@@ -19,6 +19,7 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
   const [orderDialogOpen, setOrderDialogOpen] = useState(false);
   const [orderBalanceCtx, setOrderBalanceCtx] = useState(null);
   const [periodPl, setPeriodPl] = useState({});
+  const [atrData, setAtrData] = useState({});
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState([]);
   const { gridTheme } = useTheme();
@@ -42,6 +43,13 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
         const map = {};
         (r.data || []).forEach(p => { map[p.asset] = p; });
         setPeriodPl(map);
+      }
+    }).catch(() => {});
+    api.get('/balances/atr').then(r => {
+      if (!disposed) {
+        const map = {};
+        (r.data || []).forEach(a => { map[a.asset] = a; });
+        setAtrData(map);
       }
     }).catch(() => {});
 
@@ -82,10 +90,25 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     setShowHistory(v => !v);
   };
 
+  const handleClosePosition = async (balance) => {
+    if (!confirm(`Market-sell ALL ${balance.available.toFixed(4)} ${balance.asset} at current price? This cannot be undone.`)) return;
+    try {
+      const r = await api.post(`/orders/close/${encodeURIComponent(balance.asset)}`);
+      alert(r.data.message || 'Close order placed');
+      loadOrders();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to place close order');
+    }
+  };
+
   const columnDefs = useMemo(() => [
     { headerName: '', flex: 0, width: 65, cellRenderer: p => {
       if (!p.data || FIAT_ASSETS.has(p.data.asset)) return null;
       return <button onClick={() => openBalanceOrder(p.data)} style={{ padding: '2px 6px', fontSize: 10, cursor: 'pointer', fontWeight: 600 }}>Order</button>;
+    }},
+    { headerName: 'Close', flex: 0, width: 60, cellRenderer: p => {
+      if (!p.data || FIAT_ASSETS.has(p.data.asset) || (p.data.available || 0) <= 0) return null;
+      return <button onClick={() => handleClosePosition(p.data)} style={{ padding: '2px 6px', fontSize: 10, cursor: 'pointer', color: 'var(--red)', fontWeight: 600 }}>Close</button>;
     }},
     { headerName: '1d%', minWidth: 80,
       valueGetter: p => periodPl[p.data?.asset]?.pl1d ?? null,
@@ -118,6 +141,10 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     { field: 'netProfitLossPercentage', headerName: 'P/L %', minWidth: 90,
       valueFormatter: p => p.value != null ? Number(p.value).toFixed(1) + '%' : '',
       cellStyle: p => p.value > 0 ? { color: 'var(--green)' } : p.value < 0 ? { color: 'var(--red)' } : {} },
+    { headerName: 'ATR%', minWidth: 80,
+      valueGetter: p => atrData[p.data?.asset]?.atrPct ?? null,
+      valueFormatter: p => p.value != null ? Number(p.value).toFixed(2) + '%' : '',
+      cellStyle: p => p.value > 5 ? { color: 'var(--red)' } : p.value > 2 ? { color: 'var(--yellow)' } : {} },
     { field: 'portfolioPercentage', headerName: '%', minWidth: 70,
       valueFormatter: p => p.value != null ? Number(p.value).toFixed(1) + '%' : '' },
     { field: 'orderCoveredQty', headerName: 'Covered', minWidth: 100,
@@ -130,7 +157,7 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     { field: 'orderUncoveredValue', headerName: 'Uncvrd $', minWidth: 100,
       valueFormatter: p => p.value != null ? Number(p.value).toFixed(2) : '',
       cellStyle: p => p.value > 0 ? { color: 'var(--yellow)' } : {} },
-  ], [periodPl]);
+  ], [periodPl, atrData]);
 
   const defaultColDef = useMemo(() => ({ sortable: true, filter: true, resizable: true, flex: 1 }), []);
 

@@ -242,6 +242,53 @@ public class BalancesController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>GET /api/balances/atr — 14-day ATR as % of price for each held non-fiat asset</summary>
+    [HttpGet("atr")]
+    public ActionResult GetAtr()
+    {
+        var fiat = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "USD", "USDT", "USDC", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF" };
+        var result = new List<object>();
+
+        foreach (var bal in _state.Balances.Values.Where(b => b.Total > 0 && b.LatestPrice > 0))
+        {
+            if (fiat.Contains(bal.Asset)) continue;
+
+            // Resolve price item
+            PriceDataItem? priceItem = null;
+            if (!_state.Prices.TryGetValue(bal.Asset + "/USD", out priceItem))
+                priceItem = _state.Prices.Values.FirstOrDefault(p =>
+                    TradingStateService.NormalizeAsset(p.Base) == bal.Asset && p.CCY is "USD" or "ZUSD");
+            if (priceItem == null) continue;
+
+            var klines = priceItem.GetKlineSnapshot()
+                .Where(k => k.Interval == "OneDay")
+                .OrderBy(k => k.OpenTime)
+                .TakeLast(30)
+                .ToList();
+
+            if (klines.Count < 2) continue;
+
+            // 14-period ATR
+            const int period = 14;
+            var trValues = new List<decimal>();
+            for (int i = 1; i < klines.Count; i++)
+            {
+                var high = klines[i].High;
+                var low = klines[i].Low;
+                var prevClose = klines[i - 1].Close;
+                var tr = Math.Max(high - low, Math.Max(Math.Abs(high - prevClose), Math.Abs(low - prevClose)));
+                trValues.Add(tr);
+            }
+            var atrValues = trValues.TakeLast(period).ToList();
+            var atr = atrValues.Count > 0 ? atrValues.Average() : 0m;
+            var atrPct = bal.LatestPrice > 0 ? Math.Round(atr / bal.LatestPrice * 100, 2) : 0m;
+
+            result.Add(new { asset = bal.Asset, atr = Math.Round(atr, 6), atrPct });
+        }
+
+        return Ok(result);
+    }
+
     private static string GetQuoteCurrency(string symbol)
     {
         if (string.IsNullOrEmpty(symbol)) return "USD";

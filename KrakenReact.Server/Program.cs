@@ -47,6 +47,9 @@ builder.Services.AddTransient<DailyPriceRefreshJob>();
 builder.Services.AddTransient<PredictionJob>();
 builder.Services.AddTransient<StalePredictionRefreshJob>();
 builder.Services.AddTransient<PortfolioSnapshotJob>();
+builder.Services.AddTransient<DcaJob>();
+builder.Services.AddTransient<StopLossTakeProfitJob>();
+builder.Services.AddTransient<DrawdownAlertJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -192,6 +195,22 @@ app.Lifetime.ApplicationStarted.Register(() =>
             autoRefreshCron,
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
         Log.Information("[Hangfire] Stale prediction refresh scheduled every {Mins} min (cron: {Cron})", autoRefreshMins, autoRefreshCron);
+
+        // Schedule stop-loss/take-profit check every 5 minutes
+        manager.AddOrUpdate<StopLossTakeProfitJob>(
+            "stop-loss-take-profit",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/5 * * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Log.Information("[Hangfire] Stop-loss/take-profit check scheduled every 5 minutes");
+
+        // Schedule daily drawdown alert at 08:00 local time
+        manager.AddOrUpdate<DrawdownAlertJob>(
+            "drawdown-alert",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "0 8 * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+        Log.Information("[Hangfire] Drawdown alert scheduled at 08:00");
     }
     catch (Exception ex)
     {

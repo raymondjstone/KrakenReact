@@ -110,6 +110,74 @@ public class OrdersController : ControllerBase
         return Ok();
     }
 
+    /// <summary>POST /api/orders/ladder — place N evenly-spaced limit orders</summary>
+    [HttpPost("ladder")]
+    public async Task<ActionResult> PlaceLadder([FromBody] OrderLadderRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Symbol)) return BadRequest("Symbol required");
+        if (req.Count < 2 || req.Count > 20) return BadRequest("Count must be 2–20");
+        if (req.StartPrice <= 0 || req.EndPrice <= 0) return BadRequest("Prices must be positive");
+        if (req.TotalQty <= 0) return BadRequest("TotalQty must be positive");
+
+        var side = req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell;
+        var priceStep = (req.EndPrice - req.StartPrice) / (req.Count - 1);
+        var qtyEach = Math.Round(req.TotalQty / req.Count, 6);
+        var symbol = req.Symbol.Replace("/", "");
+
+        var placed = new List<string>();
+        var errors = new List<string>();
+
+        for (int i = 0; i < req.Count; i++)
+        {
+            var price = Math.Round(req.StartPrice + priceStep * i, 2);
+            var clientId = $"ladder{DateTime.Now:yyyyMMddHHmmss}{i}";
+            var result = await _kraken.PlaceOrderAsync(symbol, side, OrderType.Limit, qtyEach, price, clientId);
+            if (result.Success)
+                placed.AddRange(result.Data.OrderIds ?? []);
+            else
+                errors.Add($"Order {i + 1} @ {price}: {result.Error?.Message}");
+        }
+
+        if (errors.Count > 0)
+            return Ok(new { placed, errors, message = $"{placed.Count}/{req.Count} orders placed" });
+
+        return Ok(new { placed, message = $"All {req.Count} ladder orders placed" });
+    }
+
+    /// <summary>POST /api/orders/close/{asset} — market-sell all available balance of an asset</summary>
+    [HttpPost("close/{asset}")]
+    public async Task<ActionResult> ClosePosition(string asset)
+    {
+        asset = Uri.UnescapeDataString(asset);
+        if (!_state.Balances.TryGetValue(asset, out var bal))
+            return NotFound(new { error = $"No balance found for {asset}" });
+
+        if (bal.Available <= 0)
+            return BadRequest(new { error = $"No available quantity for {asset} (locked: {bal.Locked})" });
+
+        // Find the websocket symbol (prefer /USD pair)
+        var sym = _state.Symbols.Values.FirstOrDefault(s =>
+            TradingStateService.NormalizeAsset(s.BaseAsset) == asset && s.WebsocketName.EndsWith("/USD"))
+            ?.WebsocketName.Replace("/", "");
+
+        if (sym == null)
+            return BadRequest(new { error = $"Cannot find a USD trading pair for {asset}" });
+
+        var clientId = $"CL{DateTime.Now:yyyyMMddHHmmss}";
+        var result = await _kraken.PlaceOrderAsync(sym, Kraken.Net.Enums.OrderSide.Sell, Kraken.Net.Enums.OrderType.Market, bal.Available, 0, clientId);
+
+        if (!result.Success)
+            return BadRequest(new { error = result.Error?.Message ?? "Failed to place close order" });
+
+        _ = Task.Run(async () =>
+        {
+            try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+            catch { }
+        });
+
+        return Ok(new { message = $"Close order placed for {bal.Available} {asset}", orderIds = result.Data.OrderIds });
+    }
+
     [HttpDelete("{id}")]
     public async Task<ActionResult> Cancel(string id)
     {

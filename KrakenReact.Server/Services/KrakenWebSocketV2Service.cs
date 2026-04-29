@@ -14,17 +14,19 @@ public class KrakenWebSocketV2Service : BackgroundService
     private readonly KrakenRestService _kraken;
     private readonly DbMethods _db;
     private readonly IHubContext<TradingHub> _hub;
+    private readonly NotificationService _notify;
     private readonly ILogger<KrakenWebSocketV2Service> _logger;
     private WebsocketClient? _socket;
     private string? _wsToken;
     private DateTime _lastTradeSync = DateTime.MinValue;
 
-    public KrakenWebSocketV2Service(TradingStateService state, KrakenRestService kraken, DbMethods db, IHubContext<TradingHub> hub, ILogger<KrakenWebSocketV2Service> logger)
+    public KrakenWebSocketV2Service(TradingStateService state, KrakenRestService kraken, DbMethods db, IHubContext<TradingHub> hub, NotificationService notify, ILogger<KrakenWebSocketV2Service> logger)
     {
         _state = state;
         _kraken = kraken;
         _db = db;
         _hub = hub;
+        _notify = notify;
         _logger = logger;
     }
 
@@ -211,6 +213,38 @@ public class KrakenWebSocketV2Service : BackgroundService
                                     });
                                 }
                             }
+                        }
+                    }
+
+                    // Push notification for filled orders
+                    foreach (var exec in execMsg.Data)
+                    {
+                        var execStatus = (exec.OrderStatus ?? "").ToLower();
+                        if (execStatus == "filled" && !string.IsNullOrEmpty(exec.OrderId))
+                        {
+                            var side = (exec.Side ?? "buy").ToLower() == "sell" ? "Sell" : "Buy";
+                            var sym = exec.Symbol ?? "?";
+                            var qty = exec.OrderQty;
+                            var price = exec.LimitPrice;
+
+                            // Compute P/L vs average buy price (sell orders only)
+                            var plText = "";
+                            if (side == "Sell" && price > 0 && qty > 0)
+                            {
+                                var base_ = _state.NormalizeOrderSymbolBase(sym);
+                                if (_state.Balances.TryGetValue(base_, out var bal) && bal.TotalCostBasis.HasValue && bal.Total > 0)
+                                {
+                                    var avgCost = (double)(bal.TotalCostBasis.Value / bal.Total);
+                                    var plPct = ((double)price - avgCost) / avgCost * 100;
+                                    plText = $" ({(plPct >= 0 ? "+" : "")}{plPct:F1}% vs avg {avgCost:F2})";
+                                }
+                            }
+
+                            _ = Task.Run(async () =>
+                            {
+                                try { await _notify.Pushover($"Order Filled — {side} {sym}", $"{qty} @ {price:F4}{plText}"); }
+                                catch { }
+                            });
                         }
                     }
 

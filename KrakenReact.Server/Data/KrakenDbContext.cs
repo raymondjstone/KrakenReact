@@ -20,6 +20,7 @@ public class KrakenDbContext : DbContext
     public DbSet<AlertLog> AlertLogs { get; set; }
     public DbSet<PriceAlert> PriceAlerts { get; set; }
     public DbSet<PredictionHistory> PredictionHistories { get; set; }
+    public DbSet<DcaRule> DcaRules { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 
@@ -125,6 +126,11 @@ public class KrakenDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.Symbol);
             entity.HasIndex(e => new { e.Symbol, e.ComputedAt });
+        });
+        modelBuilder.Entity<DcaRule>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.AmountUsd).HasColumnType("decimal(38,2)");
         });
     }
 }
