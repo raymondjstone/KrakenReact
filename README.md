@@ -33,9 +33,16 @@ By downloading, installing, configuring, running, modifying, or otherwise using 
 - **Auto-Trade Engine** -- Rule-based order suggestions with weighted price analysis
 - **Grouped Trades** -- Aggregated trade view by symbol with totals and averages
 - **Ledger Browser** -- Full ledger history from Kraken (deposits, withdrawals, trades, staking)
+- **ML Predictions** -- Machine-learning price direction forecasts with model quality metrics, Kelly sizing, regime detection, and confidence histograms (see [Predictions](#ml-predictions) section below)
+- **Stop-Loss / Take-Profit** -- Configurable automatic market-sell triggers checked every 5 minutes via Hangfire
+- **DCA** -- Dollar-cost averaging rules engine with configurable amounts and intervals
+- **Price Alerts** -- Custom price threshold alerts with Pushover notifications
+- **Analytics** -- Portfolio analytics and performance charts
+- **System Health** -- Live health check page showing database, WebSocket, pricing, and ML subsystem status
+- **Export to CSV** -- One-click export on Trades, Orders, and Ledger pages
 - **Delisted Asset Support** -- CSV-based fallback pricing for assets no longer tradeable on Kraken
 - **Kraken Asset Normalisation** -- Handles Kraken's X-prefixed crypto names (XXBT, XXRP, XETH) and Z-prefixed fiat (ZUSD, ZGBP) transparently with improved price lookups
-- **Pushover Notifications** -- Configurable proximity alerts (0.1-20%) when open orders approach the current market price, with optional staking reward notifications
+- **Pushover Notifications** -- Configurable proximity alerts (0.1-20%) when open orders approach the current market price, drawdown alerts, and optional staking reward notifications
 - **Dark/Light Theme** -- Defaults to dark mode with theme preference persisted to database
 - **Smart Balance Filtering** -- Optional "Hide Almost Zero Balances" setting (filters balances with < 0.0001 units OR < $0.01 value)
 - **Real-time Order Updates** -- Order amendments automatically recalculate distance, value, and balance covered/uncovered amounts with SignalR broadcasts
@@ -122,27 +129,181 @@ This starts both the ASP.NET backend (https://localhost:7247) and the Vite dev s
 
 ## Background Services
 
-| Service                  | Purpose                                                              |
-| ------------------------ | -------------------------------------------------------------------- |
-| `BackgroundTaskService`  | Orchestrates startup data loading, kline refresh (daily at 04:00), periodic order/trade/balance refresh |
-| `KrakenWebSocketV1Service` | Public ticker feed -- live prices for all ZUSD pairs              |
-| `KrakenWebSocketV2Service` | Private feed -- execution reports and balance changes             |
+| Service                       | Purpose                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `BackgroundTaskService`       | Orchestrates startup data loading, kline refresh (daily at 04:00), periodic order/trade/balance refresh |
+| `KrakenWebSocketV1Service`    | Public ticker feed -- live prices for all ZUSD pairs                                            |
+| `KrakenWebSocketV2Service`    | Private feed -- execution reports and balance changes                                           |
+| `DailyPriceRefreshJob`        | Hangfire job: fetches fresh OHLCV klines from Kraken for all tracked pairs (configurable time, default 04:00) |
+| `PredictionJob`               | Hangfire job: runs ML predictions for configured symbols (configurable time, default 05:00)     |
+| `StalePredictionRefreshJob`   | Hangfire job: refreshes any prediction older than one candle interval (default every 15 min)    |
+| `PortfolioSnapshotJob`        | Hangfire job: records total portfolio value to database daily at 23:55 for history chart        |
+| `StopLossTakeProfitJob`       | Hangfire job: checks all non-fiat balances against stop-loss and take-profit thresholds every 5 min |
+| `DrawdownAlertJob`            | Hangfire job: computes 90-day peak-to-trough drawdown daily at 08:00 and sends Pushover alert if threshold exceeded |
 
 ## Configuration
 
 All configuration is managed from the **Settings** tab:
 
-- **General** 
+- **General**
   - Large movement threshold for temporary ticker pins
   - Hide almost zero balances toggle (< 0.0001 units or < $0.01 value)
   - Staking notification toggle
   - Order proximity notification toggle with configurable threshold (0.1% - 20%)
   - Theme preference (dark/light)
+  - Stop-loss -- enable and set percentage threshold for automatic market sells
+  - Take-profit -- enable and set percentage threshold for automatic limit sells
+  - Drawdown alert -- enable and set the portfolio drawdown percentage that triggers a Pushover notification
+- **Schedule** -- Configure the daily price download time and ML prediction job time
 - **API Keys** -- Kraken API key/secret, Pushover credentials
 - **Trading Lists** -- Base currencies, blacklist, major coins, currency list, bad pairs, default pairs
-- **Asset Normalisations** -- Custom Kraken name mappings (e.g. XXBT=XBT)
+- **Asset Normalisations** -- Custom Kraken name mappings (e.g. XXBT=BTC)
 
 Pinned ticker pairs are also persisted to the database.
+
+---
+
+## ML Predictions
+
+The **Predictions** tab runs a machine-learning pipeline against Kraken OHLCV kline data and presents the results as per-symbol cards. This section explains every metric displayed and what it means in practice.
+
+### How the model works
+
+For each configured symbol the job:
+
+1. Fetches the stored kline history (1-minute through 1-day candles, configurable).
+2. Computes 23 technical features: RSI, MACD (signal and histogram), ATR (raw and as % of price), Bollinger Band width and %B, volume percentile, On-Balance Volume, ADX(14), Rate of Change(10), VWAP ratio, time-of-week seasonality indicator, and BTC market context (zeroed for XBT/USD itself to avoid circular reference).
+3. Creates binary labels — did the close price rise over the next 1, 3, or 6 candles?
+4. Trains two models on a strict **70/30 chronological split** (no data leakage): a **FastTree gradient-boosted decision tree** and a **logistic regression**.
+5. Additionally runs **walk-forward cross-validation**: the data is split into rolling windows, each model is trained on an earlier window and tested on the following window, and the results are averaged. This gives a more realistic picture of out-of-sample performance.
+6. The final prediction for each horizon is taken from whichever model scored highest on the test set.
+
+---
+
+### Per-card metrics explained
+
+#### Direction and Confidence
+
+| Display | Meaning |
+|---|---|
+| **↑ UP / ↓ DOWN** | The model's predicted direction for the next candle at the configured interval. |
+| **Confidence %** | The model's probability score for that direction (0–100%). 50% = no edge, >55% starts to be meaningful, >65% is strong. This is the raw classifier output — it should not be interpreted as a reliable probability in isolation, especially for noisy short-term intervals. |
+| **Probability bar** | Visual representation of the confidence score; green for UP, red for DOWN. |
+
+#### Consensus
+
+The model predicts three horizons simultaneously: **1 candle (1c), 3 candles (3c), and 6 candles (6c)**. The consensus badge summarises how many of the three agree:
+
+- **3/3 → strong consensus** — all horizons point the same way. This is the most reliable signal.
+- **2/3 → partial consensus** — majority agreement but with some horizon dissent.
+- **1/3 or split** — the model is uncertain or seeing conflicting trends at different time scales.
+
+Treat strong consensus signals more seriously than single-horizon predictions.
+
+#### Actual Hit-Rate
+
+> e.g. `57.3% actual hit-rate (44 checked)`
+
+This is the **retrospective accuracy** of the model's past predictions for this symbol, computed by comparing old stored predictions to what the price actually did afterwards. It is the most honest measure of real-world model performance because it uses live predictions rather than back-tested data.
+
+- **≥ 55%** (green) — the model has been beating random chance on this asset recently.
+- **45–55%** (amber) — borderline; the model is near coin-flip territory.
+- **< 45%** (red) — the model has been worse than random on this asset. Take predictions with extra scepticism.
+
+The number in parentheses is how many past predictions have been evaluated. Small sample sizes make the hit-rate unreliable.
+
+#### Market Regime
+
+> e.g. `trending · ADX 28 · BB 4.2%`
+
+The regime badge describes the **current market character** based on two indicators:
+
+- **ADX (Average Directional Index, 14-period):** Measures trend strength, not direction. ADX < 20 = ranging/choppy, 20–40 = moderate trend, > 40 = strong trend.
+- **BB width (Bollinger Band width as % of price):** Measures volatility. A narrow band means prices are compressed (often precedes a breakout); a wide band means high recent volatility.
+
+Regime labels:
+- `trending` — ADX ≥ 25. A directional model tends to perform better here.
+- `ranging` — ADX < 20. Markets are oscillating; trend-following models are less reliable.
+- `volatile` — BB width above the median. Price swings are elevated regardless of trend.
+- `quiet` — BB width below median and ADX low. Low-information environment; low conviction.
+- `breakout` — BB width has expanded sharply. A directional move may be underway.
+
+#### Kelly Criterion
+
+> e.g. `Kelly 4.2% · suggest $380`
+
+The **Kelly criterion** is a formula from information theory that suggests the optimal fraction of your bankroll to risk on a bet given a known edge and win rate. It is computed from the model's historical win rate and average win/loss ratio.
+
+**Half-Kelly** (displayed) is standard practice — most practitioners use half the full Kelly fraction to account for estimation error and reduce variance.
+
+- **Kelly %** -- the suggested portfolio percentage to deploy on this signal.
+- **Suggest $** -- the dollar amount implied by Kelly % applied to the total current portfolio value.
+
+**Important caveats:** Kelly assumes the model's edge estimate is accurate, that the win/loss ratio is stable, and that position size is applied consistently across many trades. Crypto markets are far noisier than the assumptions require. Treat Kelly sizing as an upper bound, not a prescription.
+
+#### Confidence Histogram
+
+Clicking **Confidence histogram** shows a bar chart of **hit-rate by confidence decile** across all past predictions for this symbol. Each bar represents a 10-percentage-point confidence bucket (0–10%, 10–20%, …, 90–100%) and shows the fraction of predictions in that bucket that were correct.
+
+What to look for:
+- **Monotonically increasing** (bars get taller from left to right) — the model is well-calibrated; higher confidence genuinely correlates with higher accuracy. This is ideal.
+- **Flat** — confidence scores don't predict accuracy; the model cannot distinguish easy from hard cases.
+- **Inverted** — high-confidence predictions are less reliable than low-confidence ones. This can indicate overfitting.
+- **Empty buckets** (greyed out) — the model rarely outputs predictions in that confidence range.
+
+#### Per-Horizon Detail boxes (1c / 3c / 6c)
+
+Each horizon box shows:
+
+| Metric | Meaning |
+|---|---|
+| **Direction + confidence** | Predicted direction and probability for that specific horizon. |
+| **FT acc** | FastTree model **test-set accuracy** on the 30% hold-out. Higher is better; > 55% is useful in crypto. |
+| **AUC** | **Area Under the ROC Curve** for FastTree. 0.5 = random, 1.0 = perfect. A value > 0.55 suggests the model has genuine discriminative power. |
+| **WF acc** | FastTree **walk-forward accuracy** — average accuracy across out-of-sample folds. This is more conservative than test-set accuracy and a better proxy for live performance. |
+| **WF AUC** | Walk-forward AUC for FastTree. Same interpretation as AUC but averaged across folds. |
+| **LR %** | Logistic regression test-set accuracy. |
+| **WF LR** | Logistic regression walk-forward accuracy. |
+
+Colour coding on the LR row: green ≥ 58%, amber ≥ 52%, red < 52%.
+
+#### Benchmarks
+
+| Metric | Meaning |
+|---|---|
+| **1c / 3c / 6c Buy & Hold** | What fraction of periods the price went up over each horizon, based on historical data. If the market rises 52% of the time, a model needs > 52% accuracy to be useful at all. A model that beats its benchmark is providing genuine value beyond simply expecting the market to go up. |
+| **1c SMA crossover** | Accuracy of a simple moving-average crossover strategy over the same period and horizon. This is a naive technical benchmark — if the ML model cannot beat it, it offers little advantage. |
+
+#### Summary Statistics
+
+| Metric | Meaning |
+|---|---|
+| **WF folds** | Number of walk-forward validation windows used. More folds = more robust estimate of out-of-sample performance. |
+| **Candles** | Training samples / test samples / total candles in the dataset. Larger datasets generally produce more reliable models; very small datasets (< 200 candles) produce unreliable results. |
+
+#### Confidence Trend Sparkline
+
+The small chart at the bottom of each card shows the model's **confidence score across the last 20 runs** for that symbol. Each dot is coloured green (UP prediction) or red (DOWN prediction). The dashed line shows the overall trend in confidence.
+
+- Rising trend with consistent colour = model is growing more confident in a direction.
+- Oscillating colours with flat confidence = model is uncertain, flipping direction frequently.
+- Sustained high confidence in one direction = potentially stronger signal, but check actual hit-rate for calibration.
+
+---
+
+### Interpreting predictions responsibly
+
+**Accuracy above ~55% in a noisy crypto market is genuinely useful — but nothing here is financial advice.** The benchmark columns exist specifically to show what chance alone looks like for each asset. A model that beats Buy & Hold accuracy and its SMA crossover benchmark has demonstrated some edge; one that does not has not.
+
+Key limitations to keep in mind:
+
+- Short intervals (1m, 5m, 15m) are dominated by noise. 1-hour and 1-day intervals tend to produce more stable models.
+- A small candle history (< 300 candles) produces unreliable estimates for all metrics.
+- Model performance varies over time as market regimes change. A model that worked well in a trending market may underperform in a ranging one and vice versa. The hit-rate and regime badge help track this.
+- Walk-forward accuracy is always more conservative than test-set accuracy — if walk-forward is substantially lower, the model may be overfitting to the train period.
+- Kelly sizing assumes your edge estimate is precise. In practice, use it as a rough ceiling, not an exact prescription.
+
+---
 
 ## Recent Improvements
 
