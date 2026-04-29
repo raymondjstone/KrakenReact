@@ -85,6 +85,20 @@ public class PriceDataItem
         get { lock (_klineLock) { return _klineSnapshot.LastOrDefault(); } }
     }
 
+    /// <summary>Returns the best available price kline — prefers real kline data, falls back to live ticker price.</summary>
+    public DerivedKline? BestKline
+    {
+        get
+        {
+            var k = LatestKline;
+            if (k != null) return k;
+            var tickerPrice = TickerData?.LastTradePrice ?? 0;
+            if (tickerPrice > 0)
+                return new DerivedKline { Asset = TradingStateService.NormalizeAsset(Base), Close = tickerPrice, OpenTime = DateTime.UtcNow };
+            return null;
+        }
+    }
+
     public DerivedKline? MinKline
     {
         get { lock (_klineLock) { return _klineSnapshot.FirstOrDefault(l => l.OpenTime.Year > 1967); } }
@@ -338,8 +352,8 @@ public class TradingStateService
             asset.Equals("XXBT", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("BTC", StringComparison.OrdinalIgnoreCase))
         {
-            if (Prices.TryGetValue("XBT/USD", out var xbtItem) && xbtItem.LatestKline != null)
-                return xbtItem.LatestKline;
+            if (Prices.TryGetValue("XBT/USD", out var xbtItem) && xbtItem.BestKline?.Close > 0)
+                return xbtItem.BestKline;
         }
 
         // Try all matching symbols (there may be multiple, e.g. XBT/USD and BTC/USD for Bitcoin)
@@ -349,8 +363,11 @@ public class TradingStateService
 
         foreach (var symbol in matchingSymbols)
         {
-            if (Prices.TryGetValue(symbol.WebsocketName, out var priceItem) && priceItem.LatestKline != null)
-                return priceItem.LatestKline;
+            if (Prices.TryGetValue(symbol.WebsocketName, out var priceItem))
+            {
+                var best = priceItem.BestKline;
+                if (best != null && best.Close > 0) return best;
+            }
         }
 
         // Fallback: scan Prices by comparing raw base names to both the original and normalized asset,
@@ -363,12 +380,18 @@ public class TradingStateService
         if (p != null)
         {
             var k = p.GetKlineSnapshot();
-            if (k.Any()) return k.Last();
+            var lastK = k.LastOrDefault(x => x.Close > 0);
+            if (lastK != null) return lastK;
+            var best = p.BestKline;
+            if (best != null && best.Close > 0) return best;
         }
 
         // Also try direct key lookups with the normalized name
-        if (Prices.TryGetValue(normalized + "/USD", out var directPrice) && directPrice.LatestKline != null)
-            return directPrice.LatestKline;
+        if (Prices.TryGetValue(normalized + "/USD", out var directPrice))
+        {
+            var best = directPrice.BestKline;
+            if (best != null && best.Close > 0) return best;
+        }
 
         // Fallback: try delisted CSV for this asset
         var pairNoSlash = normalized + "USD";
@@ -400,18 +423,47 @@ public class TradingStateService
         if (orderSymbol.Contains('/'))
             return NormalizeAsset(orderSymbol.Split('/')[0]);
 
-        // Try to match against known symbols (websocket names have slashes, order symbols don't)
+        // Try to match against known symbols (websocket names have slashes, order symbols don't).
+        // Also handle Kraken's legacy REST pair names that add an "X" prefix to the wsname/altname
+        // (e.g. "XPAXGUSD" where wsname gives "PAXGUSD" and altname gives "PAXGUSD").
         var match = Symbols.Values.FirstOrDefault(s =>
-            s.WebsocketName.Replace("/", "") == orderSymbol ||
-            (s.AlternateName != null && s.AlternateName.Replace(".", "") == orderSymbol));
+        {
+            var ws = s.WebsocketName.Replace("/", "");
+            var alt = s.AlternateName?.Replace(".", "");
+            return ws == orderSymbol ||
+                   (alt != null && alt == orderSymbol) ||
+                   ("X" + ws) == orderSymbol ||
+                   (alt != null && ("X" + alt) == orderSymbol);
+        });
         if (match != null)
+        {
+            // Use the WebSocket name's base (e.g. "PAXG" from "PAXG/USD") rather than
+            // raw BaseAsset (e.g. "XPAXG") — the WS base is the canonical key used in Prices.
+            if (match.WebsocketName.Contains('/'))
+                return NormalizeAsset(match.WebsocketName.Split('/')[0]);
             return NormalizeAsset(match.BaseAsset);
+        }
 
-        // Heuristic: strip known quote suffixes
+        // Heuristic: strip known quote suffixes, then try a Symbols scan to resolve any
+        // residual X-prefix that isn't covered by the alias table (e.g. XPAXG → PAXG).
         foreach (var suffix in new[] { "ZUSD", "USDT", "USDC", "USD", "ZEUR", "EUR", "ZGBP", "GBP" })
         {
             if (orderSymbol.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && orderSymbol.Length > suffix.Length)
-                return NormalizeAsset(orderSymbol[..^suffix.Length]);
+            {
+                var rawBase = orderSymbol[..^suffix.Length];
+                var normalized = NormalizeAsset(rawBase);
+                if (normalized != rawBase) return normalized; // alias resolved it — done
+
+                // Alias didn't help (e.g. rawBase = "XPAXG").
+                // Try Symbols: Kraken sometimes prefixes the base with "X" in REST pair names.
+                var normQuote = NormalizeAsset(suffix);
+                var sym = Symbols.Values.FirstOrDefault(s =>
+                    NormalizeAsset(s.QuoteAsset) == normQuote &&
+                    (s.BaseAsset.Equals(rawBase, StringComparison.OrdinalIgnoreCase) ||
+                     rawBase.Equals("X" + s.BaseAsset, StringComparison.OrdinalIgnoreCase) ||
+                     rawBase.Equals("X" + NormalizeAsset(s.BaseAsset), StringComparison.OrdinalIgnoreCase)));
+                return sym != null ? NormalizeAsset(sym.BaseAsset) : normalized;
+            }
         }
 
         return NormalizeAsset(orderSymbol);
@@ -855,18 +907,22 @@ public class TradingStateService
         // Get latest price using normalized base asset (order symbols like "XBTUSD" need base extraction first)
         var baseAsset = NormalizeOrderSymbolBase(order.Symbol);
         var latestPrice = LatestPrice(baseAsset);
+        var latestClose = latestPrice?.Close > 0
+            ? latestPrice.Close
+            : order.LatestPrice > 0
+                ? order.LatestPrice
+                : 0;
 
-        if (latestPrice != null)
+        if (latestClose > 0)
+            order.LatestPrice = latestClose;
+
+        if (order.LatestPrice > 0)
         {
-            order.LatestPrice = latestPrice.Close;
-            order.Distance = order.Price - latestPrice.Close;
-            order.DistancePercentage = latestPrice.Close != 0
-                ? Math.Round((order.Price - latestPrice.Close) / (latestPrice.Close / 100), 2)
-                : 100;
+            order.Distance = order.Price - order.LatestPrice;
+            order.DistancePercentage = Math.Round((order.Price - order.LatestPrice) / (order.LatestPrice / 100), 2);
         }
         else
         {
-            order.LatestPrice = 0;
             order.Distance = 0;
             order.DistancePercentage = 0;
         }

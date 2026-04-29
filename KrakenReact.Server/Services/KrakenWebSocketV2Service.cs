@@ -139,7 +139,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                         if (_state.Orders.TryGetValue(exec.OrderId, out var existing))
                         {
                             if (!string.IsNullOrEmpty(exec.Symbol)) existing.Symbol = exec.Symbol;
-                            if (!string.IsNullOrEmpty(exec.Side)) existing.Side = exec.Side;
+                            if (!string.IsNullOrEmpty(exec.Side)) existing.Side = NormalizeSide(exec.Side);
                             if (!string.IsNullOrEmpty(exec.OrderType)) existing.Type = exec.OrderType;
                             if (!string.IsNullOrEmpty(exec.OrderStatus)) existing.Status = exec.OrderStatus;
                             if (exec.LimitPrice != 0) existing.Price = exec.LimitPrice;
@@ -153,7 +153,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                             {
                                 Id = exec.OrderId,
                                 Symbol = exec.Symbol ?? "",
-                                Side = exec.Side ?? "Buy",
+                                Side = NormalizeSide(exec.Side),
                                 Type = exec.OrderType ?? "Limit",
                                 Status = exec.OrderStatus ?? "Open",
                                 Price = exec.LimitPrice,
@@ -293,10 +293,20 @@ public class KrakenWebSocketV2Service : BackgroundService
                     {
                         var latestPrice = _state.LatestPrice(b.Asset);
                         var price = latestPrice?.Close ?? 0;
+                        var previousBalance = _state.Balances.TryGetValue(b.Asset, out var existing)
+                            ? existing
+                            : _state.Balances.Values.FirstOrDefault(x =>
+                                TradingStateService.NormalizeAsset(x.Asset).Equals(b.Asset, StringComparison.OrdinalIgnoreCase));
+
+                        // Balance events can arrive before the price cache is warm.
+                        // Preserve a prior market price instead of broadcasting a synthetic zero.
+                        if (price <= 0 && previousBalance?.LatestPrice > 0)
+                            price = previousBalance.LatestPrice;
+
                         var valueUsd = Math.Round(b.Total * price, 2);
                         var valueGbp = usdGbpRate > 0 ? Math.Round(valueUsd * usdGbpRate, 2) : 0;
 
-                        if (_state.Balances.TryGetValue(b.Asset, out var existing))
+                        if (existing != null)
                         {
                             // Update existing entry, preserving order coverage fields
                             existing.Total = b.Total;
@@ -307,16 +317,15 @@ public class KrakenWebSocketV2Service : BackgroundService
                         }
                         else
                         {
-                            _state.Balances[b.Asset] = new BalanceDto
-                            {
-                                Asset = b.Asset,
-                                Total = b.Total,
-                                Locked = 0,
-                                Available = b.Total,
-                                LatestPrice = price,
-                                LatestValue = valueUsd,
-                                LatestValueGbp = valueGbp
-                            };
+                            var newBalance = previousBalance ?? new BalanceDto();
+                            newBalance.Asset = b.Asset;
+                            newBalance.Total = b.Total;
+                            newBalance.Locked = previousBalance?.Locked ?? 0;
+                            newBalance.Available = b.Total - newBalance.Locked;
+                            newBalance.LatestPrice = price;
+                            newBalance.LatestValue = valueUsd;
+                            newBalance.LatestValueGbp = valueGbp;
+                            _state.Balances[b.Asset] = newBalance;
                         }
                     }
 
@@ -342,6 +351,9 @@ public class KrakenWebSocketV2Service : BackgroundService
             catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error parsing balances"); }
         }
     }
+
+    private static string NormalizeSide(string? side) =>
+        (side ?? "").Equals("sell", StringComparison.OrdinalIgnoreCase) ? "Sell" : "Buy";
 
     public override void Dispose()
     {

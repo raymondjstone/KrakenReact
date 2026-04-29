@@ -178,6 +178,46 @@ public class OrdersController : ControllerBase
         return Ok(new { message = $"Close order placed for {bal.Available} {asset}", orderIds = result.Data.OrderIds });
     }
 
+    /// <summary>GET /api/orders/debug — diagnostic info for price lookups per order</summary>
+    [HttpGet("debug")]
+    public ActionResult GetDebug()
+    {
+        var results = _state.Orders.Values.Select(order =>
+        {
+            var baseAsset = _state.NormalizeOrderSymbolBase(order.Symbol);
+            var latestPrice = _state.LatestPrice(baseAsset);
+
+            // Find matching symbols
+            var matchingSymbols = _state.Symbols.Values
+                .Where(a =>
+                    baseAsset == a.AlternateName ||
+                    baseAsset == TradingStateService.NormalizeAsset(a.BaseAsset) ||
+                    (a.QuoteAsset == "ZUSD" && (a.BaseAsset == baseAsset || a.AlternateName == baseAsset || a.WebsocketName == baseAsset + "/USD")))
+                .Select(a => new { a.WebsocketName, a.BaseAsset, a.AlternateName, a.QuoteAsset,
+                    HasPriceEntry = _state.Prices.ContainsKey(a.WebsocketName),
+                    BestKline = _state.Prices.TryGetValue(a.WebsocketName, out var pi) ? pi.BestKline?.Close : null
+                })
+                .ToList();
+
+            // PAXG-specific: show all Prices keys containing PAXG
+            var paxgPriceKeys = _state.Prices.Keys.Where(k => k.Contains("PAXG", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            return new
+            {
+                OrderId = order.Id,
+                order.Symbol,
+                BaseAsset = baseAsset,
+                LatestPriceClose = latestPrice?.Close,
+                order.LatestPrice,
+                MatchingSymbolsCount = matchingSymbols.Count,
+                MatchingSymbols = matchingSymbols,
+                PaxgPriceKeys = paxgPriceKeys,
+            };
+        }).ToList();
+
+        return Ok(results);
+    }
+
     [HttpDelete("{id}")]
     public async Task<ActionResult> Cancel(string id)
     {

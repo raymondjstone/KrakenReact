@@ -184,7 +184,7 @@ public class BackgroundTaskService : BackgroundService
         // Main coins first
         await LoadKlinesForList(snapshot.Where(p => p.KrakenNewPricesLoaded == "no" && p.CoinType == "Main Coin").ToList());
         // Coins with open orders
-        await LoadKlinesForList(snapshot.Where(p => p.KrakenNewPricesLoaded == "no" && _state.Orders.Values.Any(o => o.Symbol == p.Base + p.CCY && o.CloseTime == null)).ToList());
+        await LoadKlinesForList(snapshot.Where(p => p.KrakenNewPricesLoaded == "no" && _state.Orders.Values.Any(o => o.Symbol.Replace("/", "") == p.Base + p.CCY && o.CloseTime == null)).ToList());
         // Coins with balances
         await LoadKlinesForList(snapshot.Where(p => p.KrakenNewPricesLoaded == "no" && _state.Balances.Values.Any(b => b.Asset == p.Base)).ToList());
         // Remaining
@@ -240,6 +240,7 @@ public class BackgroundTaskService : BackgroundService
         var result = await _kraken.GetOrders(initialLoad);
         foreach (var order in result)
         {
+            _state.Orders.TryGetValue(order.Id, out var existingOrder);
             var dto = new OrderDto
             {
                 Id = order.Id, Symbol = order.Symbol ?? "", Side = order.Side.ToString(), Type = order.Type.ToString(),
@@ -248,7 +249,8 @@ public class BackgroundTaskService : BackgroundService
                 AveragePrice = order.AveragePrice,
                 CreateTime = order.CreateTime, CloseTime = order.CloseTime, Reason = order.Reason ?? "",
                 ClientOrderId = order.ClientOrderId, SecondaryPrice = order.SecondaryPrice,
-                StopPrice = order.StopPrice, Leverage = order.Leverage ?? ""
+                StopPrice = order.StopPrice, Leverage = order.Leverage ?? "",
+                LatestPrice = existingOrder?.LatestPrice ?? 0
             };
             // Calculate LatestPrice, Distance, DistancePercentage, OrderValue using normalized symbol lookup
             _state.RecalculateOrderFields(dto);
