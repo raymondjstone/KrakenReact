@@ -206,7 +206,7 @@ public class TradingStateService
 
     // Kraken uses X-prefix for legacy crypto and Z-prefix for fiat internally.
     // Balances can return either form, causing duplicate entries.
-    private static Dictionary<string, string> AssetAliases = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, string> DefaultAssetAliases = new(StringComparer.OrdinalIgnoreCase)
     {
         { "XXBT", "BTC" }, { "XBT", "BTC" },
         { "XXRP", "XRP" }, { "XETH", "ETH" }, { "XXLM", "XLM" },
@@ -216,6 +216,8 @@ public class TradingStateService
         { "ZUSD", "USD" }, { "ZEUR", "EUR" }, { "ZGBP", "GBP" },
         { "ZCAD", "CAD" }, { "ZJPY", "JPY" }, { "ZAUD", "AUD" }, { "ZCHF", "CHF" },
     };
+
+    private static Dictionary<string, string> AssetAliases = new(DefaultAssetAliases, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Normalizes a Kraken asset name by stripping staking suffixes (.F, .B)
@@ -329,6 +331,17 @@ public class TradingStateService
         var normalized = NormalizeAsset(asset);
         if (normalized == "USD") return new DerivedKline { Asset = "USD", Close = 1.0m, OpenTime = DateTime.UtcNow };
 
+        // BTC is special: Kraken uses "XBT" in WebSocket names. Try XBT/USD directly first,
+        // independent of AssetAliases, so a corrupted DB normalization never silences Bitcoin prices.
+        if (asset.Equals("BTC", StringComparison.OrdinalIgnoreCase) ||
+            asset.Equals("XBT", StringComparison.OrdinalIgnoreCase) ||
+            asset.Equals("XXBT", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("BTC", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Prices.TryGetValue("XBT/USD", out var xbtItem) && xbtItem.LatestKline != null)
+                return xbtItem.LatestKline;
+        }
+
         // Try all matching symbols (there may be multiple, e.g. XBT/USD and BTC/USD for Bitcoin)
         var matchingSymbols = Symbols.Values.Where(a =>
             normalized == a.AlternateName || normalized == NormalizeAsset(a.BaseAsset) ||
@@ -340,10 +353,13 @@ public class TradingStateService
                 return priceItem.LatestKline;
         }
 
-        // Fallback: search Prices by normalizing the base part of each price entry's symbol
+        // Fallback: scan Prices by comparing raw base names to both the original and normalized asset,
+        // so the result doesn't depend on AssetAliases being intact for every asset.
         var p = Prices.Values.FirstOrDefault(p =>
             p.SymbolNoSlashNoStaking == normalized + "USD" ||
-            (NormalizeAsset(p.Base) == normalized && (p.CCY == "USD" || NormalizeAsset(p.CCY) == "USD")));
+            (NormalizeAsset(p.Base) == normalized && (p.CCY == "USD" || NormalizeAsset(p.CCY) == "USD")) ||
+            (p.Base.Equals(asset, StringComparison.OrdinalIgnoreCase) && p.CCY == "USD") ||
+            (p.Base.Equals(normalized, StringComparison.OrdinalIgnoreCase) && p.CCY == "USD"));
         if (p != null)
         {
             var k = p.GetKlineSnapshot();
@@ -629,13 +645,19 @@ public class TradingStateService
         var existing = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a, StringComparer.OrdinalIgnoreCase);
         var changed = false;
 
-        // Add entries from code defaults that don't exist in DB yet
-        var defaults = new Dictionary<string, string>(AssetAliases, StringComparer.OrdinalIgnoreCase);
-        foreach (var kvp in defaults)
+        // Seed missing defaults AND fix any stale/corrupted default entries in the DB.
+        // DefaultAssetAliases are authoritative (e.g. XXBT→BTC must not become XXBT→XBT).
+        foreach (var kvp in DefaultAssetAliases)
         {
-            if (!existing.ContainsKey(kvp.Key))
+            if (!existing.TryGetValue(kvp.Key, out var existingEntry))
             {
                 db.AssetNormalizations.Add(new AssetNormalization { KrakenName = kvp.Key, NormalizedName = kvp.Value });
+                changed = true;
+            }
+            else if (!existingEntry.NormalizedName.Equals(kvp.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                // DB has wrong value for a core alias — correct it
+                existingEntry.NormalizedName = kvp.Value;
                 changed = true;
             }
         }
@@ -740,12 +762,11 @@ public class TradingStateService
         else
             OrderBookDepth = 25;
 
-        // Reload asset normalizations from DB (already synced by SyncAssetNormalizations)
+        // Reload asset normalizations from DB — merge into defaults so XXBT→BTC etc. are always present
         var normalizations = await db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName);
-        if (normalizations.Any())
-        {
-            AssetAliases = new Dictionary<string, string>(normalizations, StringComparer.OrdinalIgnoreCase);
-        }
+        var merged = new Dictionary<string, string>(DefaultAssetAliases, StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in normalizations) merged[kvp.Key] = kvp.Value;
+        AssetAliases = merged;
 
         var predSymbols = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionSymbols");
         PredictionSymbols = predSymbols?.Value ?? "XBT/USD,ETH/USD,SOL/USD";

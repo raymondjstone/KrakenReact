@@ -44,6 +44,22 @@ public class BalancesController : ControllerBase
             var balances = _state.Balances.Values.ToList();
             var usdGbpRate = _state.GetUsdGbpRate();
 
+            // Refresh price for any balance where the cached value is still 0
+            // (happens at startup before klines arrive, or if V2 WS overwrote with 0)
+            foreach (var balance in balances)
+            {
+                if (balance.LatestPrice == 0)
+                {
+                    var kline = _state.LatestPrice(balance.Asset);
+                    if (kline != null && kline.Close > 0)
+                    {
+                        balance.LatestPrice = kline.Close;
+                        balance.LatestValue = Math.Round(balance.Total * kline.Close, 2);
+                        balance.LatestValueGbp = usdGbpRate > 0 ? Math.Round(balance.LatestValue * usdGbpRate, 2) : 0;
+                    }
+                }
+            }
+
             // Use cached snapshots from BackgroundTaskService — DB scans on every poll were timing out at 30s.
             var allTrades = _state.CachedTrades;
             var allLedgers = _state.CachedLedgers;
