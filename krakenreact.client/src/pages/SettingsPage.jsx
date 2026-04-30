@@ -64,6 +64,9 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   const [drawdownAlertEnabled, setDrawdownAlertEnabled] = useState(false);
   const [drawdownAlertThreshold, setDrawdownAlertThreshold] = useState(10);
 
+  // Dry-run jobs
+  const [dryRunJobs, setDryRunJobs] = useState(false);
+
   // Order book
   const [orderBookDepth, setOrderBookDepth] = useState(25);
 
@@ -114,6 +117,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     setTakeProfitPct(data.takeProfitPct ?? 15);
     setDrawdownAlertEnabled(!!data.drawdownAlertEnabled);
     setDrawdownAlertThreshold(data.drawdownAlertThreshold ?? 10);
+    setDryRunJobs(!!data.dryRunJobs);
     setOrderBookDepth(data.orderBookDepth || 25);
     setPriceDownloadTime(data.priceDownloadTime || '04:00');
     setPredictionJobTime(data.predictionJobTime || '05:00');
@@ -180,6 +184,7 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     payload.takeProfitPct = takeProfitPct;
     payload.drawdownAlertEnabled = drawdownAlertEnabled;
     payload.drawdownAlertThreshold = drawdownAlertThreshold;
+    payload.dryRunJobs = dryRunJobs;
     payload.orderBookDepth = orderBookDepth;
     payload.priceDownloadTime = priceDownloadTime;
     payload.predictionJobTime = predictionJobTime;
@@ -556,6 +561,28 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
                   onChange={e => setDrawdownAlertThreshold(Math.min(90, Math.max(1, parseFloat(e.target.value) || 10)))}
                   style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }} />
                 <span style={{ color: 'var(--text-muted)' }}>% drawdown</span>
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Dry-Run Jobs</div>
+                <div style={hintStyle}>
+                  When enabled, all scheduled jobs (DCA, Stop-Loss, Take-Profit, Profit Ladder, Auto-Sell) will
+                  simulate order placement and send a Pushover notification describing what they <em>would</em> have
+                  done, without placing any real orders. Use this to test your automation rules safely.
+                </div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input type="checkbox" checked={dryRunJobs} onChange={e => setDryRunJobs(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {dryRunJobs && (
+              <div style={{ marginTop: 10, padding: '8px 12px', background: 'rgba(234,179,8,0.12)', borderRadius: 4, border: '1px solid rgba(234,179,8,0.35)', color: 'var(--text-warning, #ca8a04)', fontSize: 12 }}>
+                Dry-run is active — no real orders will be placed by automated jobs.
               </div>
             )}
           </div>

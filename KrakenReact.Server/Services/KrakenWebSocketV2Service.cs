@@ -194,6 +194,14 @@ public class KrakenWebSocketV2Service : BackgroundService
                                         try
                                         {
                                             await Task.Delay(2000); // Brief delay to let Kraken settle
+                                            if (_state.DryRunJobs)
+                                            {
+                                                _logger.LogInformation("[WS V2] DRY RUN — would auto-sell: {Symbol} {Qty} @ {Price} (+{Pct}% from {BuyPrice})",
+                                                    exec.Symbol, qty, sellPrice, _state.AutoSellPercentage, buyPrice);
+                                                await _notify.Pushover($"DRY RUN — Auto-Sell {exec.Symbol}",
+                                                    $"Would sell {qty} @ {sellPrice:F4} (+{_state.AutoSellPercentage}% from buy {buyPrice:F4})");
+                                                return;
+                                            }
                                             var clientOrderId = $"AS{DateTime.Now:yyyyMMddHHmmss}";
                                             var result = await _kraken.PlaceOrderAsync(
                                                 exec.Symbol, Kraken.Net.Enums.OrderSide.Sell, Kraken.Net.Enums.OrderType.Limit,

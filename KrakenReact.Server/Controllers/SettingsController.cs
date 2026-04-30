@@ -83,6 +83,7 @@ public class SettingsController : ControllerBase
             settings.TakeProfitPct = _state.TakeProfitPct;
             settings.DrawdownAlertEnabled = _state.DrawdownAlertEnabled;
             settings.DrawdownAlertThreshold = _state.DrawdownAlertThreshold;
+            settings.DryRunJobs = _state.DryRunJobs;
 
             var priceDownloadTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PriceDownloadTime");
             settings.PriceDownloadTime = priceDownloadTime?.Value ?? "04:00";
@@ -213,7 +214,7 @@ public class SettingsController : ControllerBase
             }
             if (request.StopLossPct.HasValue)
             {
-                var pct = Math.Clamp(request.StopLossPct.Value, 1m, 50m);
+                var pct = Math.Clamp(request.StopLossPct.Value, 1m, 90m);
                 _state.StopLossPct = pct;
                 await SaveOrUpdateSetting("StopLossPct", pct.ToString(System.Globalization.CultureInfo.InvariantCulture), "Stop-loss trigger percentage below average cost (1–50)");
             }
@@ -238,6 +239,11 @@ public class SettingsController : ControllerBase
                 var thr = Math.Clamp(request.DrawdownAlertThreshold.Value, 1m, 90m);
                 _state.DrawdownAlertThreshold = thr;
                 await SaveOrUpdateSetting("DrawdownAlertThreshold", thr.ToString(System.Globalization.CultureInfo.InvariantCulture), "Drawdown alert threshold percentage (1–90)");
+            }
+            if (request.DryRunJobs.HasValue)
+            {
+                _state.DryRunJobs = request.DryRunJobs.Value;
+                await SaveOrUpdateSetting("DryRunJobs", request.DryRunJobs.Value.ToString().ToLower(), "Dry-run mode: scheduled jobs simulate orders and send Pushover notifications instead of placing real orders");
             }
 
             if (request.OrderBookDepth.HasValue && TradingStateService.ValidBookDepths.Contains(request.OrderBookDepth.Value))

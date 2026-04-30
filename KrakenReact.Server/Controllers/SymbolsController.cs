@@ -24,6 +24,7 @@ public class SymbolsController : ControllerBase
                 s.QuoteAsset,
                 s.Status,
                 s.OrderMin,
+                s.MinValue,
                 s.TickSize,
                 s.PriceDecimals,
                 s.LotDecimals

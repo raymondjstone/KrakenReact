@@ -37,6 +37,7 @@ public class AppSettingsDto
     public decimal TakeProfitPct { get; set; } = 15m;
     public bool DrawdownAlertEnabled { get; set; }
     public decimal DrawdownAlertThreshold { get; set; } = 10m;
+    public bool DryRunJobs { get; set; }
 }
 
 public class SaveSettingsRequest
@@ -76,4 +77,5 @@ public class SaveSettingsRequest
     public decimal? TakeProfitPct { get; set; }
     public bool? DrawdownAlertEnabled { get; set; }
     public decimal? DrawdownAlertThreshold { get; set; }
+    public bool? DryRunJobs { get; set; }
 }

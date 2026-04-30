@@ -1,8 +1,28 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../api/apiClient';
 
 const DEFAULT_PRICE_OFFSETS = [2, 5, 10, 15];
 const DEFAULT_QTY_PERCENTAGES = [5, 10, 20, 25, 50, 75, 100];
+
+// Cached symbol constraints so we only fetch once per session
+let _symbolsCache = null;
+async function fetchSymbolConstraints() {
+  if (_symbolsCache) return _symbolsCache;
+  const r = await api.get('/symbols');
+  _symbolsCache = r.data || [];
+  return _symbolsCache;
+}
+
+function findSymbolInfo(symbolsList, symbol) {
+  if (!symbolsList || !symbol) return null;
+  const noSlash = symbol.replace('/', '');
+  return symbolsList.find(s =>
+    s.websocketName === symbol ||
+    s.websocketName?.replace('/', '') === symbol ||
+    s.websocketName === noSlash ||
+    s.websocketName?.replace('/', '') === noSlash
+  ) || null;
+}
 
 export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initialSymbol, symbols, balanceContext, priceOffsets, qtyPercentages }) {
   const [symbol, setSymbol] = useState('');
@@ -13,11 +33,12 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const [submitting, setSubmitting] = useState(false);
   const [riskUsd, setRiskUsd] = useState('');
   const [atrData, setAtrData] = useState(null);
+  const [symbolsList, setSymbolsList] = useState(_symbolsCache || []);
 
   const pOffsets = priceOffsets?.length ? priceOffsets : DEFAULT_PRICE_OFFSETS;
   const qPcts = qtyPercentages?.length ? qtyPercentages : DEFAULT_QTY_PERCENTAGES;
 
-  // Fetch ATR data when dialog opens for a known asset
+  // Fetch ATR data and symbol constraints when dialog opens
   useEffect(() => {
     if (!isOpen) return;
     api.get('/balances/atr').then(r => {
@@ -25,6 +46,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
       (r.data || []).forEach(a => { map[a.asset] = a; });
       setAtrData(map);
     }).catch(() => {});
+    fetchSymbolConstraints().then(setSymbolsList).catch(() => {});
   }, [isOpen]);
 
   useEffect(() => {
@@ -56,6 +78,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
 
   if (!isOpen) return null;
 
+  const symInfo = findSymbolInfo(symbolsList, symbol);
   const currentPrice = balanceContext?.price || 0;
   const available = balanceContext?.available || 0;
   const uncoveredQty = balanceContext?.uncoveredQty || 0;
@@ -122,13 +145,39 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
     if (!isNaN(num) && num >= 0) setPrice(val);
   };
 
+  const roundToDecimals = (val, decimals) => {
+    if (decimals == null || decimals < 0) return val;
+    return Number(Number(val).toFixed(decimals));
+  };
+
+  const handlePriceBlur = () => {
+    if (!price || !symInfo?.priceDecimals) return;
+    const rounded = roundToDecimals(price, symInfo.priceDecimals);
+    if (!isNaN(rounded) && rounded > 0) setPrice(String(rounded));
+  };
+
+  const handleQtyBlur = () => {
+    if (!quantity || !symInfo?.lotDecimals) return;
+    const rounded = roundToDecimals(quantity, symInfo.lotDecimals);
+    if (!isNaN(rounded) && rounded > 0) setQuantity(String(rounded));
+  };
+
   const validate = () => {
     if (!symbol) return 'Select a symbol';
     if (!price || Number(price) <= 0) return 'Enter a valid price';
     if (!quantity || Number(quantity) <= 0) return 'Enter a valid quantity';
     const qty = Number(quantity);
+    const prc = Number(price);
     if (side === 'Sell' && available > 0 && qty > available * 1.001) {
       return `Cannot sell ${qty} — only ${available} available`;
+    }
+    if (symInfo) {
+      if (symInfo.orderMin > 0 && qty < symInfo.orderMin) {
+        return `Quantity ${qty} is below the minimum of ${symInfo.orderMin} for ${symbol}`;
+      }
+      if (symInfo.minValue > 0 && qty * prc < symInfo.minValue) {
+        return `Order value $${(qty * prc).toFixed(2)} is below the minimum of $${symInfo.minValue} for ${symbol}`;
+      }
     }
     return null;
   };
@@ -217,7 +266,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
                 </div>
               )}
             </div>
-            <input type="number" step="any" min="0" value={price} onChange={e => handlePriceChange(e.target.value)} style={inputStyle} placeholder={currentPrice ? `Current: ${currentPrice}` : ''} />
+            <input type="number" step="any" min="0" value={price} onChange={e => handlePriceChange(e.target.value)} onBlur={handlePriceBlur} style={inputStyle} placeholder={currentPrice ? `Current: ${currentPrice}` : ''} />
           </div>
 
           {/* Quantity */}
@@ -240,7 +289,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
                 </div>
               )}
             </div>
-            <input type="number" step="any" min="0" value={quantity} onChange={e => handleQtyChange(e.target.value)} style={inputStyle} />
+            <input type="number" step="any" min="0" value={quantity} onChange={e => handleQtyChange(e.target.value)} onBlur={handleQtyBlur} style={inputStyle} />
           </div>
 
           {/* ATR-based position sizing */}
@@ -271,6 +320,17 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
           {orderValue && (
             <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
               Order Value: <strong style={{ color: 'var(--text-primary)' }}>${orderValue}</strong>
+            </div>
+          )}
+
+          {/* Symbol constraints */}
+          {symInfo && (
+            <div style={{ padding: '6px 10px', background: 'var(--bg-secondary, var(--bg-input))', borderRadius: 4, border: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0 16px' }}>
+              {symInfo.orderMin > 0 && <span>Min qty: <strong>{symInfo.orderMin}</strong></span>}
+              {symInfo.minValue > 0 && <span>Min value: <strong>${symInfo.minValue}</strong></span>}
+              {symInfo.priceDecimals != null && <span>Price decimals: <strong>{symInfo.priceDecimals}</strong></span>}
+              {symInfo.lotDecimals != null && <span>Qty decimals: <strong>{symInfo.lotDecimals}</strong></span>}
+              {symInfo.tickSize > 0 && <span>Tick: <strong>{symInfo.tickSize}</strong></span>}
             </div>
           )}
 

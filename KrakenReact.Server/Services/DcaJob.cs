@@ -59,6 +59,25 @@ public class DcaJob
                 return;
             }
 
+            var minValue = sym?.MinValue ?? 0m;
+            if (minValue > 0 && qty * price < minValue)
+            {
+                rule.LastRunResult = $"Order value {qty * price:F2} below min value {minValue}";
+                rule.LastRunAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+                return;
+            }
+
+            if (_state.DryRunJobs)
+            {
+                rule.LastRunResult = $"DRY RUN — would buy {qty} @ {price} (${rule.AmountUsd})";
+                _logger.LogInformation("[DCA] DRY RUN — would place buy: {Symbol} {Qty} @ {Price}", rule.Symbol, qty, price);
+                await _notify.Pushover($"DRY RUN — DCA {rule.Symbol}", $"Would buy {qty} {rule.Symbol.Split('/')[0]} @ {price:F2} USD (${rule.AmountUsd:F2} DCA)");
+                rule.LastRunAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+                return;
+            }
+
             var clientId = $"dca-{ruleId}-{DateTime.UtcNow:yyyyMMddHHmm}";
             var result = await _kraken.PlaceOrderAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, price, clientId);
 

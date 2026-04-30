@@ -318,6 +318,7 @@ public class TradingStateService
     public decimal TakeProfitPct { get; set; } = 15m;
     public bool DrawdownAlertEnabled { get; set; }
     public decimal DrawdownAlertThreshold { get; set; } = 10m;
+    public bool DryRunJobs { get; set; }
 
     /// <summary>Cache of working Kraken API pair names. Key = internal symbol (e.g. "XBT/USD"), Value = API-accepted name (e.g. "BTCUSD").</summary>
     public ConcurrentDictionary<string, string> ApiPairNameCache { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -856,6 +857,9 @@ public class TradingStateService
         var ddThreshold = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "DrawdownAlertThreshold");
         if (ddThreshold != null && decimal.TryParse(ddThreshold.Value, System.Globalization.CultureInfo.InvariantCulture, out var ddv))
             DrawdownAlertThreshold = Math.Clamp(ddv, 1m, 90m);
+
+        var dryRunJobs = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "DryRunJobs");
+        DryRunJobs = dryRunJobs != null && string.Equals(dryRunJobs.Value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Ensures required settings exist in DB for databases created before new settings were added</summary>
@@ -880,6 +884,7 @@ public class TradingStateService
             ["PredictionCurrency"] = ("USD", "Quote currency to use when PredictionMode is 'all'"),
             ["PredictionJobTime"] = ("05:00", "Daily ML prediction job time (HH:MM, 24-hour)"),
             ["PredictionAutoRefreshIntervalMinutes"] = ("15", "How often (minutes) the stale-prediction auto-refresh job runs (minimum 5)"),
+            ["DryRunJobs"] = ("false", "Dry-run mode: scheduled jobs simulate orders and send Pushover notifications instead of placing real orders"),
         };
 
         var changed = false;

@@ -51,9 +51,16 @@ public class StopLossTakeProfitJob
                 _logger.LogWarning("[StopLoss] {Asset} at {Price:F4}, down {Pct:F1}% from avg {Avg:F4}",
                     bal.Asset, currentPrice, changePct, avgCost);
 
-                // Find the websocket symbol to place the order
                 var sym = FindSymbol(bal.Asset);
                 if (sym == null) continue;
+
+                if (_state.DryRunJobs)
+                {
+                    _logger.LogInformation("[StopLoss] DRY RUN — would market-sell {Qty} {Asset}", bal.Available, bal.Asset);
+                    await _notify.Pushover($"DRY RUN — Stop-Loss {bal.Asset}",
+                        $"Would sell {bal.Available:F4} {bal.Asset} at market (down {Math.Abs(changePct):F1}% from avg cost {avgCost:F4})");
+                    continue;
+                }
 
                 var clientId = $"SL{DateTime.Now:yyyyMMddHHmmss}";
                 var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
@@ -76,7 +83,14 @@ public class StopLossTakeProfitJob
                 var sym = FindSymbol(bal.Asset);
                 if (sym == null) continue;
 
-                // Place limit sell at current price
+                if (_state.DryRunJobs)
+                {
+                    _logger.LogInformation("[TakeProfit] DRY RUN — would limit-sell {Qty} {Asset} @ {Price}", bal.Available, bal.Asset, currentPrice);
+                    await _notify.Pushover($"DRY RUN — Take-Profit {bal.Asset}",
+                        $"Would limit-sell {bal.Available:F4} {bal.Asset} @ {currentPrice:F4} (up {changePct:F1}% from avg {avgCost:F4})");
+                    continue;
+                }
+
                 var clientId = $"TP{DateTime.Now:yyyyMMddHHmmss}";
                 var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, bal.Available, currentPrice, clientId);
                 if (result.Success)
@@ -127,6 +141,16 @@ public class StopLossTakeProfitJob
 
             var sym = FindSymbol(bal.Asset);
             if (sym == null) continue;
+
+            if (_state.DryRunJobs)
+            {
+                _logger.LogInformation("[ProfitLadder] DRY RUN — would limit-sell {Qty} {Asset} @ {Price}", sellQty, bal.Asset, bal.LatestPrice);
+                rule.LastTriggeredAt = DateTime.UtcNow;
+                rule.LastResult = $"DRY RUN — would sell {sellQty:F6} {bal.Asset} @ {bal.LatestPrice:F4} (up {changePct:F1}%)";
+                await _notify.Pushover($"DRY RUN — Profit Ladder {bal.Asset}",
+                    $"Would limit-sell {sellQty:F6} {bal.Asset} @ {bal.LatestPrice:F4} (+{changePct:F1}% from avg cost)");
+                continue;
+            }
 
             var clientId = $"PL{rule.Id}_{DateTime.Now:yyyyMMddHHmmss}";
             var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, sellQty, bal.LatestPrice, clientId);
