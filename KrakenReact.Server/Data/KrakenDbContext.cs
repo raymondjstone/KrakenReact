@@ -23,6 +23,7 @@ public class KrakenDbContext : DbContext
     public DbSet<DcaRule> DcaRules { get; set; }
     public DbSet<ProfitLadderRule> ProfitLadderRules { get; set; }
     public DbSet<MultiTfPredictionResult> MultiTfPredictionResults { get; set; }
+    public DbSet<RebalanceSchedule> RebalanceSchedules { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 

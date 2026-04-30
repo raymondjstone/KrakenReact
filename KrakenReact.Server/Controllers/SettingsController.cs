@@ -84,6 +84,12 @@ public class SettingsController : ControllerBase
             settings.DrawdownAlertEnabled = _state.DrawdownAlertEnabled;
             settings.DrawdownAlertThreshold = _state.DrawdownAlertThreshold;
             settings.DryRunJobs = _state.DryRunJobs;
+            settings.TrailingStopEnabled = _state.TrailingStopEnabled;
+            settings.TrailingStopPct = _state.TrailingStopPct;
+            settings.AutoCancelEnabled = _state.AutoCancelEnabled;
+            settings.AutoCancelDays = _state.AutoCancelDays;
+            settings.AutoCancelBuys = _state.AutoCancelBuys;
+            settings.AutoCancelSells = _state.AutoCancelSells;
 
             var priceDownloadTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PriceDownloadTime");
             settings.PriceDownloadTime = priceDownloadTime?.Value ?? "04:00";
@@ -214,9 +220,9 @@ public class SettingsController : ControllerBase
             }
             if (request.StopLossPct.HasValue)
             {
-                var pct = Math.Clamp(request.StopLossPct.Value, 1m, 90m);
+                var pct = Math.Clamp(request.StopLossPct.Value, 1m, 99.9m);
                 _state.StopLossPct = pct;
-                await SaveOrUpdateSetting("StopLossPct", pct.ToString(System.Globalization.CultureInfo.InvariantCulture), "Stop-loss trigger percentage below average cost (1–50)");
+                await SaveOrUpdateSetting("StopLossPct", pct.ToString(System.Globalization.CultureInfo.InvariantCulture), "Stop-loss trigger percentage below average cost (1–99.9)");
             }
             if (request.TakeProfitEnabled.HasValue)
             {
@@ -244,6 +250,38 @@ public class SettingsController : ControllerBase
             {
                 _state.DryRunJobs = request.DryRunJobs.Value;
                 await SaveOrUpdateSetting("DryRunJobs", request.DryRunJobs.Value.ToString().ToLower(), "Dry-run mode: scheduled jobs simulate orders and send Pushover notifications instead of placing real orders");
+            }
+            if (request.TrailingStopEnabled.HasValue)
+            {
+                _state.TrailingStopEnabled = request.TrailingStopEnabled.Value;
+                await SaveOrUpdateSetting("TrailingStopEnabled", request.TrailingStopEnabled.Value.ToString().ToLower(), "Enable trailing stop-loss");
+            }
+            if (request.TrailingStopPct.HasValue)
+            {
+                var pct = Math.Clamp(request.TrailingStopPct.Value, 0.5m, 50m);
+                _state.TrailingStopPct = pct;
+                await SaveOrUpdateSetting("TrailingStopPct", pct.ToString(System.Globalization.CultureInfo.InvariantCulture), "Trailing stop-loss percentage drop from high (0.5–50)");
+            }
+            if (request.AutoCancelEnabled.HasValue)
+            {
+                _state.AutoCancelEnabled = request.AutoCancelEnabled.Value;
+                await SaveOrUpdateSetting("AutoCancelEnabled", request.AutoCancelEnabled.Value.ToString().ToLower(), "Automatically cancel open orders older than AutoCancelDays");
+            }
+            if (request.AutoCancelDays.HasValue)
+            {
+                var days = Math.Clamp(request.AutoCancelDays.Value, 1, 365);
+                _state.AutoCancelDays = days;
+                await SaveOrUpdateSetting("AutoCancelDays", days.ToString(), "Age in days before an open order is auto-cancelled");
+            }
+            if (request.AutoCancelBuys.HasValue)
+            {
+                _state.AutoCancelBuys = request.AutoCancelBuys.Value;
+                await SaveOrUpdateSetting("AutoCancelBuys", request.AutoCancelBuys.Value.ToString().ToLower(), "Auto-cancel applies to buy orders");
+            }
+            if (request.AutoCancelSells.HasValue)
+            {
+                _state.AutoCancelSells = request.AutoCancelSells.Value;
+                await SaveOrUpdateSetting("AutoCancelSells", request.AutoCancelSells.Value.ToString().ToLower(), "Auto-cancel applies to sell orders");
             }
 
             if (request.OrderBookDepth.HasValue && TradingStateService.ValidBookDepths.Contains(request.OrderBookDepth.Value))

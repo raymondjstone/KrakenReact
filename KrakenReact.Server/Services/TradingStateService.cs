@@ -320,6 +320,17 @@ public class TradingStateService
     public decimal DrawdownAlertThreshold { get; set; } = 10m;
     public bool DryRunJobs { get; set; }
 
+    // Trailing stop-loss
+    public bool TrailingStopEnabled { get; set; }
+    public decimal TrailingStopPct { get; set; } = 5m;
+    public ConcurrentDictionary<string, decimal> TrailingHighPrices { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    // Auto-cancel stale open orders
+    public bool AutoCancelEnabled { get; set; }
+    public int AutoCancelDays { get; set; } = 30;
+    public bool AutoCancelBuys { get; set; } = true;
+    public bool AutoCancelSells { get; set; }
+
     /// <summary>Cache of working Kraken API pair names. Key = internal symbol (e.g. "XBT/USD"), Value = API-accepted name (e.g. "BTCUSD").</summary>
     public ConcurrentDictionary<string, string> ApiPairNameCache { get; } = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _notifiedOrders = new();
@@ -842,7 +853,7 @@ public class TradingStateService
 
         var slPct = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StopLossPct");
         if (slPct != null && decimal.TryParse(slPct.Value, System.Globalization.CultureInfo.InvariantCulture, out var slv))
-            StopLossPct = Math.Clamp(slv, 1m, 50m);
+            StopLossPct = Math.Clamp(slv, 1m, 99.9m);
 
         var tpEnabled = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "TakeProfitEnabled");
         TakeProfitEnabled = tpEnabled != null && string.Equals(tpEnabled.Value, "true", StringComparison.OrdinalIgnoreCase);
@@ -860,6 +871,22 @@ public class TradingStateService
 
         var dryRunJobs = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "DryRunJobs");
         DryRunJobs = dryRunJobs != null && string.Equals(dryRunJobs.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var tsEnabled = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "TrailingStopEnabled");
+        TrailingStopEnabled = tsEnabled != null && string.Equals(tsEnabled.Value, "true", StringComparison.OrdinalIgnoreCase);
+        var tsPct = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "TrailingStopPct");
+        if (tsPct != null && decimal.TryParse(tsPct.Value, System.Globalization.CultureInfo.InvariantCulture, out var tsv))
+            TrailingStopPct = Math.Clamp(tsv, 0.5m, 50m);
+
+        var acEnabled = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoCancelEnabled");
+        AutoCancelEnabled = acEnabled != null && string.Equals(acEnabled.Value, "true", StringComparison.OrdinalIgnoreCase);
+        var acDays = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoCancelDays");
+        if (acDays != null && int.TryParse(acDays.Value, out var acd))
+            AutoCancelDays = Math.Clamp(acd, 1, 365);
+        var acBuys = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoCancelBuys");
+        AutoCancelBuys = acBuys == null || string.Equals(acBuys.Value, "true", StringComparison.OrdinalIgnoreCase);
+        var acSells = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "AutoCancelSells");
+        AutoCancelSells = acSells != null && string.Equals(acSells.Value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Ensures required settings exist in DB for databases created before new settings were added</summary>
@@ -885,6 +912,12 @@ public class TradingStateService
             ["PredictionJobTime"] = ("05:00", "Daily ML prediction job time (HH:MM, 24-hour)"),
             ["PredictionAutoRefreshIntervalMinutes"] = ("15", "How often (minutes) the stale-prediction auto-refresh job runs (minimum 5)"),
             ["DryRunJobs"] = ("false", "Dry-run mode: scheduled jobs simulate orders and send Pushover notifications instead of placing real orders"),
+            ["TrailingStopEnabled"] = ("false", "Enable trailing stop-loss: sell when price falls TrailingStopPct% from its peak since position open"),
+            ["TrailingStopPct"] = ("5", "Trailing stop-loss percentage drop from high (0.5–50)"),
+            ["AutoCancelEnabled"] = ("false", "Automatically cancel open orders older than AutoCancelDays"),
+            ["AutoCancelDays"] = ("30", "Age in days before an open order is auto-cancelled"),
+            ["AutoCancelBuys"] = ("true", "Auto-cancel applies to buy orders"),
+            ["AutoCancelSells"] = ("false", "Auto-cancel applies to sell orders"),
         };
 
         var changed = false;

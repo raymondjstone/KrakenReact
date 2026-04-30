@@ -20,29 +20,51 @@ By downloading, installing, configuring, running, modifying, or otherwise using 
 
 ## Features
 
+### Trading & Orders
 - **Live Dashboard** -- Pinned ticker cards, candlestick chart(s), live order book, open orders, and balances in a single view
 - **Draggable / Resizable Layout** -- Dashboard panels can be rearranged and resized (react-grid-layout), with layout persisted to localStorage
 - **Multi-Chart Support** -- Add or remove additional chart panels on the fly; each chart keeps its own interval selection
 - **Live Order Book** -- Configurable-depth bid/ask panel streamed via SignalR, synced to the selected pair
 - **Real-time Pricing** -- WebSocket V1 (public ticker) and V2 (private executions/balances) for live updates
 - **Order Management** -- View, create, edit, and cancel limit orders directly from the UI
+- **Symbol Constraint Validation** -- Order dialog enforces Kraken's per-symbol minimum quantity, minimum value, price decimal places, and quantity decimal places; constraints are displayed inline and inputs auto-round on blur
+
+### Portfolio & Analytics
 - **Portfolio Tracking** -- Balance overview with USD and GBP valuations, portfolio percentages, and order coverage (covered vs uncovered quantities for sell orders)
 - **Profit/Loss** -- Proportional cost basis calculation from trade history with multi-currency support (GBP, EUR, USDT → USD conversion), net P/L and P/L percentage per asset
-- **Price History** -- Daily kline data stored in SQL Server, with automatic gap-filling from the Kraken API
-- **Large Movement Alerts** -- Configurable threshold to temporarily surface assets with significant 24h price swings
+- **Analytics** -- Portfolio analytics and performance charts
+- **Portfolio Rebalancing** -- Calculate drift from target allocations with buy/sell action plan; automated rebalance schedules with configurable cron, minimum drift threshold, alert-only or auto-execute modes
+
+### Automation
 - **Auto-Trade Engine** -- Rule-based order suggestions with weighted price analysis
+- **DCA** -- Dollar-cost averaging rules engine: configurable symbols, amounts, and cron schedules, with per-rule last-run status and manual trigger
+- **Stop-Loss** -- Automatic market sell when an asset price drops a configurable percentage below average cost basis (1–99.9%), checked every 5 minutes
+- **Take-Profit** -- Automatic limit sell when an asset price rises a configurable percentage above average cost basis, checked every 5 minutes
+- **Trailing Stop-Loss** -- Tracks the per-asset price high since monitoring began; triggers a market sell when price falls a configurable percentage from that peak
+- **Profit Ladder** -- Sell a configured fraction of holdings when price rises above cost by a trigger percentage, with per-rule cooldown hours
+- **Auto-Sell on Buy Fill** -- Automatically place a sell order at a configurable percentage above the fill price when a buy order executes
+- **Price Alerts** -- Create, edit, and delete price threshold alerts; reset triggered alerts so they fire again; optional auto-order on trigger (places a limit buy or sell with a configurable offset % from the trigger price)
+- **Auto-Cancel Stale Orders** -- Automatically cancel open orders older than a configurable number of days; separate toggles for buy and sell orders; runs daily at 09:00
+- **Dry-Run Mode** -- Global setting that makes all scheduled jobs (DCA, Stop-Loss, Take-Profit, Trailing Stop, Profit Ladder, Auto-Sell, Price Alert auto-orders, Rebalance, Auto-Cancel) simulate their action and send a Pushover notification instead of placing any real orders
+
+### Notifications
+- **Pushover Notifications** -- Proximity alerts (0.1–20%) when open orders approach market price, drawdown alerts, staking reward alerts, and job execution notifications
+- **Drawdown Alert** -- Computes 90-day peak-to-trough drawdown daily at 08:00 and sends a Pushover alert when the threshold is exceeded
+- **Large Movement Alerts** -- Configurable threshold to temporarily surface assets with significant 24h price swings
+
+### Data & History
+- **Price History** -- Daily kline data stored in SQL Server, with automatic gap-filling from the Kraken API
 - **Grouped Trades** -- Aggregated trade view by symbol with totals and averages
 - **Ledger Browser** -- Full ledger history from Kraken (deposits, withdrawals, trades, staking)
-- **ML Predictions** -- Machine-learning price direction forecasts with model quality metrics, Kelly sizing, regime detection, and confidence histograms (see [Predictions](#ml-predictions) section below)
-- **Stop-Loss / Take-Profit** -- Configurable automatic market-sell triggers checked every 5 minutes via Hangfire
-- **DCA** -- Dollar-cost averaging rules engine with configurable amounts and intervals
-- **Price Alerts** -- Custom price threshold alerts with Pushover notifications
-- **Analytics** -- Portfolio analytics and performance charts
-- **System Health** -- Live health check page showing database, WebSocket, pricing, and ML subsystem status
-- **Export to CSV** -- One-click export on Trades, Orders, and Ledger pages
+- **Export to CSV** -- One-click CSV export on Trades, Grouped Trades, Orders, and Ledger pages
 - **Delisted Asset Support** -- CSV-based fallback pricing for assets no longer tradeable on Kraken
-- **Kraken Asset Normalisation** -- Handles Kraken's X-prefixed crypto names (XXBT, XXRP, XETH) and Z-prefixed fiat (ZUSD, ZGBP) transparently with improved price lookups
-- **Pushover Notifications** -- Configurable proximity alerts (0.1-20%) when open orders approach the current market price, drawdown alerts, and optional staking reward notifications
+- **Kraken Asset Normalisation** -- Handles Kraken's X-prefixed crypto names (XXBT, XXRP, XETH) and Z-prefixed fiat (ZUSD, ZGBP) transparently
+
+### ML Predictions
+- **ML Predictions** -- Machine-learning price direction forecasts with model quality metrics, Kelly sizing, regime detection, and confidence histograms (see [ML Predictions](#ml-predictions) section below)
+
+### System & Settings
+- **System Health** -- Live health check page showing database, WebSocket, pricing, and ML subsystem status
 - **Dark/Light Theme** -- Defaults to dark mode with theme preference persisted to database
 - **Smart Balance Filtering** -- Optional "Hide Almost Zero Balances" setting (filters balances with < 0.0001 units OR < $0.01 value)
 - **Real-time Order Updates** -- Order amendments automatically recalculate distance, value, and balance covered/uncovered amounts with SignalR broadcasts
@@ -68,13 +90,14 @@ krakenreact.client/          React frontend (Vite)
 
 ### Key Technologies
 
-| Layer    | Technology                                      |
-| -------- | ----------------------------------------------- |
-| Backend  | ASP.NET Core 10, Entity Framework Core, Serilog |
-| Frontend | React 19, Vite, ag-grid Community, lightweight-charts |
-| Real-time | SignalR, Kraken WebSocket V1/V2                |
-| Database | SQL Server                                      |
-| Exchange | Kraken.Net (CryptoExchange.Net)                 |
+| Layer     | Technology                                              |
+| --------- | ------------------------------------------------------- |
+| Backend   | ASP.NET Core 10, Entity Framework Core, Serilog         |
+| Frontend  | React 19, Vite, ag-grid Community, lightweight-charts   |
+| Real-time | SignalR, Kraken WebSocket V1/V2                         |
+| Database  | SQL Server                                              |
+| Jobs      | Hangfire (recurring + fire-and-forget background jobs)  |
+| Exchange  | Kraken.Net (CryptoExchange.Net)                         |
 
 ## Prerequisites
 
@@ -109,7 +132,7 @@ Create `KrakenReact.Server/appsettings.Local.json` (this file is gitignored):
 }
 ```
 
-The application will automatically create missing tables on first run.
+The application will automatically create and migrate all required tables on first run — no manual `dotnet ef` commands needed.
 
 ### 3. Configure Kraken API keys
 
@@ -129,37 +152,83 @@ This starts both the ASP.NET backend (https://localhost:7247) and the Vite dev s
 
 ## Background Services
 
-| Service                       | Purpose                                                                                         |
-| ----------------------------- | ----------------------------------------------------------------------------------------------- |
-| `BackgroundTaskService`       | Orchestrates startup data loading, kline refresh (daily at 04:00), periodic order/trade/balance refresh |
-| `KrakenWebSocketV1Service`    | Public ticker feed -- live prices for all ZUSD pairs                                            |
-| `KrakenWebSocketV2Service`    | Private feed -- execution reports and balance changes                                           |
-| `DailyPriceRefreshJob`        | Hangfire job: fetches fresh OHLCV klines from Kraken for all tracked pairs (configurable time, default 04:00) |
-| `PredictionJob`               | Hangfire job: runs ML predictions for configured symbols (configurable time, default 05:00)     |
-| `StalePredictionRefreshJob`   | Hangfire job: refreshes any prediction older than one candle interval (default every 15 min)    |
-| `PortfolioSnapshotJob`        | Hangfire job: records total portfolio value to database daily at 23:55 for history chart        |
-| `StopLossTakeProfitJob`       | Hangfire job: checks all non-fiat balances against stop-loss and take-profit thresholds every 5 min |
-| `DrawdownAlertJob`            | Hangfire job: computes 90-day peak-to-trough drawdown daily at 08:00 and sends Pushover alert if threshold exceeded |
+| Service / Job                 | Schedule         | Purpose                                                                                          |
+| ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------ |
+| `BackgroundTaskService`       | Continuous       | Startup data loading, periodic order/trade/balance refresh, kline priority loading, price alerts |
+| `KrakenWebSocketV1Service`    | Continuous       | Public ticker feed — live prices for all ZUSD pairs                                              |
+| `KrakenWebSocketV2Service`    | Continuous       | Private feed — execution reports and balance changes                                             |
+| `DailyPriceRefreshJob`        | Configurable\*   | Fetches fresh OHLCV klines from Kraken for all tracked pairs (default 04:00)                     |
+| `PredictionJob`               | Configurable\*   | Runs ML predictions for configured symbols (default 05:00)                                       |
+| `StalePredictionRefreshJob`   | Every N minutes\*| Refreshes any prediction older than one candle interval (default every 15 min)                   |
+| `PortfolioSnapshotJob`        | Daily 23:55      | Records total portfolio value to database for the history chart                                  |
+| `StopLossTakeProfitJob`       | Every 5 min      | Checks all non-fiat balances against stop-loss, take-profit, and trailing stop thresholds        |
+| `DrawdownAlertJob`            | Daily 08:00      | Computes 90-day drawdown and sends Pushover alert if threshold exceeded                          |
+| `AutoCancelJob`               | Daily 09:00      | Cancels open orders older than the configured number of days (buy and/or sell, configurable)     |
+| `DcaJob`                      | Per-rule cron    | Dollar-cost averaging — places a limit buy for each active DCA rule on its schedule              |
+| `RebalanceJob`                | Per-schedule cron| Rebalance automation — sends alert or places orders when portfolio drift exceeds minimum          |
+
+\* Configurable from Settings → Schedule in the UI.
 
 ## Configuration
 
 All configuration is managed from the **Settings** tab:
 
-- **General**
-  - Large movement threshold for temporary ticker pins
-  - Hide almost zero balances toggle (< 0.0001 units or < $0.01 value)
-  - Staking notification toggle
-  - Order proximity notification toggle with configurable threshold (0.1% - 20%)
-  - Theme preference (dark/light)
-  - Stop-loss -- enable and set percentage threshold for automatic market sells
-  - Take-profit -- enable and set percentage threshold for automatic limit sells
-  - Drawdown alert -- enable and set the portfolio drawdown percentage that triggers a Pushover notification
-- **Schedule** -- Configure the daily price download time and ML prediction job time
-- **API Keys** -- Kraken API key/secret, Pushover credentials
-- **Trading Lists** -- Base currencies, blacklist, major coins, currency list, bad pairs, default pairs
-- **Asset Normalisations** -- Custom Kraken name mappings (e.g. XXBT=BTC)
+### General
+- Large movement threshold for temporary ticker pins
+- Hide almost zero balances toggle (< 0.0001 units or < $0.01 value)
+- Staking notification toggle
+- Order proximity notification toggle with configurable threshold (0.1% – 20%)
+- Theme preference (dark/light)
+- Order dialog button presets (price offset % buttons and quantity % buttons)
+- Auto-sell on buy fill — enable and set percentage above fill price
+- Auto-add staking rewards to newest open sell order
+- **Stop-Loss** — enable and set percentage below average cost (1–99.9%) for automatic market sells
+- **Take-Profit** — enable and set percentage above average cost for automatic limit sells
+- **Trailing Stop-Loss** — enable and set percentage drop from peak for automatic market sells
+- **Drawdown Alert** — enable and set portfolio drawdown % that triggers a Pushover notification
+- **Auto-Cancel Stale Orders** — enable, set age threshold in days, choose buy and/or sell orders
+- **Dry-Run Jobs** — simulate all automated job actions via Pushover without placing real orders
+
+### Schedule
+- Daily price download time (default 04:00)
+- Daily ML prediction job time (default 05:00)
+- Stale prediction auto-refresh interval (default 15 minutes)
+
+### API Keys
+- Kraken API key and secret
+- Pushover user key and app token
+
+### Trading Lists
+- Base currencies, blacklist, major coins, currency list, bad pairs, default pairs
+
+### Asset Normalisations
+- Custom Kraken name mappings (e.g. XXBT=BTC)
 
 Pinned ticker pairs are also persisted to the database.
+
+---
+
+## Price Alerts
+
+Alerts are managed from the **Price Alerts** tab:
+
+- **Create** — set a symbol, direction (rises above / falls below), target price, and optional note
+- **Edit** — modify any field on an existing alert
+- **Reset** — clear the triggered state so the alert will fire again when price crosses the threshold
+- **Auto-order** — optionally have the alert automatically place a limit buy or sell when it triggers, with a configurable quantity and price offset percentage from the trigger price
+- Triggered alerts send a Pushover notification; if auto-order is enabled the order placement result is also notified
+
+---
+
+## Rebalance Schedules
+
+The **Rebalance** tab includes an automated schedule manager:
+
+- Define target allocations as `ASSET:PCT` pairs (e.g. `BTC:40,ETH:30,USD:30`)
+- Set a cron schedule, minimum drift threshold, and optional note
+- Choose **Alert Only** (sends a Pushover notification when any asset drifts beyond the threshold) or **Auto-Execute** (places limit orders to bring the portfolio back to target)
+- Manually trigger any schedule with the **Run** button
+- Each schedule registers as a Hangfire recurring job and is restored automatically on restart
 
 ---
 
@@ -304,37 +373,6 @@ Key limitations to keep in mind:
 - Kelly sizing assumes your edge estimate is precise. In practice, use it as a rough ceiling, not an exact prescription.
 
 ---
-
-## Recent Improvements
-
-### Profit/Loss Tracking
-- **Proportional Cost Basis** -- When selling assets, the cost basis is proportionally adjusted for remaining holdings
-- **Multi-Currency Support** -- Trades in GBP, EUR, and USDT are automatically converted to USD for accurate P/L calculations
-- **Fiat Exclusion** -- Fiat currencies (USD, GBP, EUR, etc.) correctly show blank P/L fields instead of zero
-
-### Order Management Enhancements
-- **Real-time Recalculation** -- When editing an order, all derived fields (Latest Price, Distance, Distance %, Order Value) are automatically recalculated
-- **Balance Coverage Updates** -- Covered/uncovered quantities for balances update immediately when orders are created, edited, or cancelled
-- **Asset Matching** -- Improved matching logic handles Bitcoin (XBT/BTC) and other aliased assets correctly across orders and balances
-- **SignalR Broadcasting** -- Order and balance updates are pushed to all connected clients in real-time
-
-### Price Normalization
-- **Enhanced Lookups** -- `LatestPrice()` now iterates through all matching symbols to handle XBT/BTC variations
-- **Symbol Resolution** -- `ResolveSymbolKey()` method maps normalized names (BTC/USD) to Kraken WebSocket keys (XBT/USD)
-- **Duplicate Prevention** -- WebSocket V2 balance handler prevents XBT/BTC duplication
-
-### Settings Persistence
-- **Database-First** -- All settings including theme, notifications, and filters are persisted to the database
-- **Automatic Migration** -- Legacy settings are migrated to the new AppSettings table on startup
-- **Runtime Updates** -- Settings changes reload into TradingStateService without restart
-- **Dark Mode Default** -- Application defaults to dark theme on first launch
-
-### UI/UX Improvements
-- **Hide Almost Zero Balances** -- Smart filter based on both quantity (< 0.0001) and USD value (< $0.01)
-- **Configurable Notifications** -- Order proximity alerts with adjustable threshold (0.1-20%) and on/off toggle
-- **Theme Persistence** -- Theme preference survives page refreshes and syncs across browser tabs
-- **Settings Debouncing** -- Settings auto-save after 1 second of inactivity to prevent excessive writes
-
 
 ## Docker Support
 

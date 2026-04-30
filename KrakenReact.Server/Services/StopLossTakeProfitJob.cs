@@ -27,6 +27,7 @@ public class StopLossTakeProfitJob
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
         await CheckStopLossTakeProfitAsync(ct);
+        await CheckTrailingStopAsync(ct);
         await CheckProfitLadderAsync(ct);
     }
 
@@ -103,6 +104,55 @@ public class StopLossTakeProfitJob
                 {
                     _logger.LogError("[TakeProfit] Failed to place take-profit for {Asset}: {Error}", bal.Asset, result.Error?.Message);
                 }
+            }
+        }
+    }
+
+    private async Task CheckTrailingStopAsync(CancellationToken ct)
+    {
+        if (!_state.TrailingStopEnabled) return;
+
+        foreach (var bal in _state.Balances.Values.ToList())
+        {
+            if (FIAT.Contains(bal.Asset)) continue;
+            if (bal.Available <= 0 || bal.LatestValue < 5m) continue;
+
+            var currentPrice = bal.LatestPrice;
+            if (currentPrice <= 0) continue;
+
+            // Update tracked high
+            _state.TrailingHighPrices.AddOrUpdate(bal.Asset, currentPrice, (_, existing) => Math.Max(existing, currentPrice));
+            var high = _state.TrailingHighPrices[bal.Asset];
+
+            var dropPct = (high - currentPrice) / high * 100m;
+            if (dropPct < _state.TrailingStopPct) continue;
+
+            var sym = FindSymbol(bal.Asset);
+            if (sym == null) continue;
+
+            _logger.LogWarning("[TrailingStop] {Asset} dropped {Pct:F1}% from high {High:F4} (now {Price:F4})",
+                bal.Asset, dropPct, high, currentPrice);
+
+            if (_state.DryRunJobs)
+            {
+                await _notify.Pushover($"DRY RUN — Trailing Stop {bal.Asset}",
+                    $"Would market-sell {bal.Available:F4} {bal.Asset} — dropped {dropPct:F1}% from high {high:F4}");
+                _state.TrailingHighPrices[bal.Asset] = currentPrice;
+                continue;
+            }
+
+            var clientId = $"TS{DateTime.Now:yyyyMMddHHmmss}";
+            var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
+            if (result.Success)
+            {
+                await _notify.Pushover($"Trailing Stop Triggered — {bal.Asset}",
+                    $"Sold {bal.Available:F4} {bal.Asset} at market — dropped {dropPct:F1}% from high {high:F4}");
+                _logger.LogInformation("[TrailingStop] Order placed for {Asset}", bal.Asset);
+                _state.TrailingHighPrices.TryRemove(bal.Asset, out _);
+            }
+            else
+            {
+                _logger.LogError("[TrailingStop] Failed to place order for {Asset}: {Error}", bal.Asset, result.Error?.Message);
             }
         }
     }

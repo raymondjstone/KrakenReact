@@ -213,6 +213,25 @@ app.Lifetime.ApplicationStarted.Register(() =>
             "0 8 * * *",
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
         Log.Information("[Hangfire] Drawdown alert scheduled at 08:00");
+
+        // Auto-cancel stale orders — runs once daily at 09:00 local time
+        manager.AddOrUpdate<AutoCancelJob>(
+            "auto-cancel-orders",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "0 9 * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+        Log.Information("[Hangfire] Auto-cancel stale orders scheduled at 09:00");
+
+        // Restore rebalance schedule jobs from DB
+        var rebalSchedules = db.RebalanceSchedules.Where(s => s.Active).ToList();
+        foreach (var sched in rebalSchedules)
+        {
+            manager.AddOrUpdate<RebalanceJob>(
+                $"rebal-{sched.Id}",
+                job => job.ExecuteAsync(sched.Id, CancellationToken.None),
+                sched.CronExpression);
+        }
+        Log.Information("[Hangfire] Restored {Count} rebalance schedule(s)", rebalSchedules.Count);
     }
     catch (Exception ex)
     {

@@ -38,6 +38,12 @@ public class AppSettingsDto
     public bool DrawdownAlertEnabled { get; set; }
     public decimal DrawdownAlertThreshold { get; set; } = 10m;
     public bool DryRunJobs { get; set; }
+    public bool TrailingStopEnabled { get; set; }
+    public decimal TrailingStopPct { get; set; } = 5m;
+    public bool AutoCancelEnabled { get; set; }
+    public int AutoCancelDays { get; set; } = 30;
+    public bool AutoCancelBuys { get; set; } = true;
+    public bool AutoCancelSells { get; set; }
 }
 
 public class SaveSettingsRequest
@@ -78,4 +84,10 @@ public class SaveSettingsRequest
     public bool? DrawdownAlertEnabled { get; set; }
     public decimal? DrawdownAlertThreshold { get; set; }
     public bool? DryRunJobs { get; set; }
+    public bool? TrailingStopEnabled { get; set; }
+    public decimal? TrailingStopPct { get; set; }
+    public bool? AutoCancelEnabled { get; set; }
+    public int? AutoCancelDays { get; set; }
+    public bool? AutoCancelBuys { get; set; }
+    public bool? AutoCancelSells { get; set; }
 }

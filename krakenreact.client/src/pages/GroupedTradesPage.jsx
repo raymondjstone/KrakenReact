@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
 import api from '../api/apiClient';
@@ -11,6 +11,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 export default function GroupedTradesPage() {
   const [rowData, setRowData] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
+  const gridRef = useRef(null);
   const { gridTheme } = useTheme();
 
   const loadGroupedTrades = useCallback(() => {
@@ -72,8 +73,15 @@ export default function GroupedTradesPage() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
+        <button onClick={() => gridRef.current?.api.exportDataAsCsv({ fileName: 'grouped-trades.csv' })}
+          style={{ padding: '5px 14px', background: 'none', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', color: 'var(--text-muted)', fontSize: 12 }}>
+          Export CSV
+        </button>
+      </div>
       <div style={{ flex: selectedGroup ? '0 0 45%' : 1 }}>
         <AgGridReact
+          ref={gridRef}
           theme={gridTheme}
           rowData={rowData}
           columnDefs={columnDefs}

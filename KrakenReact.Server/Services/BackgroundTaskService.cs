@@ -547,9 +547,54 @@ public class BackgroundTaskService : BackgroundService
             var text = $"{alert.Symbol} {dir} ${alert.TargetPrice:F4} (current: ${latestPrice:F4}){(string.IsNullOrEmpty(alert.Note) ? "" : $" — {alert.Note}")}";
             await _notify.Pushover(title, text, Altairis.Pushover.Client.MessageSound.Falling);
             _logger.LogInformation("[PriceAlert] {Symbol} alert triggered at {Price}", alert.Symbol, latestPrice);
+
+            if (alert.AutoOrderEnabled && alert.AutoOrderQty > 0)
+            {
+                await PlaceAlertAutoOrder(alert, latestPrice.Value, ct);
+            }
         }
 
         await db.SaveChangesAsync(ct);
+    }
+
+    private async Task PlaceAlertAutoOrder(Models.PriceAlert alert, decimal currentPrice, CancellationToken ct)
+    {
+        try
+        {
+            var side = alert.AutoOrderSide == "Sell" ? OrderSide.Sell : OrderSide.Buy;
+            var offsetFactor = 1m + (alert.AutoOrderOffsetPct / 100m);
+            var limitPrice = Math.Round(currentPrice * offsetFactor, 2);
+            var qty = alert.AutoOrderQty;
+
+            var sideLabel = alert.AutoOrderSide == "Sell" ? "Sell" : "Buy";
+
+            if (_state.DryRunJobs)
+            {
+                await _notify.Pushover(
+                    $"DRY RUN — Alert auto-order {alert.Symbol}",
+                    $"Would place {sideLabel} limit: {qty} {alert.Symbol.Split('/')[0]} @ {limitPrice:F4} (offset {alert.AutoOrderOffsetPct:+0.##;-0.##;0}%)");
+                return;
+            }
+
+            var clientId = $"alert-{alert.Id}-{DateTime.UtcNow:yyyyMMddHHmm}";
+            var result = await _kraken.PlaceOrderAsync(alert.Symbol, side, OrderType.Limit, qty, limitPrice, clientId);
+            if (result.Success)
+            {
+                await _notify.Pushover(
+                    $"Alert auto-order placed: {alert.Symbol}",
+                    $"{sideLabel} limit {qty} {alert.Symbol.Split('/')[0]} @ {limitPrice:F4} (order: {result.Data?.OrderIds?.FirstOrDefault()})");
+                _logger.LogInformation("[PriceAlert] Auto-order placed for alert {Id}: {Side} {Qty} {Symbol} @ {Price}", alert.Id, sideLabel, qty, alert.Symbol, limitPrice);
+            }
+            else
+            {
+                await _notify.Pushover($"Alert auto-order FAILED: {alert.Symbol}", result.Error?.Message ?? "Unknown error");
+                _logger.LogError("[PriceAlert] Auto-order failed for alert {Id}: {Error}", alert.Id, result.Error?.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[PriceAlert] Exception placing auto-order for alert {Id}", alert.Id);
+        }
     }
 
 

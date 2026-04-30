@@ -179,6 +179,7 @@ public static class AutoMigrationService
     /// </summary>
     private static void ApplyPerformanceOptimizations(KrakenDbContext db)
     {
+        EnsureNewFeatureColumns(db);
         EnsurePredictionResultColumns(db);
 
         try
@@ -334,6 +335,54 @@ public static class AutoMigrationService
         catch (Exception ex)
         {
             Log.Warning(ex, "[AutoMigration] Could not create new feature tables");
+        }
+    }
+
+    private static void EnsureNewFeatureColumns(KrakenDbContext db)
+    {
+        try
+        {
+            // PriceAlert auto-order columns (added in new feature release)
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('PriceAlerts', 'AutoOrderEnabled') IS NULL
+                    ALTER TABLE [PriceAlerts] ADD [AutoOrderEnabled] bit NOT NULL CONSTRAINT [DF_PriceAlerts_AutoOrderEnabled] DEFAULT 0;
+                IF COL_LENGTH('PriceAlerts', 'AutoOrderSide') IS NULL
+                    ALTER TABLE [PriceAlerts] ADD [AutoOrderSide] nvarchar(10) NOT NULL CONSTRAINT [DF_PriceAlerts_AutoOrderSide] DEFAULT 'Buy';
+                IF COL_LENGTH('PriceAlerts', 'AutoOrderQty') IS NULL
+                    ALTER TABLE [PriceAlerts] ADD [AutoOrderQty] decimal(38,9) NOT NULL CONSTRAINT [DF_PriceAlerts_AutoOrderQty] DEFAULT 0;
+                IF COL_LENGTH('PriceAlerts', 'AutoOrderOffsetPct') IS NULL
+                    ALTER TABLE [PriceAlerts] ADD [AutoOrderOffsetPct] decimal(38,9) NOT NULL CONSTRAINT [DF_PriceAlerts_AutoOrderOffsetPct] DEFAULT 0;
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure new feature columns");
+        }
+
+        try
+        {
+            // RebalanceSchedules table
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'RebalanceSchedules')
+                BEGIN
+                    CREATE TABLE [RebalanceSchedules] (
+                        [Id]             int IDENTITY(1,1) NOT NULL,
+                        [Targets]        nvarchar(max) NOT NULL DEFAULT '',
+                        [CronExpression] nvarchar(100) NOT NULL DEFAULT '0 9 * * 1',
+                        [Active]         bit NOT NULL DEFAULT 1,
+                        [DriftMinPct]    decimal(38,2) NOT NULL DEFAULT 5,
+                        [AutoExecute]    bit NOT NULL DEFAULT 0,
+                        [CreatedAt]      datetime2 NOT NULL,
+                        [LastRunAt]      datetime2 NULL,
+                        [LastRunResult]  nvarchar(max) NOT NULL DEFAULT '',
+                        CONSTRAINT [PK_RebalanceSchedules] PRIMARY KEY ([Id])
+                    )
+                END
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create RebalanceSchedules table");
         }
     }
 

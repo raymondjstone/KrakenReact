@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api/apiClient';
 
+const EMPTY_SCHED = { targets: '', cronExpression: '0 9 * * 1', driftMinPct: 5, autoExecute: false, note: '', active: true };
+
 const STORAGE_KEY = 'kraken_rebalance_targets';
 
 function loadTargets() {
@@ -19,6 +21,19 @@ export default function RebalancePage() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Schedules
+  const [schedules, setSchedules] = useState([]);
+  const [schedForm, setSchedForm] = useState(EMPTY_SCHED);
+  const [schedEditId, setSchedEditId] = useState(null);
+  const [showSchedForm, setShowSchedForm] = useState(false);
+  const [schedStatus, setSchedStatus] = useState('');
+
+  const loadSchedules = useCallback(() => {
+    api.get('/rebalanceschedules').then(r => setSchedules(r.data || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => { loadSchedules(); }, [loadSchedules]);
 
   const totalTargetPct = targets.reduce((s, t) => s + (Number(t.pct) || 0), 0);
 
@@ -158,6 +173,115 @@ export default function RebalancePage() {
           </div>
         </div>
       )}
+
+      {/* Rebalance Schedules */}
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, marginTop: 24 }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: 14 }}>Automated Rebalance Schedules</div>
+          <button onClick={() => { setSchedEditId(null); setSchedForm(EMPTY_SCHED); setShowSchedForm(true); }}
+            style={{ padding: '5px 14px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
+            + New Schedule
+          </button>
+        </div>
+
+        {schedStatus && (
+          <div style={{ padding: '8px 16px', background: schedStatus.includes('Error') ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', color: schedStatus.includes('Error') ? 'var(--red)' : 'var(--green)', fontSize: 12 }}>{schedStatus}</div>
+        )}
+
+        {showSchedForm && (
+          <div style={{ padding: 20, borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
+            <div style={{ fontWeight: 600, marginBottom: 12, color: 'var(--text-primary)', fontSize: 13 }}>{schedEditId ? 'Edit Schedule' : 'New Schedule'}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+              <div style={{ flex: '1 1 240px' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>Targets (e.g. BTC:40,ETH:30,USD:30)</div>
+                <input value={schedForm.targets} onChange={e => setSchedForm(f => ({ ...f, targets: e.target.value }))}
+                  placeholder="BTC:40,ETH:30,USD:30" style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>Cron expression</div>
+                <input value={schedForm.cronExpression} onChange={e => setSchedForm(f => ({ ...f, cronExpression: e.target.value }))}
+                  placeholder="0 9 * * 1" style={{ ...inputStyle, width: 140 }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>Min drift % to act</div>
+                <input type="number" min={1} max={50} step={0.5} value={schedForm.driftMinPct}
+                  onChange={e => setSchedForm(f => ({ ...f, driftMinPct: parseFloat(e.target.value) || 5 }))}
+                  style={{ ...inputStyle, width: 80 }} />
+              </div>
+              <div style={{ flex: '1 1 160px' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>Note (optional)</div>
+                <input value={schedForm.note} onChange={e => setSchedForm(f => ({ ...f, note: e.target.value }))}
+                  style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={schedForm.autoExecute} onChange={e => setSchedForm(f => ({ ...f, autoExecute: e.target.checked }))} />
+                <span style={{ color: 'var(--text-muted)' }}>Auto-execute orders (otherwise alert only)</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={schedForm.active} onChange={e => setSchedForm(f => ({ ...f, active: e.target.checked }))} />
+                <span style={{ color: 'var(--text-muted)' }}>Active</span>
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => {
+                if (!schedForm.targets.trim()) return;
+                const req = schedEditId
+                  ? api.put(`/rebalanceschedules/${schedEditId}`, schedForm)
+                  : api.post('/rebalanceschedules', schedForm);
+                req.then(() => { loadSchedules(); setShowSchedForm(false); setSchedEditId(null); setSchedStatus(schedEditId ? 'Schedule updated' : 'Schedule created'); setTimeout(() => setSchedStatus(''), 3000); })
+                  .catch(() => setSchedStatus('Error saving schedule'));
+              }} style={{ padding: '6px 16px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                {schedEditId ? 'Update' : 'Create'}
+              </button>
+              <button onClick={() => { setShowSchedForm(false); setSchedEditId(null); setSchedForm(EMPTY_SCHED); }}
+                style={{ padding: '6px 14px', background: 'none', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13 }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {schedules.length === 0 && !showSchedForm ? (
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>No schedules configured.</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: 'var(--bg-secondary)' }}>
+                {['Targets', 'Cron', 'Drift Min', 'Mode', 'Note', 'Status', 'Last Run', ''].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 500, fontSize: 11 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {schedules.map(s => (
+                <tr key={s.id} style={{ borderTop: '1px solid var(--border)', opacity: s.active ? 1 : 0.6 }}>
+                  <td style={{ padding: '8px 12px', color: 'var(--text-primary)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.targets}</td>
+                  <td style={{ padding: '8px 12px', color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: 12 }}>{s.cronExpression}</td>
+                  <td style={{ padding: '8px 12px', color: 'var(--text-muted)' }}>{s.driftMinPct}%</td>
+                  <td style={{ padding: '8px 12px' }}>
+                    <span style={{ color: s.autoExecute ? 'var(--green)' : 'var(--yellow)', fontSize: 11, fontWeight: 600 }}>
+                      {s.autoExecute ? 'AUTO-EXECUTE' : 'ALERT ONLY'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '8px 12px', color: 'var(--text-muted)' }}>{s.note}</td>
+                  <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.lastRunResult || '—'}</td>
+                  <td style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 11 }}>{s.lastRunAt ? new Date(s.lastRunAt).toLocaleString() : '—'}</td>
+                  <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                    <button onClick={() => { setSchedEditId(s.id); setSchedForm({ targets: s.targets, cronExpression: s.cronExpression, driftMinPct: s.driftMinPct, autoExecute: s.autoExecute, note: s.note || '', active: s.active }); setShowSchedForm(true); }}
+                      style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', fontSize: 13, padding: '0 8px 0 0' }}>Edit</button>
+                    <button onClick={() => { api.post(`/rebalanceschedules/${s.id}/trigger`).then(() => setSchedStatus('Triggered')).catch(() => setSchedStatus('Error')); setTimeout(() => setSchedStatus(''), 3000); }}
+                      style={{ background: 'none', border: 'none', color: 'var(--yellow)', cursor: 'pointer', fontSize: 13, padding: '0 8px 0 0' }}>Run</button>
+                    <button onClick={() => { if (confirm('Delete schedule?')) api.delete(`/rebalanceschedules/${s.id}`).then(loadSchedules).catch(() => {}); }}
+                      style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 13, padding: 0 }}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

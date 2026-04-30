@@ -67,6 +67,16 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
   // Dry-run jobs
   const [dryRunJobs, setDryRunJobs] = useState(false);
 
+  // Trailing stop-loss
+  const [trailingStopEnabled, setTrailingStopEnabled] = useState(false);
+  const [trailingStopPct, setTrailingStopPct] = useState(5);
+
+  // Auto-cancel stale orders
+  const [autoCancelEnabled, setAutoCancelEnabled] = useState(false);
+  const [autoCancelDays, setAutoCancelDays] = useState(30);
+  const [autoCancelBuys, setAutoCancelBuys] = useState(true);
+  const [autoCancelSells, setAutoCancelSells] = useState(false);
+
   // Order book
   const [orderBookDepth, setOrderBookDepth] = useState(25);
 
@@ -118,6 +128,12 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     setDrawdownAlertEnabled(!!data.drawdownAlertEnabled);
     setDrawdownAlertThreshold(data.drawdownAlertThreshold ?? 10);
     setDryRunJobs(!!data.dryRunJobs);
+    setTrailingStopEnabled(!!data.trailingStopEnabled);
+    setTrailingStopPct(data.trailingStopPct ?? 5);
+    setAutoCancelEnabled(!!data.autoCancelEnabled);
+    setAutoCancelDays(data.autoCancelDays ?? 30);
+    setAutoCancelBuys(data.autoCancelBuys !== false);
+    setAutoCancelSells(!!data.autoCancelSells);
     setOrderBookDepth(data.orderBookDepth || 25);
     setPriceDownloadTime(data.priceDownloadTime || '04:00');
     setPredictionJobTime(data.predictionJobTime || '05:00');
@@ -185,6 +201,12 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
     payload.drawdownAlertEnabled = drawdownAlertEnabled;
     payload.drawdownAlertThreshold = drawdownAlertThreshold;
     payload.dryRunJobs = dryRunJobs;
+    payload.trailingStopEnabled = trailingStopEnabled;
+    payload.trailingStopPct = trailingStopPct;
+    payload.autoCancelEnabled = autoCancelEnabled;
+    payload.autoCancelDays = autoCancelDays;
+    payload.autoCancelBuys = autoCancelBuys;
+    payload.autoCancelSells = autoCancelSells;
     payload.orderBookDepth = orderBookDepth;
     payload.priceDownloadTime = priceDownloadTime;
     payload.predictionJobTime = predictionJobTime;
@@ -513,8 +535,8 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
             {stopLossEnabled && (
               <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Trigger at</span>
-                <input type="number" min="1" max="50" step="0.5" value={stopLossPct}
-                  onChange={e => setStopLossPct(Math.min(50, Math.max(1, parseFloat(e.target.value) || 5)))}
+                <input type="number" min="1" max="99.9" step="0.5" value={stopLossPct}
+                  onChange={e => setStopLossPct(Math.min(99.9, Math.max(1, parseFloat(e.target.value) || 5)))}
                   style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }} />
                 <span style={{ color: 'var(--text-muted)' }}>% below avg cost</span>
               </div>
@@ -583,6 +605,63 @@ export default function SettingsPage({ settings, onSettingsChange, serverSetting
             {dryRunJobs && (
               <div style={{ marginTop: 10, padding: '8px 12px', background: 'rgba(234,179,8,0.12)', borderRadius: 4, border: '1px solid rgba(234,179,8,0.35)', color: 'var(--text-warning, #ca8a04)', fontSize: 12 }}>
                 Dry-run is active — no real orders will be placed by automated jobs.
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Trailing Stop-Loss</div>
+                <div style={hintStyle}>
+                  Tracks the highest price seen for each held asset since monitoring began. When price drops by the
+                  configured percentage from that peak, a market sell is triggered automatically.
+                </div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input type="checkbox" checked={trailingStopEnabled} onChange={e => setTrailingStopEnabled(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {trailingStopEnabled && (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Sell when price drops</span>
+                <input type="number" min="0.5" max="50" step="0.5" value={trailingStopPct}
+                  onChange={e => setTrailingStopPct(Math.min(50, Math.max(0.5, parseFloat(e.target.value) || 5)))}
+                  style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }} />
+                <span style={{ color: 'var(--text-muted)' }}>% from peak</span>
+              </div>
+            )}
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Auto-Cancel Stale Orders</div>
+                <div style={hintStyle}>Automatically cancel open orders that have been waiting longer than the configured number of days.</div>
+              </div>
+              <label className="toggle" style={{ flexShrink: 0, marginLeft: 16 }}>
+                <input type="checkbox" checked={autoCancelEnabled} onChange={e => setAutoCancelEnabled(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {autoCancelEnabled && (
+              <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Cancel after</span>
+                  <input type="number" min="1" max="365" step="1" value={autoCancelDays}
+                    onChange={e => setAutoCancelDays(Math.min(365, Math.max(1, parseInt(e.target.value) || 30)))}
+                    style={{ width: 70, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', textAlign: 'center', fontSize: 14 }} />
+                  <span style={{ color: 'var(--text-muted)' }}>days</span>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={autoCancelBuys} onChange={e => setAutoCancelBuys(e.target.checked)} />
+                  <span style={{ color: 'var(--text-muted)' }}>Cancel buy orders</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={autoCancelSells} onChange={e => setAutoCancelSells(e.target.checked)} />
+                  <span style={{ color: 'var(--text-muted)' }}>Cancel sell orders</span>
+                </label>
               </div>
             )}
           </div>
