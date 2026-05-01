@@ -10,4 +10,6 @@ public class DcaRule
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastRunAt { get; set; }
     public string LastRunResult { get; set; } = "";
+    public bool ConditionalEnabled { get; set; }
+    public int ConditionalMaPeriod { get; set; } = 20;
 }

@@ -4,6 +4,12 @@ import api from '../api/apiClient';
 const DEFAULT_PRICE_OFFSETS = [2, 5, 10, 15];
 const DEFAULT_QTY_PERCENTAGES = [5, 10, 20, 25, 50, 75, 100];
 
+// ─── Template helpers ─────────────────────────────────────────────────────────
+async function fetchTemplates() {
+  const r = await api.get('/ordertemplates');
+  return r.data || [];
+}
+
 // Cached symbol constraints so we only fetch once per session
 let _symbolsCache = null;
 async function fetchSymbolConstraints() {
@@ -34,6 +40,9 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const [riskUsd, setRiskUsd] = useState('');
   const [atrData, setAtrData] = useState(null);
   const [symbolsList, setSymbolsList] = useState(_symbolsCache || []);
+  const [templates, setTemplates] = useState([]);
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState('');
 
   const pOffsets = priceOffsets?.length ? priceOffsets : DEFAULT_PRICE_OFFSETS;
   const qPcts = qtyPercentages?.length ? qtyPercentages : DEFAULT_QTY_PERCENTAGES;
@@ -47,6 +56,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
       setAtrData(map);
     }).catch(() => {});
     fetchSymbolConstraints().then(setSymbolsList).catch(() => {});
+    fetchTemplates().then(setTemplates).catch(() => {});
   }, [isOpen]);
 
   useEffect(() => {
@@ -232,6 +242,32 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
             )}
           </div>
 
+          {/* Templates */}
+          {!editOrder && templates.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Template:</span>
+              <select
+                defaultValue=""
+                onChange={e => {
+                  const t = templates.find(t => String(t.id) === e.target.value);
+                  if (!t) return;
+                  if (t.symbol) setSymbol(t.symbol);
+                  if (t.side) setSide(t.side);
+                  if (t.priceOffsetPct != null && currentPrice > 0) {
+                    const factor = (t.side || side) === 'Buy' ? (1 - t.priceOffsetPct / 100) : (1 + t.priceOffsetPct / 100);
+                    setPrice(String(Number((currentPrice * factor).toPrecision(8))));
+                  }
+                  if (t.quantity != null) setQuantity(String(t.quantity));
+                  e.target.value = '';
+                }}
+                style={{ ...inputStyle, flex: 1, padding: '4px 8px', fontSize: 12 }}
+              >
+                <option value="">Load template…</option>
+                {templates.map(t => <option key={t.id} value={t.id}>{t.name} ({t.symbol || 'any'} {t.side || ''})</option>)}
+              </select>
+            </div>
+          )}
+
           {/* Side */}
           {!editOrder && (
             <div>
@@ -336,6 +372,52 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
 
           {/* Error */}
           {error && <div style={{ color: 'var(--red)', fontSize: 13, whiteSpace: 'pre-wrap' }}>{error}</div>}
+
+          {/* Save as Template */}
+          {!editOrder && (
+            <div>
+              {showSaveTemplate ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 10px', background: 'var(--bg-secondary, var(--bg-input))', borderRadius: 4, border: '1px solid var(--border)' }}>
+                  <input
+                    value={templateName}
+                    onChange={e => setTemplateName(e.target.value)}
+                    placeholder="Template name"
+                    style={{ ...inputStyle, flex: 1, padding: '4px 8px', fontSize: 12 }}
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!templateName.trim()) return;
+                      try {
+                        await api.post('/ordertemplates', {
+                          name: templateName.trim(),
+                          symbol: symbol || null,
+                          side: side || null,
+                          priceOffsetPct: currentPrice > 0 && price ? (Math.abs(Number(price) / currentPrice - 1) * 100) : null,
+                          quantity: quantity ? Number(quantity) : null,
+                          note: '',
+                        });
+                        const updated = await fetchTemplates();
+                        setTemplates(updated);
+                        setShowSaveTemplate(false);
+                        setTemplateName('');
+                      } catch { }
+                    }}
+                    style={{ padding: '4px 12px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}
+                  >
+                    Save
+                  </button>
+                  <button onClick={() => setShowSaveTemplate(false)} style={{ padding: '4px 8px', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>✕</button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowSaveTemplate(true)}
+                  style={{ padding: '3px 10px', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}
+                >
+                  Save as Template
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Buttons */}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>

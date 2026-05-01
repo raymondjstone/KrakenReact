@@ -24,6 +24,8 @@ public class KrakenDbContext : DbContext
     public DbSet<ProfitLadderRule> ProfitLadderRules { get; set; }
     public DbSet<MultiTfPredictionResult> MultiTfPredictionResults { get; set; }
     public DbSet<RebalanceSchedule> RebalanceSchedules { get; set; }
+    public DbSet<ScheduledOrder> ScheduledOrders { get; set; }
+    public DbSet<OrderTemplate> OrderTemplates { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 
@@ -144,6 +146,19 @@ public class KrakenDbContext : DbContext
         modelBuilder.Entity<MultiTfPredictionResult>(entity =>
         {
             entity.HasKey(e => new { e.Symbol, e.Interval });
+        });
+        modelBuilder.Entity<ScheduledOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Price).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.Quantity).HasColumnType("decimal(38,9)");
+        });
+        modelBuilder.Entity<OrderTemplate>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.PriceOffsetPct).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.Quantity).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.QtyPct).HasColumnType("decimal(38,9)");
         });
     }
 }

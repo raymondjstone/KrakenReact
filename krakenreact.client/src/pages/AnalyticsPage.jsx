@@ -21,12 +21,169 @@ export default function AnalyticsPage() {
       <h2 style={{ margin: '0 0 20px', color: 'var(--text-primary)' }}>Analytics</h2>
       <div style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
         {sectionBtn('heatmap', 'P/L Calendar')}
+        {sectionBtn('perfchart', 'Performance Chart')}
         {sectionBtn('correlation', 'Correlation Matrix')}
         {sectionBtn('metrics', 'Portfolio Metrics')}
       </div>
       {activeSection === 'heatmap'    && <PlCalendar />}
+      {activeSection === 'perfchart'  && <PerformanceChart />}
       {activeSection === 'correlation' && <CorrelationMatrix />}
       {activeSection === 'metrics'    && <PortfolioMetrics />}
+    </div>
+  );
+}
+
+// ─── Portfolio Performance Chart ─────────────────────────────────────────────
+
+function PerformanceChart() {
+  const [history, setHistory] = useState([]);
+  const [days, setDays] = useState(90);
+  const [loading, setLoading] = useState(true);
+  const [currency, setCurrency] = useState('usd');
+  const [hoverIdx, setHoverIdx] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    api.get(`/portfolio/history?days=${days}`)
+      .then(r => { setHistory(r.data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [days]);
+
+  if (loading) return <p style={{ color: 'var(--text-muted)' }}>Loading…</p>;
+  if (history.length < 2) return (
+    <div style={{ color: 'var(--text-muted)', padding: 24 }}>
+      Not enough snapshot history (need ≥ 2 days). A nightly snapshot runs at 23:55.
+    </div>
+  );
+
+  const values = history.map(d => currency === 'usd' ? Number(d.totalUsd) : Number(d.totalGbp));
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+  const range = maxV - minV || 1;
+  const W = 900, H = 220, PAD_L = 70, PAD_R = 16, PAD_T = 16, PAD_B = 32;
+  const chartW = W - PAD_L - PAD_R;
+  const chartH = H - PAD_T - PAD_B;
+
+  const toX = (i) => PAD_L + (i / Math.max(values.length - 1, 1)) * chartW;
+  const toY = (v) => PAD_T + (1 - (v - minV) / range) * chartH;
+
+  const points = values.map((v, i) => `${toX(i)},${toY(v)}`).join(' ');
+  const areaPoints = `${PAD_L},${PAD_T + chartH} ${points} ${toX(values.length - 1)},${PAD_T + chartH}`;
+
+  const first = values[0], last = values[values.length - 1];
+  const trend = last >= first ? 'var(--green)' : 'var(--red)';
+  const changePct = first > 0 ? ((last - first) / first * 100) : 0;
+  const sign = changePct >= 0 ? '+' : '';
+  const sym = currency === 'usd' ? '$' : '£';
+  const fmt = (v) => `${sym}${Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+  // Y-axis ticks
+  const yTicks = 5;
+  const yTickVals = Array.from({ length: yTicks }, (_, i) => minV + (range * i) / (yTicks - 1));
+
+  // X-axis date labels (up to 6)
+  const xLabelCount = Math.min(6, history.length);
+  const xLabelIdxs = Array.from({ length: xLabelCount }, (_, i) =>
+    Math.round(i * (history.length - 1) / (xLabelCount - 1))
+  );
+
+  const hoverPoint = hoverIdx !== null ? { x: toX(hoverIdx), y: toY(values[hoverIdx]), val: values[hoverIdx], date: history[hoverIdx]?.date } : null;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: 15 }}>Portfolio Value Over Time</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[30, 90, 180, 365].map(d => (
+            <button key={d} onClick={() => setDays(d)} style={{
+              padding: '3px 10px', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 12,
+              background: days === d ? 'var(--green)' : 'var(--bg-card)', color: days === d ? 'white' : 'var(--text-primary)',
+            }}>{d}d</button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['usd', 'gbp'].map(c => (
+            <button key={c} onClick={() => setCurrency(c)} style={{
+              padding: '3px 10px', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 12,
+              background: currency === c ? 'var(--green)' : 'var(--bg-card)', color: currency === c ? 'white' : 'var(--text-primary)',
+            }}>{c.toUpperCase()}</button>
+          ))}
+        </div>
+        <span style={{ fontSize: 14, fontWeight: 700, color: trend, marginLeft: 8 }}>
+          {sign}{changePct.toFixed(2)}% over {history.length} days
+        </span>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          style={{ width: '100%', maxWidth: W, display: 'block', cursor: 'crosshair' }}
+          onMouseMove={e => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const svgX = (e.clientX - rect.left) * W / rect.width;
+            const relX = svgX - PAD_L;
+            const idx = Math.round((relX / chartW) * (values.length - 1));
+            setHoverIdx(idx >= 0 && idx < values.length ? idx : null);
+          }}
+          onMouseLeave={() => setHoverIdx(null)}
+        >
+          {/* Y-axis grid + labels */}
+          {yTickVals.map((v, i) => {
+            const y = toY(v);
+            return (
+              <g key={i}>
+                <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="var(--border)" strokeWidth="0.5" />
+                <text x={PAD_L - 4} y={y + 4} textAnchor="end" fontSize="10" fill="var(--text-muted)">{fmt(v)}</text>
+              </g>
+            );
+          })}
+
+          {/* Area fill */}
+          <polygon points={areaPoints} fill={last >= first ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)'} />
+
+          {/* Line */}
+          <polyline points={points} fill="none" stroke={trend} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+
+          {/* X-axis labels */}
+          {xLabelIdxs.map(i => (
+            <text key={i} x={toX(i)} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--text-muted)">
+              {new Date(history[i].date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+            </text>
+          ))}
+
+          {/* Hover crosshair */}
+          {hoverPoint && (
+            <>
+              <line x1={hoverPoint.x} y1={PAD_T} x2={hoverPoint.x} y2={PAD_T + chartH} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="3,3" />
+              <circle cx={hoverPoint.x} cy={hoverPoint.y} r="4" fill={trend} stroke="var(--bg-primary)" strokeWidth="1.5" />
+              <rect
+                x={Math.min(hoverPoint.x + 6, W - PAD_R - 110)}
+                y={Math.max(hoverPoint.y - 28, PAD_T)}
+                width="104" height="38" rx="4"
+                fill="var(--bg-card)" stroke="var(--border)" strokeWidth="0.5"
+              />
+              <text
+                x={Math.min(hoverPoint.x + 58, W - PAD_R - 56)}
+                y={Math.max(hoverPoint.y - 13, PAD_T + 14)}
+                textAnchor="middle" fontSize="11" fill="var(--text-primary)" fontWeight="600"
+              >
+                {fmt(hoverPoint.val)}
+              </text>
+              <text
+                x={Math.min(hoverPoint.x + 58, W - PAD_R - 56)}
+                y={Math.max(hoverPoint.y + 2, PAD_T + 28)}
+                textAnchor="middle" fontSize="10" fill="var(--text-muted)"
+              >
+                {hoverPoint.date ? new Date(hoverPoint.date).toLocaleDateString() : ''}
+              </text>
+            </>
+          )}
+        </svg>
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+        Based on nightly portfolio snapshots. Current value: <strong style={{ color: trend }}>{fmt(last)}</strong> &middot; Start: {fmt(first)}
+      </div>
     </div>
   );
 }

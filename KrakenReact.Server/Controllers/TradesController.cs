@@ -100,6 +100,72 @@ public class TradesController : ControllerBase
         return Ok(grouped);
     }
 
+    /// <summary>GET /api/trades/pnl — per-sell realised P&amp;L using running average cost basis</summary>
+    [HttpGet("pnl")]
+    public async Task<IActionResult> GetPnl()
+    {
+        var trades = (await _db.GetTradesAsync())
+            .OrderBy(t => t.Timestamp)
+            .ToList();
+
+        // Running state per base asset
+        var totalQty = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        var avgCost  = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        var cumPnl   = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+
+        var results = new List<object>();
+
+        foreach (var t in trades)
+        {
+            var sym = t.Symbol ?? "";
+            var asset = sym.Contains('/') ? sym.Split('/')[0] : _state.NormalizeOrderSymbolBase(sym);
+
+            if (!totalQty.ContainsKey(asset)) { totalQty[asset] = 0m; avgCost[asset] = 0m; cumPnl[asset] = 0m; }
+
+            var qty   = t.Quantity;
+            var price = t.Price;
+
+            if (t.Side == OrderSide.Buy)
+            {
+                var oldQty = totalQty[asset];
+                var oldAvg = avgCost[asset];
+                var newQty = oldQty + qty;
+                avgCost[asset]  = newQty > 0 ? (oldQty * oldAvg + qty * price) / newQty : 0m;
+                totalQty[asset] = newQty;
+            }
+            else // Sell
+            {
+                var basis    = avgCost[asset];
+                var pnl      = qty * (price - basis);
+                var pnlPct   = basis > 0 ? pnl / (qty * basis) * 100m : 0m;
+                cumPnl[asset] += pnl;
+
+                results.Add(new
+                {
+                    id             = t.Id,
+                    orderId        = t.OrderId,
+                    symbol         = t.Symbol,
+                    asset,
+                    timestamp      = t.Timestamp,
+                    side           = t.Side.ToString(),
+                    price          = Math.Round(price, 9),
+                    quantity       = Math.Round(qty, 9),
+                    quoteQuantity  = Math.Round(t.QuoteQuantity, 9),
+                    fee            = Math.Round(t.Fee, 9),
+                    avgCostBasis   = Math.Round(basis, 9),
+                    pnl            = Math.Round(pnl, 4),
+                    pnlPct         = Math.Round(pnlPct, 4),
+                    cumulativePnl  = Math.Round(cumPnl[asset], 4),
+                });
+
+                // Reduce held quantity after a sell
+                totalQty[asset] = Math.Max(0m, totalQty[asset] - qty);
+            }
+        }
+
+        return Ok(results.Cast<dynamic>().OrderByDescending(r => (DateTime)r.timestamp).ToList());
+    }
+
     /// <summary>GET /api/trades/summary — realised P/L per symbol grouped by base asset</summary>
     [HttpGet("summary")]
     public async Task<IActionResult> GetSummary()

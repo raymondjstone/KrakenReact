@@ -48,6 +48,7 @@ builder.Services.AddTransient<PredictionJob>();
 builder.Services.AddTransient<StalePredictionRefreshJob>();
 builder.Services.AddTransient<PortfolioSnapshotJob>();
 builder.Services.AddTransient<DcaJob>();
+builder.Services.AddTransient<ScheduledOrderJob>();
 builder.Services.AddTransient<StopLossTakeProfitJob>();
 builder.Services.AddTransient<DrawdownAlertJob>();
 builder.Services.AddTransient<MultiTfPredictionJob>();
@@ -221,6 +222,14 @@ app.Lifetime.ApplicationStarted.Register(() =>
             "0 9 * * *",
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
         Log.Information("[Hangfire] Auto-cancel stale orders scheduled at 09:00");
+
+        // Scheduled one-time orders — check every minute
+        manager.AddOrUpdate<ScheduledOrderJob>(
+            "scheduled-orders",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "* * * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Log.Information("[Hangfire] Scheduled orders job registered (every minute)");
 
         // Restore rebalance schedule jobs from DB
         var rebalSchedules = db.RebalanceSchedules.Where(s => s.Active).ToList();

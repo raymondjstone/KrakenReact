@@ -384,6 +384,75 @@ public static class AutoMigrationService
         {
             Log.Warning(ex, "[AutoMigration] Could not create RebalanceSchedules table");
         }
+
+        try
+        {
+            // ScheduledOrders table
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ScheduledOrders')
+                BEGIN
+                    CREATE TABLE [ScheduledOrders] (
+                        [Id]           int IDENTITY(1,1) NOT NULL,
+                        [Symbol]       nvarchar(100) NOT NULL DEFAULT '',
+                        [Side]         nvarchar(10) NOT NULL DEFAULT 'Buy',
+                        [Price]        decimal(38,9) NOT NULL DEFAULT 0,
+                        [Quantity]     decimal(38,9) NOT NULL DEFAULT 0,
+                        [ScheduledAt]  datetime2 NOT NULL,
+                        [ExecutedAt]   datetime2 NULL,
+                        [Status]       nvarchar(20) NOT NULL DEFAULT 'Pending',
+                        [Note]         nvarchar(max) NOT NULL DEFAULT '',
+                        [ErrorMessage] nvarchar(max) NOT NULL DEFAULT '',
+                        [CreatedAt]    datetime2 NOT NULL,
+                        CONSTRAINT [PK_ScheduledOrders] PRIMARY KEY ([Id])
+                    )
+                END
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create ScheduledOrders table");
+        }
+
+        try
+        {
+            // OrderTemplates table
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'OrderTemplates')
+                BEGIN
+                    CREATE TABLE [OrderTemplates] (
+                        [Id]             int IDENTITY(1,1) NOT NULL,
+                        [Name]           nvarchar(200) NOT NULL DEFAULT '',
+                        [Symbol]         nvarchar(100) NOT NULL DEFAULT '',
+                        [Side]           nvarchar(10) NOT NULL DEFAULT 'Buy',
+                        [PriceOffsetPct] decimal(38,9) NULL,
+                        [Quantity]       decimal(38,9) NULL,
+                        [QtyPct]         decimal(38,9) NULL,
+                        [Note]           nvarchar(max) NOT NULL DEFAULT '',
+                        [CreatedAt]      datetime2 NOT NULL,
+                        CONSTRAINT [PK_OrderTemplates] PRIMARY KEY ([Id])
+                    )
+                END
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create OrderTemplates table");
+        }
+
+        try
+        {
+            // DcaRules — smart/conditional columns
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('DcaRules', 'ConditionalEnabled') IS NULL
+                    ALTER TABLE [DcaRules] ADD [ConditionalEnabled] bit NOT NULL CONSTRAINT [DF_DcaRules_ConditionalEnabled] DEFAULT 0;
+                IF COL_LENGTH('DcaRules', 'ConditionalMaPeriod') IS NULL
+                    ALTER TABLE [DcaRules] ADD [ConditionalMaPeriod] int NOT NULL CONSTRAINT [DF_DcaRules_ConditionalMaPeriod] DEFAULT 20;
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not add DcaRules conditional columns");
+        }
     }
 
     private static void EnsurePredictionResultColumns(KrakenDbContext db)

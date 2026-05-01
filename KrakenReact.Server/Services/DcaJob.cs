@@ -68,6 +68,33 @@ public class DcaJob
                 return;
             }
 
+            if (rule.ConditionalEnabled && rule.ConditionalMaPeriod > 0)
+            {
+                if (!_state.Prices.TryGetValue(rule.Symbol, out var priceItem))
+                {
+                    rule.LastRunResult = "Conditional skip — price data not available";
+                    rule.LastRunAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync(ct);
+                    return;
+                }
+                var klines = priceItem.GetKlineSnapshot()
+                    .Where(k => k.Interval == "OneDay" && k.Close > 0)
+                    .OrderByDescending(k => k.OpenTime)
+                    .Take(rule.ConditionalMaPeriod)
+                    .ToList();
+                if (klines.Count >= rule.ConditionalMaPeriod)
+                {
+                    var ma = klines.Average(k => k.Close);
+                    if (price > ma)
+                    {
+                        rule.LastRunResult = $"Conditional skip — price {price:F4} above {rule.ConditionalMaPeriod}-day MA {ma:F4}";
+                        rule.LastRunAt = DateTime.UtcNow;
+                        await db.SaveChangesAsync(ct);
+                        return;
+                    }
+                }
+            }
+
             if (_state.DryRunJobs)
             {
                 rule.LastRunResult = $"DRY RUN — would buy {qty} @ {price} (${rule.AmountUsd})";

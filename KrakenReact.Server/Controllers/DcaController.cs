@@ -48,6 +48,8 @@ public class DcaController : ControllerBase
         rule.AmountUsd = updated.AmountUsd;
         rule.CronExpression = updated.CronExpression;
         rule.Active = updated.Active;
+        rule.ConditionalEnabled = updated.ConditionalEnabled;
+        rule.ConditionalMaPeriod = updated.ConditionalMaPeriod;
         await _db.SaveChangesAsync();
         ScheduleRule(rule);
         return Ok(rule);

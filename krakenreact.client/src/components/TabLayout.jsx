@@ -20,6 +20,8 @@ import StakingPage from '../pages/StakingPage';
 import RebalancePage from '../pages/RebalancePage';
 import FundingRatesPage from '../pages/FundingRatesPage';
 import ProfitLadderPage from '../pages/ProfitLadderPage';
+import RealizedPnLPage from '../pages/RealizedPnLPage';
+import ScheduledOrdersPage from '../pages/ScheduledOrdersPage';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
@@ -49,6 +51,8 @@ const fixedTabs = [
   { id: 'staking', label: 'Staking' },
   { id: 'rebalance', label: 'Rebalance' },
   { id: 'funding', label: 'Funding Rates' },
+  { id: 'scheduledorders', label: 'Sched. Orders' },
+  { id: 'realizedpnl', label: 'Realized P&L' },
   { id: 'health', label: 'Health' },
 ];
 
@@ -239,6 +243,8 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'staking' && <StakingPage />}
         {activeTab === 'rebalance' && <RebalancePage />}
         {activeTab === 'funding' && <FundingRatesPage />}
+        {activeTab === 'scheduledorders' && <ScheduledOrdersPage />}
+        {activeTab === 'realizedpnl' && <RealizedPnLPage />}
         {activeTab === 'health' && <HealthPage />}
         {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>

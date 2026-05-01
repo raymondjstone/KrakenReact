@@ -8,7 +8,7 @@ const CRON_PRESETS = [
   { label: '1st of month', value: '0 9 1 * *' },
 ];
 
-const emptyRule = { symbol: '', amountUsd: 50, cronExpression: '0 9 * * 1', active: true };
+const emptyRule = { symbol: '', amountUsd: 50, cronExpression: '0 9 * * 1', active: true, conditionalEnabled: false, conditionalMaPeriod: 20 };
 
 export default function DcaPage() {
   const [rules, setRules] = useState([]);
@@ -98,6 +98,26 @@ export default function DcaPage() {
             <input value={form.cronExpression} onChange={e => setForm(f => ({ ...f, cronExpression: e.target.value }))} style={inputStyle} placeholder="0 9 * * 1" />
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Standard 5-field cron. Times are local server time.</div>
           </div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Conditional Buy (Smart DCA)</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={!!form.conditionalEnabled} onChange={e => setForm(f => ({ ...f, conditionalEnabled: e.target.checked }))} />
+              Only buy when price is below the N-day moving average
+            </label>
+            {form.conditionalEnabled && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 24 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>MA period (days):</span>
+                <input
+                  type="number" min={2} max={200} step={1}
+                  value={form.conditionalMaPeriod ?? 20}
+                  onChange={e => setForm(f => ({ ...f, conditionalMaPeriod: parseInt(e.target.value) || 20 }))}
+                  style={{ ...inputStyle, width: 80 }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Skip the buy if current price &gt; {form.conditionalMaPeriod ?? 20}-day SMA</span>
+              </div>
+            )}
+          </div>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer' }}>
               <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
@@ -141,6 +161,11 @@ export default function DcaPage() {
             )}
             {rule.lastRunAt && (
               <span style={{ marginLeft: 10 }}>Last run: {new Date(rule.lastRunAt).toLocaleString()}</span>
+            )}
+            {rule.conditionalEnabled && (
+              <span style={{ marginLeft: 10, color: 'var(--text-muted)', fontSize: 11 }}>
+                Smart DCA ({rule.conditionalMaPeriod}d MA)
+              </span>
             )}
             {rule.lastRunResult && (
               <span style={{ marginLeft: 10, color: rule.lastRunResult.startsWith('OK') ? 'var(--green)' : 'var(--red)' }}>
