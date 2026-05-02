@@ -52,6 +52,8 @@ builder.Services.AddTransient<ScheduledOrderJob>();
 builder.Services.AddTransient<StopLossTakeProfitJob>();
 builder.Services.AddTransient<DrawdownAlertJob>();
 builder.Services.AddTransient<MultiTfPredictionJob>();
+builder.Services.AddTransient<BracketMonitorJob>();
+builder.Services.AddTransient<SmartRepriceJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -230,6 +232,22 @@ app.Lifetime.ApplicationStarted.Register(() =>
             "* * * * *",
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
         Log.Information("[Hangfire] Scheduled orders job registered (every minute)");
+
+        // Bracket order monitor — check every minute for parent fill and OCO management
+        manager.AddOrUpdate<BracketMonitorJob>(
+            "bracket-monitor",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "* * * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Log.Information("[Hangfire] Bracket monitor job registered (every minute)");
+
+        // Smart limit order repricing — check every 5 minutes
+        manager.AddOrUpdate<SmartRepriceJob>(
+            "smart-reprice",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/5 * * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Log.Information("[Hangfire] Smart reprice job registered (every 5 minutes)");
 
         // Restore rebalance schedule jobs from DB
         var rebalSchedules = db.RebalanceSchedules.Where(s => s.Active).ToList();

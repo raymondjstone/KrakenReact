@@ -26,6 +26,8 @@ public class KrakenDbContext : DbContext
     public DbSet<RebalanceSchedule> RebalanceSchedules { get; set; }
     public DbSet<ScheduledOrder> ScheduledOrders { get; set; }
     public DbSet<OrderTemplate> OrderTemplates { get; set; }
+    public DbSet<BracketOrder> BracketOrders { get; set; }
+    public DbSet<AutoRepriceRule> AutoRepriceRules { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 
@@ -152,6 +154,7 @@ public class KrakenDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Price).HasColumnType("decimal(38,9)");
             entity.Property(e => e.Quantity).HasColumnType("decimal(38,9)");
+            entity.HasIndex(e => new { e.Status, e.ScheduledAt });
         });
         modelBuilder.Entity<OrderTemplate>(entity =>
         {
@@ -159,6 +162,20 @@ public class KrakenDbContext : DbContext
             entity.Property(e => e.PriceOffsetPct).HasColumnType("decimal(38,9)");
             entity.Property(e => e.Quantity).HasColumnType("decimal(38,9)");
             entity.Property(e => e.QtyPct).HasColumnType("decimal(38,9)");
+        });
+        modelBuilder.Entity<BracketOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Quantity).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.EntryPrice).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.StopPrice).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.TakeProfitPrice).HasColumnType("decimal(38,9)");
+            entity.HasIndex(e => new { e.Status });
+        });
+        modelBuilder.Entity<AutoRepriceRule>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.MaxDeviationPct).HasColumnType("decimal(38,9)");
         });
     }
 }

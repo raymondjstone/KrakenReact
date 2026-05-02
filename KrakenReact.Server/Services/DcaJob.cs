@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Hangfire;
 using Kraken.Net.Enums;
 using KrakenReact.Server.Data;
@@ -14,6 +15,11 @@ public class DcaJob
     private readonly NotificationService _notify;
     private readonly ILogger<DcaJob> _logger;
 
+    // Fear & Greed cache — shared across transient instances, refreshed every 4 hours
+    private static (int value, DateTime fetchedAt) _fgCache = (50, DateTime.MinValue);
+    private static readonly SemaphoreSlim _fgLock = new(1, 1);
+    private static readonly HttpClient _fgHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+
     public DcaJob(IDbContextFactory<KrakenDbContext> dbFactory, KrakenRestService kraken, TradingStateService state, NotificationService notify, ILogger<DcaJob> logger)
     {
         _dbFactory = dbFactory;
@@ -21,6 +27,49 @@ public class DcaJob
         _state = state;
         _notify = notify;
         _logger = logger;
+    }
+
+    private async Task<int> GetFearGreedIndexAsync()
+    {
+        if ((DateTime.UtcNow - _fgCache.fetchedAt).TotalHours < 4) return _fgCache.value;
+
+        await _fgLock.WaitAsync();
+        try
+        {
+            if ((DateTime.UtcNow - _fgCache.fetchedAt).TotalHours < 4) return _fgCache.value;
+            var json = await _fgHttp.GetStringAsync("https://api.alternative.me/fng/?limit=1");
+            using var doc = JsonDocument.Parse(json);
+            var valStr = doc.RootElement.GetProperty("data")[0].GetProperty("value").GetString();
+            if (int.TryParse(valStr, out var idx))
+            {
+                _fgCache = (idx, DateTime.UtcNow);
+                return idx;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[DCA] Could not fetch Fear & Greed — treating as neutral (50)");
+        }
+        finally
+        {
+            _fgLock.Release();
+        }
+        return 50;
+    }
+
+    private static decimal ComputeAtr(IList<DerivedKline> klines, int period = 14)
+    {
+        if (klines.Count < period + 1) return 0;
+        var sorted = klines.OrderBy(k => k.OpenTime).ToList();
+        var trs = new List<decimal>(sorted.Count);
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            var h = sorted[i].High;
+            var l = sorted[i].Low;
+            var pc = sorted[i - 1].Close;
+            trs.Add(Math.Max(h - l, Math.Max(Math.Abs(h - pc), Math.Abs(l - pc))));
+        }
+        return trs.TakeLast(period).Average();
     }
 
     [AutomaticRetry(Attempts = 1)]
@@ -43,9 +92,34 @@ public class DcaJob
                 return;
             }
 
-            // Determine market price (we'll use a slightly-above-market limit to behave like a market buy)
             var price = Math.Round(latestKline.Close * 1.002m, 2);
             var qty = Math.Round(rule.AmountUsd / price, 6);
+
+            // Feature: ATR-adjusted position sizing
+            if (rule.AtrSizingEnabled && rule.AtrRiskUsd > 0)
+            {
+                if (_state.Prices.TryGetValue(rule.Symbol, out var atrPriceItem))
+                {
+                    var klines = atrPriceItem.GetKlineSnapshot()
+                        .Where(k => k.Interval == "OneDay" && k.Close > 0 && k.High > 0 && k.Low > 0)
+                        .ToList();
+                    var atr = ComputeAtr(klines);
+                    if (atr > 0)
+                    {
+                        qty = Math.Round(rule.AtrRiskUsd / atr, 6);
+                        _logger.LogInformation("[DCA] ATR sizing: ATR={Atr:F4}, RiskUsd={Risk}, qty={Qty}",
+                            atr, rule.AtrRiskUsd, qty);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[DCA] ATR sizing: insufficient kline data — falling back to fixed amount");
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("[DCA] ATR sizing: no price data for {Symbol} — falling back to fixed amount", rule.Symbol);
+                }
+            }
 
             var sym = _state.Symbols.Values.FirstOrDefault(s =>
                 s.WebsocketName.Equals(rule.Symbol, StringComparison.OrdinalIgnoreCase));
@@ -68,6 +142,7 @@ public class DcaJob
                 return;
             }
 
+            // Feature: MA conditional filter
             if (rule.ConditionalEnabled && rule.ConditionalMaPeriod > 0)
             {
                 if (!_state.Prices.TryGetValue(rule.Symbol, out var priceItem))
@@ -92,6 +167,20 @@ public class DcaJob
                         await db.SaveChangesAsync(ct);
                         return;
                     }
+                }
+            }
+
+            // Feature: Fear & Greed index gate
+            if (rule.FearGreedEnabled)
+            {
+                var fgIndex = await GetFearGreedIndexAsync();
+                _logger.LogInformation("[DCA] Fear & Greed index: {Index} (max allowed: {Max})", fgIndex, rule.FearGreedMaxIndex);
+                if (fgIndex > rule.FearGreedMaxIndex)
+                {
+                    rule.LastRunResult = $"Fear & Greed skip — index {fgIndex} > max {rule.FearGreedMaxIndex} (market too greedy)";
+                    rule.LastRunAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync(ct);
+                    return;
                 }
             }
 

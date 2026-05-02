@@ -12,4 +12,10 @@ public class DcaRule
     public string LastRunResult { get; set; } = "";
     public bool ConditionalEnabled { get; set; }
     public int ConditionalMaPeriod { get; set; } = 20;
+    // Feature: ATR-adjusted position sizing
+    public bool AtrSizingEnabled { get; set; }
+    public decimal AtrRiskUsd { get; set; } = 50;
+    // Feature: Fear & Greed index gate
+    public bool FearGreedEnabled { get; set; }
+    public int FearGreedMaxIndex { get; set; } = 75;
 }

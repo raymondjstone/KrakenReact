@@ -1,4 +1,8 @@
+import { useState } from 'react';
+
 export default function PortfolioHistoryChart({ data }) {
+  const [mode, setMode] = useState('value'); // 'value' | 'pnl'
+
   if (!data || data.length === 0) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
@@ -13,12 +17,18 @@ export default function PortfolioHistoryChart({ data }) {
     );
   }
 
-  const values = data.map(d => Number(d.totalUsd));
+  const rawValues = data.map(d => Number(d.totalUsd));
+  const baseline = rawValues[0];
+
+  const values = mode === 'pnl'
+    ? rawValues.map(v => baseline > 0 ? ((v - baseline) / baseline * 100) : 0)
+    : rawValues;
+
   const minV = Math.min(...values);
   const maxV = Math.max(...values);
   const range = maxV - minV || 1;
-  const W = 100; // SVG viewBox width (%)
-  const H = 100; // SVG viewBox height (%)
+  const W = 100;
+  const H = 100;
   const PAD = 5;
 
   const points = values.map((v, i) => {
@@ -27,22 +37,42 @@ export default function PortfolioHistoryChart({ data }) {
     return `${x},${y}`;
   }).join(' ');
 
-  const lastVal = values[values.length - 1];
-  const firstVal = values[0];
-  const trend = lastVal >= firstVal ? 'var(--green)' : 'var(--red)';
-  const change = firstVal > 0 ? ((lastVal - firstVal) / firstVal * 100).toFixed(1) : '0.0';
-  const sign = lastVal >= firstVal ? '+' : '';
+  const lastRaw = rawValues[rawValues.length - 1];
+  const firstRaw = rawValues[0];
+  const trend = lastRaw >= firstRaw ? 'var(--green)' : 'var(--red)';
+  const changePct = firstRaw > 0 ? ((lastRaw - firstRaw) / firstRaw * 100).toFixed(1) : '0.0';
+  const changeUsd = (lastRaw - firstRaw);
+  const sign = lastRaw >= firstRaw ? '+' : '';
 
   const formatDate = (d) => {
     const dt = new Date(d.date);
     return `${dt.getMonth() + 1}/${dt.getDate()}`;
   };
 
+  const modeBtn = (m, label) => (
+    <button
+      onClick={() => setMode(m)}
+      style={{
+        padding: '1px 7px', fontSize: 10, border: '1px solid var(--border)', borderRadius: 3, cursor: 'pointer',
+        background: mode === m ? 'var(--green)' : 'var(--bg-input)',
+        color: mode === m ? 'white' : 'var(--text-muted)',
+      }}
+    >{label}</button>
+  );
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'var(--text-muted)' }}>
-        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Portfolio 30-day history</span>
-        <span style={{ color: trend, fontWeight: 600 }}>{sign}{change}% over {data.length} days</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ color: 'var(--text-primary)', fontWeight: 600, marginRight: 4 }}>
+            {mode === 'pnl' ? 'Cumulative P&L' : `Portfolio ${data.length}d`}
+          </span>
+          {modeBtn('value', 'Value')}
+          {modeBtn('pnl', 'P&L %')}
+        </div>
+        <span style={{ color: trend, fontWeight: 600 }}>
+          {sign}{changePct}%&nbsp;({sign}${Math.abs(changeUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })})
+        </span>
       </div>
       <div style={{ flex: 1, position: 'relative' }}>
         <svg
@@ -50,6 +80,13 @@ export default function PortfolioHistoryChart({ data }) {
           preserveAspectRatio="none"
           style={{ width: '100%', height: '100%', display: 'block' }}
         >
+          {mode === 'pnl' && minV < 0 && maxV > 0 && (
+            <line
+              x1={PAD} y1={PAD + (1 - (0 - minV) / range) * (H - PAD * 2)}
+              x2={W - PAD} y2={PAD + (1 - (0 - minV) / range) * (H - PAD * 2)}
+              stroke="var(--border)" strokeWidth="0.5" strokeDasharray="2,2" vectorEffect="non-scaling-stroke"
+            />
+          )}
           <polyline
             points={points}
             fill="none"
@@ -57,7 +94,6 @@ export default function PortfolioHistoryChart({ data }) {
             strokeWidth="2"
             vectorEffect="non-scaling-stroke"
           />
-          {/* dots at first and last */}
           {values.length > 0 && (
             <>
               <circle cx={PAD} cy={PAD + (1 - (values[0] - minV) / range) * (H - PAD * 2)} r="1.5" fill={trend} vectorEffect="non-scaling-stroke" />
@@ -69,12 +105,15 @@ export default function PortfolioHistoryChart({ data }) {
             </>
           )}
         </svg>
-        {/* min/max labels */}
         <div style={{ position: 'absolute', top: 0, right: 0, fontSize: 10, color: 'var(--text-muted)' }}>
-          ${maxV.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          {mode === 'pnl'
+            ? `${maxV >= 0 ? '+' : ''}${maxV.toFixed(1)}%`
+            : `$${maxV.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
         </div>
         <div style={{ position: 'absolute', bottom: 0, right: 0, fontSize: 10, color: 'var(--text-muted)' }}>
-          ${minV.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          {mode === 'pnl'
+            ? `${minV >= 0 ? '+' : ''}${minV.toFixed(1)}%`
+            : `$${minV.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
         </div>
         {data.length > 0 && (
           <div style={{ position: 'absolute', bottom: 0, left: 0, fontSize: 10, color: 'var(--text-muted)' }}>

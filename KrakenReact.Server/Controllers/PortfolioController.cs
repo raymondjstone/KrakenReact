@@ -86,6 +86,32 @@ public class PortfolioController : ControllerBase
         });
     }
 
+    /// <summary>GET /api/portfolio/rolling-pnl — cumulative P&amp;L relative to first snapshot in window</summary>
+    [HttpGet("rolling-pnl")]
+    public async Task<IActionResult> GetRollingPnl([FromQuery] int days = 30)
+    {
+        days = Math.Clamp(days, 1, 365);
+        var since = DateTime.UtcNow.Date.AddDays(-days);
+        var snapshots = await _db.PortfolioSnapshots
+            .Where(s => s.Date >= since)
+            .OrderBy(s => s.Date)
+            .Select(s => new { s.Date, s.TotalUsd })
+            .ToListAsync();
+
+        if (snapshots.Count == 0) return Ok(Array.Empty<object>());
+
+        var baseline = (double)snapshots[0].TotalUsd;
+        var result = snapshots.Select(s => new
+        {
+            date = s.Date,
+            pnlUsd = Math.Round((double)s.TotalUsd - baseline, 2),
+            pnlPct = baseline > 0 ? Math.Round(((double)s.TotalUsd - baseline) / baseline * 100, 3) : 0.0,
+            totalUsd = (double)s.TotalUsd,
+        }).ToList();
+
+        return Ok(result);
+    }
+
     /// <summary>Manually trigger a portfolio snapshot (useful for testing)</summary>
     [HttpPost("snapshot")]
     public async Task<IActionResult> TakeSnapshot()

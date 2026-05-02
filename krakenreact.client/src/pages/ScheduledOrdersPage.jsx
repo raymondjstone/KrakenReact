@@ -5,6 +5,10 @@ const EMPTY_FORM = {
   symbol: '', side: 'Buy', price: '', quantity: '', scheduledAt: '', note: '',
 };
 
+const EMPTY_TWAP = {
+  symbol: '', side: 'Buy', price: '', totalQuantity: '', slices: 4, startAt: '', endAt: '', note: '',
+};
+
 const STATUS_COLORS = {
   Pending: '#f59e0b',
   Executed: 'var(--green)',
@@ -28,6 +32,7 @@ export default function ScheduledOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(null);
+  const [twapForm, setTwapForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
 
@@ -89,6 +94,37 @@ export default function ScheduledOrdersPage() {
     catch { flash('Delete failed'); }
   };
 
+  const handleTwapSave = async () => {
+    if (!twapForm.symbol.trim()) return flash('Symbol is required');
+    if (!twapForm.price || Number(twapForm.price) <= 0) return flash('Price must be positive');
+    if (!twapForm.totalQuantity || Number(twapForm.totalQuantity) <= 0) return flash('Total quantity must be positive');
+    if (!twapForm.startAt || !twapForm.endAt) return flash('Start and end times are required');
+    const startUtc = toUtcIso(twapForm.startAt);
+    const endUtc = toUtcIso(twapForm.endAt);
+    if (new Date(endUtc) <= new Date(startUtc)) return flash('End time must be after start time');
+    if (new Date(startUtc) < new Date()) return flash('Start time must be in the future');
+    setSaving(true);
+    try {
+      const r = await api.post('/scheduledorders/twap', {
+        symbol: twapForm.symbol.trim(),
+        side: twapForm.side,
+        price: Number(twapForm.price),
+        totalQuantity: Number(twapForm.totalQuantity),
+        slices: Number(twapForm.slices),
+        startAt: startUtc,
+        endAt: endUtc,
+        note: twapForm.note || '',
+      });
+      load();
+      setTwapForm(null);
+      flash(r.data?.message || 'TWAP orders created');
+    } catch (err) {
+      flash(err.response?.data?.message || err.response?.data || 'TWAP creation failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const inputStyle = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, width: '100%', boxSizing: 'border-box' };
 
   const pending = orders.filter(o => o.status === 'Pending');
@@ -99,17 +135,88 @@ export default function ScheduledOrdersPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <h2 style={{ margin: 0, color: 'var(--text-primary)' }}>Scheduled Orders</h2>
         <button
-          onClick={() => setForm({ ...EMPTY_FORM })}
+          onClick={() => { setForm({ ...EMPTY_FORM }); setTwapForm(null); }}
           style={{ padding: '6px 16px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
         >
           + New Order
         </button>
+        <button
+          onClick={() => { setTwapForm({ ...EMPTY_TWAP }); setForm(null); }}
+          style={{ padding: '6px 16px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
+        >
+          TWAP Split
+        </button>
         {statusMsg && (
-          <span style={{ fontSize: 13, color: statusMsg.includes('failed') || statusMsg.includes('required') || statusMsg.includes('future') ? 'var(--red)' : 'var(--green)' }}>
+          <span style={{ fontSize: 13, color: statusMsg.includes('failed') || statusMsg.includes('required') || statusMsg.includes('future') || statusMsg.includes('after') ? 'var(--red)' : 'var(--green)' }}>
             {statusMsg}
           </span>
         )}
       </div>
+
+      {twapForm && (
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: 20, marginBottom: 24 }}>
+          <div style={{ fontWeight: 600, marginBottom: 16, color: 'var(--text-primary)' }}>TWAP Split — divide into time-weighted slices</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Symbol</div>
+              <input value={twapForm.symbol} onChange={e => setTwapForm(f => ({ ...f, symbol: e.target.value }))} style={inputStyle} placeholder="XBT/USD" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Side</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {['Buy', 'Sell'].map(s => (
+                  <button key={s} onClick={() => setTwapForm(f => ({ ...f, side: s }))} style={{
+                    flex: 1, padding: '6px 0', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                    background: twapForm.side === s ? (s === 'Buy' ? 'var(--green)' : 'var(--red)') : 'var(--bg-primary)',
+                    color: twapForm.side === s ? 'white' : 'var(--text-muted)',
+                  }}>{s}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Limit Price (each slice)</div>
+              <input type="number" min={0} step="any" value={twapForm.price} onChange={e => setTwapForm(f => ({ ...f, price: e.target.value }))} style={inputStyle} placeholder="0.00" />
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Total Quantity</div>
+              <input type="number" min={0} step="any" value={twapForm.totalQuantity} onChange={e => setTwapForm(f => ({ ...f, totalQuantity: e.target.value }))} style={inputStyle} placeholder="0.00" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Number of Slices (2–100)</div>
+              <input type="number" min={2} max={100} step={1} value={twapForm.slices} onChange={e => setTwapForm(f => ({ ...f, slices: parseInt(e.target.value) || 4 }))} style={inputStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Note (optional)</div>
+              <input value={twapForm.note} onChange={e => setTwapForm(f => ({ ...f, note: e.target.value }))} style={inputStyle} placeholder="Optional note" />
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Start Time (local)</div>
+              <input type="datetime-local" value={twapForm.startAt} onChange={e => setTwapForm(f => ({ ...f, startAt: e.target.value }))} style={inputStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>End Time (local)</div>
+              <input type="datetime-local" value={twapForm.endAt} onChange={e => setTwapForm(f => ({ ...f, endAt: e.target.value }))} style={inputStyle} />
+            </div>
+          </div>
+          {twapForm.totalQuantity && twapForm.slices >= 2 && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+              Each slice: {(Number(twapForm.totalQuantity) / twapForm.slices).toFixed(8)} {twapForm.symbol.split('/')[0] || 'units'}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={handleTwapSave} disabled={saving} style={{ padding: '6px 16px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+              {saving ? 'Creating…' : 'Create TWAP'}
+            </button>
+            <button onClick={() => setTwapForm(null)} style={{ padding: '6px 14px', background: 'var(--bg-primary)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {form && (
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: 20, marginBottom: 24 }}>

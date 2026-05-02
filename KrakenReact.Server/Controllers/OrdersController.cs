@@ -1,9 +1,12 @@
+using KrakenReact.Server.Data;
 using KrakenReact.Server.DTOs;
+using KrakenReact.Server.Models;
 using KrakenReact.Server.Services;
 using Kraken.Net.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using KrakenReact.Server.Hubs;
+using Microsoft.EntityFrameworkCore;
 
 namespace KrakenReact.Server.Controllers;
 
@@ -14,12 +17,14 @@ public class OrdersController : ControllerBase
     private readonly TradingStateService _state;
     private readonly KrakenRestService _kraken;
     private readonly IHubContext<TradingHub> _hub;
+    private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
 
-    public OrdersController(TradingStateService state, KrakenRestService kraken, IHubContext<TradingHub> hub)
+    public OrdersController(TradingStateService state, KrakenRestService kraken, IHubContext<TradingHub> hub, IDbContextFactory<KrakenDbContext> dbFactory)
     {
         _state = state;
         _kraken = kraken;
         _hub = hub;
+        _dbFactory = dbFactory;
     }
 
     [HttpGet]
@@ -60,6 +65,38 @@ public class OrdersController : ControllerBase
 
         // Recalculate balance covered/uncovered amounts
         _state.RecalculateBalanceCoveredAmounts();
+
+        // If bracket params provided, persist bracket for each placed order
+        if (req.BracketStopPct.HasValue || req.BracketTakeProfitPct.HasValue)
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            foreach (var orderId in result.Data.OrderIds)
+            {
+                var stopPrice = req.BracketStopPct.HasValue
+                    ? Math.Round(req.Price * (1 - req.BracketStopPct.Value / 100m), 2)
+                    : 0m;
+                var tpPrice = req.BracketTakeProfitPct.HasValue
+                    ? Math.Round(req.Price * (1 + req.BracketTakeProfitPct.Value / 100m), 2)
+                    : 0m;
+
+                if (stopPrice > 0 || tpPrice > 0)
+                {
+                    db.BracketOrders.Add(new BracketOrder
+                    {
+                        KrakenOrderId = orderId,
+                        Symbol = req.Symbol,
+                        Side = req.Side,
+                        Quantity = req.Quantity,
+                        EntryPrice = req.Price,
+                        StopPrice = stopPrice,
+                        TakeProfitPrice = tpPrice,
+                        Note = req.BracketNote ?? "",
+                        CreatedAt = DateTime.UtcNow,
+                    });
+                }
+            }
+            await db.SaveChangesAsync();
+        }
 
         // Broadcast updates to all clients
         _ = Task.Run(async () =>

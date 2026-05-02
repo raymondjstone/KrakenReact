@@ -50,6 +50,10 @@ public class DcaController : ControllerBase
         rule.Active = updated.Active;
         rule.ConditionalEnabled = updated.ConditionalEnabled;
         rule.ConditionalMaPeriod = updated.ConditionalMaPeriod;
+        rule.AtrSizingEnabled = updated.AtrSizingEnabled;
+        rule.AtrRiskUsd = updated.AtrRiskUsd;
+        rule.FearGreedEnabled = updated.FearGreedEnabled;
+        rule.FearGreedMaxIndex = updated.FearGreedMaxIndex;
         await _db.SaveChangesAsync();
         ScheduleRule(rule);
         return Ok(rule);

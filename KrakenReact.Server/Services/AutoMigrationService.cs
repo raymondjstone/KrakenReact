@@ -215,6 +215,23 @@ public static class AutoMigrationService
         {
             Log.Warning(ex, "[AutoMigration] Could not create DerivedKlines index");
         }
+
+        try
+        {
+            // Index on ScheduledOrders(Status, ScheduledAt) — the job polls this every minute
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ScheduledOrders_Status_ScheduledAt' AND object_id = OBJECT_ID('ScheduledOrders'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_ScheduledOrders_Status_ScheduledAt]
+                    ON [ScheduledOrders] ([Status], [ScheduledAt])
+                END
+            ");
+            Log.Information("[AutoMigration] ScheduledOrders index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create ScheduledOrders index");
+        }
     }
 
     private static void CreateNewFeatureTables(KrakenDbContext db)
@@ -441,17 +458,99 @@ public static class AutoMigrationService
 
         try
         {
-            // DcaRules — smart/conditional columns
+            // DcaRules — smart/conditional columns + ATR sizing + Fear & Greed gate
             db.Database.ExecuteSqlRaw(@"
                 IF COL_LENGTH('DcaRules', 'ConditionalEnabled') IS NULL
                     ALTER TABLE [DcaRules] ADD [ConditionalEnabled] bit NOT NULL CONSTRAINT [DF_DcaRules_ConditionalEnabled] DEFAULT 0;
                 IF COL_LENGTH('DcaRules', 'ConditionalMaPeriod') IS NULL
                     ALTER TABLE [DcaRules] ADD [ConditionalMaPeriod] int NOT NULL CONSTRAINT [DF_DcaRules_ConditionalMaPeriod] DEFAULT 20;
+                IF COL_LENGTH('DcaRules', 'AtrSizingEnabled') IS NULL
+                    ALTER TABLE [DcaRules] ADD [AtrSizingEnabled] bit NOT NULL CONSTRAINT [DF_DcaRules_AtrSizingEnabled] DEFAULT 0;
+                IF COL_LENGTH('DcaRules', 'AtrRiskUsd') IS NULL
+                    ALTER TABLE [DcaRules] ADD [AtrRiskUsd] decimal(38,9) NOT NULL CONSTRAINT [DF_DcaRules_AtrRiskUsd] DEFAULT 50;
+                IF COL_LENGTH('DcaRules', 'FearGreedEnabled') IS NULL
+                    ALTER TABLE [DcaRules] ADD [FearGreedEnabled] bit NOT NULL CONSTRAINT [DF_DcaRules_FearGreedEnabled] DEFAULT 0;
+                IF COL_LENGTH('DcaRules', 'FearGreedMaxIndex') IS NULL
+                    ALTER TABLE [DcaRules] ADD [FearGreedMaxIndex] int NOT NULL CONSTRAINT [DF_DcaRules_FearGreedMaxIndex] DEFAULT 75;
             ");
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "[AutoMigration] Could not add DcaRules conditional columns");
+            Log.Warning(ex, "[AutoMigration] Could not add DcaRules columns");
+        }
+
+        try
+        {
+            // BracketOrders table
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'BracketOrders')
+                BEGIN
+                    CREATE TABLE [BracketOrders] (
+                        [Id]               int IDENTITY(1,1) NOT NULL,
+                        [KrakenOrderId]    nvarchar(100) NOT NULL DEFAULT '',
+                        [Symbol]           nvarchar(100) NOT NULL DEFAULT '',
+                        [Side]             nvarchar(10) NOT NULL DEFAULT 'Buy',
+                        [Quantity]         decimal(38,9) NOT NULL DEFAULT 0,
+                        [EntryPrice]       decimal(38,9) NOT NULL DEFAULT 0,
+                        [StopPrice]        decimal(38,9) NOT NULL DEFAULT 0,
+                        [TakeProfitPrice]  decimal(38,9) NOT NULL DEFAULT 0,
+                        [Status]           nvarchar(20) NOT NULL DEFAULT 'Watching',
+                        [StopOrderId]      nvarchar(100) NULL,
+                        [TakeProfitOrderId] nvarchar(100) NULL,
+                        [CreatedAt]        datetime2 NOT NULL,
+                        [ActivatedAt]      datetime2 NULL,
+                        [Note]             nvarchar(max) NOT NULL DEFAULT '',
+                        CONSTRAINT [PK_BracketOrders] PRIMARY KEY ([Id])
+                    )
+                    CREATE INDEX [IX_BracketOrders_Status] ON [BracketOrders] ([Status])
+                END
+            ");
+            Log.Information("[AutoMigration] BracketOrders table ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create BracketOrders table");
+        }
+
+        try
+        {
+            // AutoRepriceRules table
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AutoRepriceRules')
+                BEGIN
+                    CREATE TABLE [AutoRepriceRules] (
+                        [Id]                 int IDENTITY(1,1) NOT NULL,
+                        [Symbol]             nvarchar(100) NOT NULL DEFAULT '',
+                        [MaxDeviationPct]    decimal(38,9) NOT NULL DEFAULT 2,
+                        [MinAgeMinutes]      int NOT NULL DEFAULT 15,
+                        [MaxAgeMinutes]      int NOT NULL DEFAULT 0,
+                        [RepriceBuys]        bit NOT NULL DEFAULT 1,
+                        [RepriceSells]       bit NOT NULL DEFAULT 0,
+                        [NewPriceOffsetPct]  decimal(38,9) NOT NULL DEFAULT 0,
+                        [Active]             bit NOT NULL DEFAULT 1,
+                        [CreatedAt]          datetime2 NOT NULL,
+                        [LastResult]         nvarchar(max) NOT NULL DEFAULT '',
+                        [LastRunAt]          datetime2 NULL,
+                        CONSTRAINT [PK_AutoRepriceRules] PRIMARY KEY ([Id])
+                    )
+                END
+                ELSE
+                BEGIN
+                    IF COL_LENGTH('AutoRepriceRules', 'MaxAgeMinutes') IS NULL
+                        ALTER TABLE [AutoRepriceRules] ADD [MaxAgeMinutes] int NOT NULL CONSTRAINT [DF_AutoRepriceRules_MaxAgeMinutes] DEFAULT 0;
+                    IF COL_LENGTH('AutoRepriceRules', 'RepriceBuys') IS NULL
+                        ALTER TABLE [AutoRepriceRules] ADD [RepriceBuys] bit NOT NULL CONSTRAINT [DF_AutoRepriceRules_RepriceBuys] DEFAULT 1;
+                    IF COL_LENGTH('AutoRepriceRules', 'RepriceSells') IS NULL
+                        ALTER TABLE [AutoRepriceRules] ADD [RepriceSells] bit NOT NULL CONSTRAINT [DF_AutoRepriceRules_RepriceSells] DEFAULT 0;
+                    IF COL_LENGTH('AutoRepriceRules', 'NewPriceOffsetPct') IS NULL
+                        ALTER TABLE [AutoRepriceRules] ADD [NewPriceOffsetPct] decimal(38,9) NOT NULL CONSTRAINT [DF_AutoRepriceRules_NewPriceOffsetPct] DEFAULT 0;
+                END
+            ");
+            Log.Information("[AutoMigration] AutoRepriceRules table ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create AutoRepriceRules table");
         }
     }
 

@@ -43,6 +43,10 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const [templates, setTemplates] = useState([]);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [templateName, setTemplateName] = useState('');
+  // Bracket order fields
+  const [bracketEnabled, setBracketEnabled] = useState(false);
+  const [bracketStopPct, setBracketStopPct] = useState('2');
+  const [bracketTpPct, setBracketTpPct] = useState('5');
 
   const pOffsets = priceOffsets?.length ? priceOffsets : DEFAULT_PRICE_OFFSETS;
   const qPcts = qtyPercentages?.length ? qtyPercentages : DEFAULT_QTY_PERCENTAGES;
@@ -201,7 +205,12 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
       if (editOrder) {
         await api.put(`/orders/${editOrder.id}`, { price: Number(price), quantity: Number(quantity) });
       } else {
-        await api.post('/orders', { symbol: symbol.replace('/', ''), side, price: Number(price), quantity: Number(quantity) });
+        const payload = { symbol: symbol.replace('/', ''), side, price: Number(price), quantity: Number(quantity) };
+        if (bracketEnabled && side === 'Buy') {
+          if (Number(bracketStopPct) > 0) payload.bracketStopPct = Number(bracketStopPct);
+          if (Number(bracketTpPct) > 0) payload.bracketTakeProfitPct = Number(bracketTpPct);
+        }
+        await api.post('/orders', payload);
       }
       onClose(true);
     } catch (err) {
@@ -372,6 +381,45 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
 
           {/* Error */}
           {error && <div style={{ color: 'var(--red)', fontSize: 13, whiteSpace: 'pre-wrap' }}>{error}</div>}
+
+          {/* Bracket order (OCO) */}
+          {!editOrder && side === 'Buy' && (
+            <div style={{ padding: '10px 12px', background: 'var(--bg-secondary, var(--bg-input))', borderRadius: 4, border: '1px solid var(--border)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer', marginBottom: bracketEnabled ? 10 : 0 }}>
+                <input type="checkbox" checked={bracketEnabled} onChange={e => setBracketEnabled(e.target.checked)} />
+                Attach bracket (OCO stop-loss + take-profit)
+              </label>
+              {bracketEnabled && (
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11, color: 'var(--red)', whiteSpace: 'nowrap' }}>Stop-loss %:</span>
+                    <input type="number" step="0.1" min="0.1" max="50" value={bracketStopPct}
+                      onChange={e => setBracketStopPct(e.target.value)}
+                      style={{ ...inputStyle, width: 70 }} />
+                    {price && Number(bracketStopPct) > 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                        @ ${(Number(price) * (1 - Number(bracketStopPct) / 100)).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11, color: 'var(--green)', whiteSpace: 'nowrap' }}>Take-profit %:</span>
+                    <input type="number" step="0.1" min="0.1" max="200" value={bracketTpPct}
+                      onChange={e => setBracketTpPct(e.target.value)}
+                      style={{ ...inputStyle, width: 70 }} />
+                    {price && Number(bracketTpPct) > 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                        @ ${(Number(price) * (1 + Number(bracketTpPct) / 100)).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                    SL &amp; TP placed after entry fills. First fill cancels the other.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Save as Template */}
           {!editOrder && (

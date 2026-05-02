@@ -8,7 +8,7 @@ const CRON_PRESETS = [
   { label: '1st of month', value: '0 9 1 * *' },
 ];
 
-const emptyRule = { symbol: '', amountUsd: 50, cronExpression: '0 9 * * 1', active: true, conditionalEnabled: false, conditionalMaPeriod: 20 };
+const emptyRule = { symbol: '', amountUsd: 50, cronExpression: '0 9 * * 1', active: true, conditionalEnabled: false, conditionalMaPeriod: 20, atrSizingEnabled: false, atrRiskUsd: 50, fearGreedEnabled: false, fearGreedMaxIndex: 75 };
 
 export default function DcaPage() {
   const [rules, setRules] = useState([]);
@@ -118,6 +118,42 @@ export default function DcaPage() {
             )}
           </div>
 
+          {/* ATR-adjusted sizing */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>ATR Position Sizing</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={!!form.atrSizingEnabled} onChange={e => setForm(f => ({ ...f, atrSizingEnabled: e.target.checked }))} />
+              Size by ATR instead of fixed USD amount
+            </label>
+            {form.atrSizingEnabled && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 24 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Risk USD per ATR:</span>
+                <input type="number" min={1} step={1} value={form.atrRiskUsd ?? 50}
+                  onChange={e => setForm(f => ({ ...f, atrRiskUsd: parseFloat(e.target.value) || 50 }))}
+                  style={{ ...inputStyle, width: 90 }} />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>qty = riskUsd ÷ 14-day ATR</span>
+              </div>
+            )}
+          </div>
+
+          {/* Fear & Greed gate */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Fear &amp; Greed Gate</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={!!form.fearGreedEnabled} onChange={e => setForm(f => ({ ...f, fearGreedEnabled: e.target.checked }))} />
+              Skip buy when market is too greedy
+            </label>
+            {form.fearGreedEnabled && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 24 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Max F&amp;G index (0–100):</span>
+                <input type="number" min={0} max={100} step={1} value={form.fearGreedMaxIndex ?? 75}
+                  onChange={e => setForm(f => ({ ...f, fearGreedMaxIndex: parseInt(e.target.value) || 75 }))}
+                  style={{ ...inputStyle, width: 80 }} />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Skip if index &gt; {form.fearGreedMaxIndex ?? 75} (Greed)</span>
+              </div>
+            )}
+          </div>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer' }}>
               <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
@@ -164,7 +200,17 @@ export default function DcaPage() {
             )}
             {rule.conditionalEnabled && (
               <span style={{ marginLeft: 10, color: 'var(--text-muted)', fontSize: 11 }}>
-                Smart DCA ({rule.conditionalMaPeriod}d MA)
+                MA filter ({rule.conditionalMaPeriod}d)
+              </span>
+            )}
+            {rule.atrSizingEnabled && (
+              <span style={{ marginLeft: 10, color: 'var(--text-muted)', fontSize: 11 }}>
+                ATR sizing (${rule.atrRiskUsd}/ATR)
+              </span>
+            )}
+            {rule.fearGreedEnabled && (
+              <span style={{ marginLeft: 10, color: 'var(--text-muted)', fontSize: 11 }}>
+                F&amp;G gate (&le;{rule.fearGreedMaxIndex})
               </span>
             )}
             {rule.lastRunResult && (

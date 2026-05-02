@@ -10,7 +10,7 @@ public class StalePredictionRefreshJob
     private readonly PredictionJob _predictionJob;
     private readonly ILogger<StalePredictionRefreshJob> _logger;
 
-    public const int StalenessThresholdMinutes = 30;
+    public const int StalenessThresholdMinutes = 20;
 
     public StalePredictionRefreshJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
