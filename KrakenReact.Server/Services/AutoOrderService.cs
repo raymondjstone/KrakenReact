@@ -108,13 +108,13 @@ public class AutoOrderService
 
         // Check if buy order already exists
         var hasOpenBuyOrder = _state.Orders.Values.Any(o =>
-            o.Symbol == instrument.SymbolNoSlash && o.Status == "Open" && o.Side == "Buy");
+            o.Symbol == instrument.SymbolNoSlash && TradingStateService.IsOpenOrderStatus(o.Status) && o.Side == "Buy");
         if (hasOpenBuyOrder) { ao.Reason = $"{rulename} Buy Order already in queue"; return ao; }
 
         ao.OrderWanted = true;
 
         var hasOpenSellOrder = _state.Orders.Values.Any(o =>
-            o.Symbol == instrument.SymbolNoSlash && o.Status == "Open" && o.Side == "Sell");
+            o.Symbol == instrument.SymbolNoSlash && TradingStateService.IsOpenOrderStatus(o.Status) && o.Side == "Sell");
         if (hasOpenSellOrder) { ao.Reason = $"{rulename} ok, but Sell Order already in queue"; return ao; }
 
         ao.Reason = ao.OrderRanking < 4400 ? $"{rulename} OK but low score" : $"{rulename} OK";

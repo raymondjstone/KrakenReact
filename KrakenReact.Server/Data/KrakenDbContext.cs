@@ -73,6 +73,8 @@ public class KrakenDbContext : DbContext
             entity.Property(e => e.SecondaryPrice).HasColumnType("decimal(38,9)");
             entity.Property(e => e.StopPrice).HasColumnType("decimal(38,9)");
             entity.Property(e => e.QuantityFilled).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.QuoteQuantityFilled).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.Fee).HasColumnType("decimal(38,9)");
         });
         modelBuilder.Entity<KrakenSymbol>(entity =>
         {
@@ -80,6 +82,7 @@ public class KrakenDbContext : DbContext
             entity.Property(e => e.MinValue).HasColumnType("decimal(38,9)");
             entity.Property(e => e.OrderMin).HasColumnType("decimal(38,9)");
             entity.Property(e => e.TickSize).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.LotMultiplier).HasColumnType("decimal(38,9)");
         });
         modelBuilder.Entity<KrakenBalanceAvailable>(entity =>
         {
@@ -96,6 +99,8 @@ public class KrakenDbContext : DbContext
             entity.Property(e => e.High).HasColumnType("decimal(38,9)");
             entity.Property(e => e.Low).HasColumnType("decimal(38,9)");
             entity.Property(e => e.Close).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.Volume).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.VolumeWeightedAveragePrice).HasColumnType("decimal(38,9)");
         });
         modelBuilder.Entity<AppSettings>(entity =>
         {
@@ -127,6 +132,8 @@ public class KrakenDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.TargetPrice).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.AutoOrderQty).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.AutoOrderOffsetPct).HasColumnType("decimal(38,9)");
         });
         modelBuilder.Entity<PredictionHistory>(entity =>
         {
@@ -138,6 +145,7 @@ public class KrakenDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.AmountUsd).HasColumnType("decimal(38,2)");
+            entity.Property(e => e.AtrRiskUsd).HasColumnType("decimal(38,9)");
         });
         modelBuilder.Entity<ProfitLadderRule>(entity =>
         {
@@ -148,6 +156,11 @@ public class KrakenDbContext : DbContext
         modelBuilder.Entity<MultiTfPredictionResult>(entity =>
         {
             entity.HasKey(e => new { e.Symbol, e.Interval });
+        });
+        modelBuilder.Entity<RebalanceSchedule>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.DriftMinPct).HasColumnType("decimal(38,9)");
         });
         modelBuilder.Entity<ScheduledOrder>(entity =>
         {
@@ -176,6 +189,7 @@ public class KrakenDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.MaxDeviationPct).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.NewPriceOffsetPct).HasColumnType("decimal(38,9)");
         });
     }
 }

@@ -28,7 +28,7 @@ public class AutoCancelJob
 
         var cutoff = DateTime.UtcNow.AddDays(-_state.AutoCancelDays);
         var candidates = _state.Orders.Values
-            .Where(o => o.Status == "Open" && o.CreateTime < cutoff)
+            .Where(o => TradingStateService.IsOpenOrderStatus(o.Status) && o.CreateTime < cutoff)
             .Where(o => (o.Side == "Buy" && _state.AutoCancelBuys) || (o.Side == "Sell" && _state.AutoCancelSells))
             .ToList();
 

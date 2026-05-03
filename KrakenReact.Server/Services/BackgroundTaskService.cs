@@ -106,9 +106,11 @@ public class BackgroundTaskService : BackgroundService
         _state.InitialDataLoad = false;
         _logger.LogInformation("[BG] Fresh transaction data loaded");
 
-        // Notify frontend that fresh trade/ledger data is available
+        // Notify frontend that fresh trade/ledger/order data is available
         try { await _hub.Clients.All.SendAsync("TradesUpdated"); }
         catch (Exception ex) { _logger.LogWarning(ex, "[BG] TradesUpdated broadcast failed"); }
+        try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[BG] OrderUpdate broadcast failed"); }
 
         // Phase 3: Slow kline loading in background (doesn't block trades/orders)
         _ = Task.Run(async () => { try { await LoadKlinesBackground(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "[BG] LoadKlinesBackground crashed"); } }, stoppingToken);
@@ -151,6 +153,8 @@ public class BackgroundTaskService : BackgroundService
         await LoadBalances();
         try { await _hub.Clients.All.SendAsync("TradesUpdated"); }
         catch (Exception ex) { _logger.LogWarning(ex, "[BG] TradesUpdated broadcast failed"); }
+        try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[BG] OrderUpdate broadcast failed"); }
     }
 
     private async Task LoadKlines(CancellationToken ct)
@@ -317,7 +321,7 @@ public class BackgroundTaskService : BackgroundService
                 // Find the newest open sell order for this asset
                 var newestSellOrder = _state.Orders.Values
                     .Where(o => o.Side == "Sell"
-                        && (o.Status == "Open" || o.Status == "New" || o.Status == "PendingNew")
+                        && TradingStateService.IsOpenOrderStatus(o.Status)
                         && _state.NormalizeOrderSymbolBase(o.Symbol) == asset)
                     .OrderByDescending(o => o.CreateTime)
                     .FirstOrDefault();
@@ -402,7 +406,7 @@ public class BackgroundTaskService : BackgroundService
         }
 
         var openOrders = _state.Orders.Values
-            .Where(o => o.Status == "Open" || o.Status == "New" || o.Status == "PartiallyFilled")
+            .Where(o => TradingStateService.IsOpenOrderStatus(o.Status))
             .ToList();
 
         var usdGbpRate = _state.GetUsdGbpRate();
@@ -493,7 +497,12 @@ public class BackgroundTaskService : BackgroundService
         while (!ct.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromHours(8), ct);
-            try { await LoadOrders(false); } catch (Exception ex) { _logger.LogError(ex, "[BG] Order refresh error"); }
+            try
+            {
+                await LoadOrders(false);
+                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+            }
+            catch (Exception ex) { _logger.LogError(ex, "[BG] Order refresh error"); }
         }
     }
 

@@ -293,7 +293,7 @@ public class KrakenWebSocketV1Service : BackgroundService
             // Update order distances in memory
             _ = Task.Run(async () =>
             {
-                foreach (var order in _state.Orders.Values.Where(o => o.Symbol.Replace("/", "") == priceItem.SymbolNoSlash && (o.Status == "Open" || o.Status == "New")))
+                foreach (var order in _state.Orders.Values.Where(o => o.Symbol.Replace("/", "") == priceItem.SymbolNoSlash && TradingStateService.IsOpenOrderStatus(o.Status)))
                 {
                     var latestPrice = _state.LatestPrice(order.Symbol);
                     if (latestPrice != null)

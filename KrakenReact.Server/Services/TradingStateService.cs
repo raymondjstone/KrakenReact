@@ -976,6 +976,19 @@ public class TradingStateService
             RecalculateOrderFields(order);
     }
 
+    /// <summary>Returns true for any order status that means the order is still active/open.
+    /// Handles both REST API PascalCase ("Open", "PendingNew") and WebSocket lowercase ("open", "pending_new").</summary>
+    public static bool IsOpenOrderStatus(string? status)
+    {
+        if (string.IsNullOrEmpty(status)) return false;
+        return status.Equals("Open", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("New", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("PendingNew", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("pending_new", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("PartiallyFilled", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("partially_filled", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Recalculates covered/uncovered quantities for all balances based on current open orders.
     /// For crypto assets: uses open sell orders to calculate covered/uncovered quantities.
     /// For currency assets (USD, EUR, etc.): reduces available by the total cost of open buy orders in that currency.</summary>
@@ -990,7 +1003,7 @@ public class TradingStateService
         }
 
         var openOrders = Orders.Values
-            .Where(o => o.Status == "Open" || o.Status == "New" || o.Status == "PendingNew")
+            .Where(o => IsOpenOrderStatus(o.Status))
             .ToList();
 
         // Sell orders reduce crypto asset available amounts

@@ -387,8 +387,9 @@ public static class AutoMigrationService
                         [Targets]        nvarchar(max) NOT NULL DEFAULT '',
                         [CronExpression] nvarchar(100) NOT NULL DEFAULT '0 9 * * 1',
                         [Active]         bit NOT NULL DEFAULT 1,
-                        [DriftMinPct]    decimal(38,2) NOT NULL DEFAULT 5,
+                        [DriftMinPct]    decimal(38,9) NOT NULL DEFAULT 5,
                         [AutoExecute]    bit NOT NULL DEFAULT 0,
+                        [Note]           nvarchar(max) NOT NULL DEFAULT '',
                         [CreatedAt]      datetime2 NOT NULL,
                         [LastRunAt]      datetime2 NULL,
                         [LastRunResult]  nvarchar(max) NOT NULL DEFAULT '',
@@ -551,6 +552,18 @@ public static class AutoMigrationService
         catch (Exception ex)
         {
             Log.Warning(ex, "[AutoMigration] Could not create AutoRepriceRules table");
+        }
+
+        try
+        {
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('RebalanceSchedules', 'Note') IS NULL
+                    ALTER TABLE [RebalanceSchedules] ADD [Note] nvarchar(max) NOT NULL CONSTRAINT [DF_RebalanceSchedules_Note] DEFAULT '';
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not add Note column to RebalanceSchedules");
         }
     }
 

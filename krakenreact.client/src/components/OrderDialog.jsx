@@ -119,14 +119,20 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   };
   const enteredPrice = Number(price) || 0;
 
+  const applyRoundedPrice = (raw) => {
+    const decimals = symInfo?.priceDecimals;
+    const rounded = decimals != null ? roundToDecimals(raw, decimals) : Number(raw.toPrecision(8));
+    setPrice(String(rounded));
+  };
+
   const applyPriceOffset = (pct) => {
     if (!currentPrice) return;
     const factor = side === 'Buy' ? (1 - pct / 100) : (1 + pct / 100);
-    setPrice(String(Number((currentPrice * factor).toPrecision(8))));
+    applyRoundedPrice(currentPrice * factor);
   };
 
   const setCurrentPrice = () => {
-    if (currentPrice) setPrice(String(currentPrice));
+    if (currentPrice) applyRoundedPrice(currentPrice);
   };
 
   const applyQtyPercentage = (pct) => {

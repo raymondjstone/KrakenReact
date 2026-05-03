@@ -317,6 +317,16 @@ public class KrakenRestService
 
     public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string clientOrderId)
     {
+        // Round price to the symbol's required decimal precision
+        if (price > 0)
+        {
+            var wsName = symbol.Contains('/')
+                ? symbol
+                : _state.Symbols.Keys.FirstOrDefault(k => k.Replace("/", "") == symbol) ?? symbol;
+            if (_state.Symbols.TryGetValue(wsName, out var sym) && sym.PriceDecimals > 0)
+                price = Math.Round(price, sym.PriceDecimals);
+        }
+
         var krakenClient = await AuthenticatedClient();
         return await krakenClient.SpotApi.Trading.PlaceOrderAsync(
             symbol, side, orderType, qty, price,
@@ -392,6 +402,15 @@ public class KrakenRestService
 
     public async Task<WebCallResult<KrakenEditOrder>> AmendOrderValues(string orderId, string symbol, decimal newPrice, decimal newQty)
     {
+        if (newPrice > 0)
+        {
+            var wsName = symbol.Contains('/')
+                ? symbol
+                : _state.Symbols.Keys.FirstOrDefault(k => k.Replace("/", "") == symbol) ?? symbol;
+            if (_state.Symbols.TryGetValue(wsName, out var sym) && sym.PriceDecimals > 0)
+                newPrice = Math.Round(newPrice, sym.PriceDecimals);
+        }
+
         var krakenClient = await AuthenticatedClient();
         var x = await krakenClient.SpotApi.Trading.EditOrderAsync(symbol, orderId, newQty, null, newPrice);
         return x;

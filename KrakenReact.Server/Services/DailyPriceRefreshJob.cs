@@ -129,7 +129,7 @@ public class DailyPriceRefreshJob
             .Where(b => b.Total > 0 || b.Locked > 0).ToList();
 
         var openOrders = _state.Orders.Values
-            .Where(o => o.Status == "Open" || o.Status == "New" || o.Status == "PartiallyFilled")
+            .Where(o => TradingStateService.IsOpenOrderStatus(o.Status))
             .ToList();
 
         var usdGbpRate = _state.GetUsdGbpRate();

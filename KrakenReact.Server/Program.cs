@@ -26,7 +26,9 @@ builder.Host.UseSerilog();
 // EF Core
 builder.Services.AddDbContextFactory<KrakenDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("EFDB"),
-        sql => sql.CommandTimeout(30)));
+        sql => sql
+            .CommandTimeout(120)
+            .EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null)));
 
 // Hangfire — uses the same SQL Server database, creates its own [HangFire] schema
 var hangfireConnStr = builder.Configuration.GetConnectionString("EFDB")!;

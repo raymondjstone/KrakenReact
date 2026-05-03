@@ -60,6 +60,15 @@ export default function AutoRepricePage() {
         <button onClick={() => setForm({ ...EMPTY })} style={{ padding: '6px 16px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
           + New Rule
         </button>
+        <button onClick={async () => {
+          try {
+            await api.post('/autoreprice/trigger');
+            flash('Job triggered — refresh in a few seconds');
+            setTimeout(load, 4000);
+          } catch { flash('Trigger failed'); }
+        }} style={{ padding: '6px 14px', background: 'var(--bg-primary)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>
+          Run Now
+        </button>
         {statusMsg && <span style={{ fontSize: 13, color: statusMsg.includes('failed') || statusMsg.includes('required') || statusMsg.includes('least') ? 'var(--red)' : 'var(--green)' }}>{statusMsg}</span>}
       </div>
 
