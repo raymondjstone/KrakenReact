@@ -131,12 +131,13 @@ public class SmartRepriceJob
             return;
         }
 
-        // Resolve price decimals for this symbol so new prices are rounded correctly
+        // Resolve price and lot decimals for this symbol so new prices and quantities are rounded correctly
         var wsName = rule.Symbol.Contains('/')
             ? rule.Symbol
             : _state.Symbols.Keys.FirstOrDefault(k => k.Replace("/", "") == symKey) ?? rule.Symbol;
         var priceDecimals = _state.Symbols.TryGetValue(wsName, out var symMeta) && symMeta.PriceDecimals > 0
             ? symMeta.PriceDecimals : 2;
+        var lotDecimals = symMeta?.LotDecimals > 0 ? symMeta.LotDecimals : 8;
 
         var repriced = 0;
         var placeFailed = new List<string>();
@@ -171,8 +172,15 @@ public class SmartRepriceJob
                     : Math.Round(currentPrice * 1.001m, priceDecimals);
             }
 
-            _logger.LogInformation("[SmartReprice] {Symbol} {Side} order {Id} deviates {Dev:F2}% — repricing {Old} → {New}",
-                rule.Symbol, order.Side, order.Id, deviation, order.Price, newPrice);
+            // Adjust quantity so the total order value (price × qty) stays the same as the original.
+            // This prevents "Insufficient funds" when the price has risen for a buy order.
+            var remainingQty = order.Quantity - order.QuantityFilled;
+            var newQty = order.Price > 0
+                ? Math.Round(remainingQty * order.Price / newPrice, lotDecimals)
+                : remainingQty;
+
+            _logger.LogInformation("[SmartReprice] {Symbol} {Side} order {Id} deviates {Dev:F2}% — repricing {Old}×{OldQty} → {New}×{NewQty}",
+                rule.Symbol, order.Side, order.Id, deviation, order.Price, remainingQty, newPrice, newQty);
 
             if (!await _kraken.CancelOrderAsync(order.Id))
             {
@@ -186,7 +194,7 @@ public class SmartRepriceJob
                 existingOrder.Status = "Cancelled";
 
             var safeId = order.Id.Length > 8 ? order.Id[..8] : order.Id;
-            var result = await _kraken.PlaceOrderAsync(symKey, side, OrderType.Limit, order.Quantity, newPrice,
+            var result = await _kraken.PlaceOrderAsync(symKey, side, OrderType.Limit, newQty, newPrice,
                 $"repr-{safeId}-{DateTime.UtcNow:HHmm}");
 
             if (result.Success)
@@ -203,7 +211,7 @@ public class SmartRepriceJob
                         Type = "Limit",
                         Status = "New",
                         Price = newPrice,
-                        Quantity = order.Quantity,
+                        Quantity = newQty,
                         CreateTime = DateTime.UtcNow,
                     };
                     _state.RecalculateOrderFields(dto);
@@ -214,8 +222,8 @@ public class SmartRepriceJob
             {
                 var err = result.Error?.Message ?? "unknown error";
                 _logger.LogError("[SmartReprice] Re-place failed for {Id} ({Side} {Qty}@{Price}): {Err}",
-                    order.Id, order.Side, order.Quantity, newPrice, err);
-                placeFailed.Add($"{order.Side} {order.Quantity}@{newPrice} — {err}");
+                    order.Id, order.Side, newQty, newPrice, err);
+                placeFailed.Add($"{order.Side} {newQty}@{newPrice} — {err}");
                 // Send immediate alert: order was cancelled but could not be re-placed
                 await _notify.Pushover(
                     $"⚠ Reprice FAILED — {rule.Symbol}",
