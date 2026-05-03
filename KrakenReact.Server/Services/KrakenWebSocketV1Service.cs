@@ -291,28 +291,31 @@ public class KrakenWebSocketV1Service : BackgroundService
             });
 
             // Update order distances in memory
+            var tickerBase = TradingStateService.NormalizeAsset(priceItem.Base);
+            var tickerQuote = TradingStateService.NormalizeAsset(priceItem.CCY);
+            var tickerClose = priceItem.BestKline?.Close ?? 0;
             _ = Task.Run(async () =>
             {
-                foreach (var order in _state.Orders.Values.Where(o => o.Symbol.Replace("/", "") == priceItem.SymbolNoSlash && TradingStateService.IsOpenOrderStatus(o.Status)))
+                if (tickerClose <= 0) return;
+                foreach (var order in _state.Orders.Values.Where(o =>
+                    TradingStateService.IsOpenOrderStatus(o.Status) &&
+                    _state.NormalizeOrderSymbolBase(o.Symbol) == tickerBase &&
+                    _state.NormalizeOrderSymbolQuote(o.Symbol) == tickerQuote))
                 {
-                    var latestPrice = _state.LatestPrice(order.Symbol);
-                    if (latestPrice != null)
-                    {
-                        order.LatestPrice = latestPrice.Close;
-                        order.Distance = order.Price - latestPrice.Close;
-                        order.DistancePercentage = latestPrice.Close != 0 ? Math.Round((order.Price - latestPrice.Close) / (latestPrice.Close / 100), 2) : 100;
-                        _ordersDirty = true;
+                    order.LatestPrice = tickerClose;
+                    order.Distance = order.Price - tickerClose;
+                    order.DistancePercentage = Math.Round((order.Price - tickerClose) / (tickerClose / 100), 2);
+                    _ordersDirty = true;
 
-                        // Pushover notification when order is within configured threshold of current price
-                        if (_state.OrderProximityNotifications
-                            && Math.Abs(order.DistancePercentage) < _state.OrderProximityThreshold
-                            && !_state.HasNotified(order.Id))
-                        {
-                            _state.AddNotified(order.Id);
-                            _ = _notifications.Pushover(
-                                $"{order.Symbol} {latestPrice.Close} is <{_state.OrderProximityThreshold}% from order price",
-                                $"{order.Symbol} {order.Side} @{order.Price} near");
-                        }
+                    // Pushover notification when order is within configured threshold of current price
+                    if (_state.OrderProximityNotifications
+                        && Math.Abs(order.DistancePercentage) < _state.OrderProximityThreshold
+                        && !_state.HasNotified(order.Id))
+                    {
+                        _state.AddNotified(order.Id);
+                        _ = _notifications.Pushover(
+                            $"{order.Symbol} {tickerClose} is <{_state.OrderProximityThreshold}% from order price",
+                            $"{order.Symbol} {order.Side} @{order.Price} near");
                     }
                 }
 
