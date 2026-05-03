@@ -30,8 +30,6 @@ public class OrdersController : ControllerBase
     [HttpGet]
     public ActionResult<List<OrderDto>> GetAll()
     {
-        // Recalculate fields to ensure latest prices/distances are fresh
-        _state.RecalculateAllOrderFields();
         return Ok(_state.Orders.Values.OrderByDescending(o => o.CreateTime).ToList());
     }
 
@@ -261,6 +259,14 @@ public class OrdersController : ControllerBase
         var success = await _kraken.CancelOrderAsync(id);
         if (!success)
             return BadRequest(new { error = "Failed to cancel order" });
+
+        // Mark the order as canceled in state so it is not considered open
+        if (_state.Orders.TryGetValue(id, out var order))
+        {
+            order.Status = "Canceled";
+            // Optionally, set QuantityFilled to 0 if needed
+            // order.QuantityFilled = 0;
+        }
 
         // Recalculate balance covered/uncovered amounts after order cancellation
         _state.RecalculateBalanceCoveredAmounts();

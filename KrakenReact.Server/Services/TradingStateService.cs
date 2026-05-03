@@ -85,16 +85,17 @@ public class PriceDataItem
         get { lock (_klineLock) { return _klineSnapshot.LastOrDefault(); } }
     }
 
-    /// <summary>Returns the best available price kline — prefers real kline data, falls back to live ticker price.</summary>
+    /// <summary>Returns the best available price — prefers live ticker (always current) over kline snapshot (may be stale daily close).</summary>
     public DerivedKline? BestKline
     {
         get
         {
-            var k = LatestKline;
-            if (k != null) return k;
+            // Live ticker is updated on every V1 WebSocket tick; prefer it to avoid stale daily-kline closes
             var tickerPrice = TickerData?.LastTradePrice ?? 0;
             if (tickerPrice > 0)
                 return new DerivedKline { Asset = TradingStateService.NormalizeAsset(Base), Close = tickerPrice, OpenTime = DateTime.UtcNow };
+            var k = LatestKline;
+            if (k != null) return k;
             return null;
         }
     }
@@ -391,11 +392,11 @@ public class TradingStateService
             (p.Base.Equals(normalized, StringComparison.OrdinalIgnoreCase) && p.CCY == "USD"));
         if (p != null)
         {
-            var k = p.GetKlineSnapshot();
-            var lastK = k.LastOrDefault(x => x.Close > 0);
-            if (lastK != null) return lastK;
+            // Use BestKline first — it prefers the live ticker over the stale kline snapshot
             var best = p.BestKline;
             if (best != null && best.Close > 0) return best;
+            var lastK = p.GetKlineSnapshot().LastOrDefault(x => x.Close > 0);
+            if (lastK != null) return lastK;
         }
 
         // Also try direct key lookups with the normalized name
@@ -942,17 +943,17 @@ public class TradingStateService
     /// <summary>Recalculates all calculated fields for a single order (LatestPrice, Distance, DistancePercentage, OrderValue)</summary>
     public void RecalculateOrderFields(OrderDto order)
     {
-        // Get latest price using normalized base asset (order symbols like "XBTUSD" need base extraction first)
-        var baseAsset = NormalizeOrderSymbolBase(order.Symbol);
-        var latestPrice = LatestPrice(baseAsset);
-        var latestClose = latestPrice?.Close > 0
-            ? latestPrice.Close
-            : order.LatestPrice > 0
-                ? order.LatestPrice
-                : 0;
-
-        if (latestClose > 0)
-            order.LatestPrice = latestClose;
+        // Only look up a price if one hasn't been set yet.
+        // V1 WebSocket ticker is the authoritative live-price source and sets order.LatestPrice directly.
+        // Calling LatestPrice() here when a live price already exists can return a stale kline and
+        // corrupt the value, causing the dashboard price to oscillate.
+        if (order.LatestPrice <= 0)
+        {
+            var baseAsset = NormalizeOrderSymbolBase(order.Symbol);
+            var latestPrice = LatestPrice(baseAsset);
+            if (latestPrice?.Close > 0)
+                order.LatestPrice = latestPrice.Close;
+        }
 
         if (order.LatestPrice > 0)
         {
