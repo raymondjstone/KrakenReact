@@ -411,8 +411,9 @@ public class KrakenRestService
                 newPrice = Math.Round(newPrice, sym.PriceDecimals);
         }
 
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var krakenClient = await AuthenticatedClient();
-        var x = await krakenClient.SpotApi.Trading.EditOrderAsync(symbol, orderId, newQty, null, newPrice);
+        var x = await krakenClient.SpotApi.Trading.EditOrderAsync(symbol, orderId, newQty, null, newPrice, ct: cts.Token);
         return x;
     }
 

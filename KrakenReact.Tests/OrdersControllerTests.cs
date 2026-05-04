@@ -1,9 +1,11 @@
 using KrakenReact.Server.Controllers;
+using KrakenReact.Server.Data;
 using KrakenReact.Server.DTOs;
 using KrakenReact.Server.Services;
 using KrakenReact.Server.Hubs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -23,7 +25,8 @@ public class OrdersControllerTests
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
         // GetAll() only uses _state — pass null for kraken since Create/Amend/Cancel need it but GetAll doesn't
-        var controller = new OrdersController(state, null!, hub.Object);
+        var dbFactory = new Mock<IDbContextFactory<KrakenDbContext>>();
+        var controller = new OrdersController(state, null!, hub.Object, dbFactory.Object);
         return (controller, state);
     }
 

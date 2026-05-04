@@ -1,8 +1,10 @@
+using CryptoExchange.Net.Objects;
 using KrakenReact.Server.Data;
 using KrakenReact.Server.DTOs;
 using KrakenReact.Server.Models;
 using KrakenReact.Server.Services;
 using Kraken.Net.Enums;
+using Kraken.Net.Objects.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using KrakenReact.Server.Hubs;
@@ -117,16 +119,38 @@ public class OrdersController : ControllerBase
         var order = _state.Orders.Values.FirstOrDefault(o => o.Id == id);
         if (order == null) return NotFound();
 
-        var orderResult = await _kraken.AmendOrderValues(id, order.Symbol, req.Price, req.Quantity);
+        WebCallResult<KrakenEditOrder> orderResult;
+        try
+        {
+            orderResult = await _kraken.AmendOrderValues(id, order.Symbol, req.Price, req.Quantity);
+        }
+        catch (OperationCanceledException)
+        {
+            return StatusCode(504, new { error = "Kraken API timed out amending the order. Please try again." });
+        }
         if (!orderResult.Success)
             return BadRequest(new { error = $"Failed to amend order {orderResult.Error?.ErrorDescription}" });
 
-        // Update the order with new values
-        order.Price = req.Price;
-        order.Quantity = req.Quantity;
+        // Kraken amend creates a new order ID — remove the old entry to avoid duplicates
+        _state.Orders.TryRemove(id, out _);
 
-        // Recalculate all derived fields
-        _state.RecalculateOrderFields(order);
+        // Add or update with the new order ID if Kraken returned one
+        var newId = orderResult.Data?.OrderId ?? id;
+        var updatedOrder = new OrderDto
+        {
+            Id = newId,
+            Symbol = order.Symbol,
+            Side = order.Side,
+            Type = order.Type,
+            Status = order.Status,
+            Price = req.Price,
+            Quantity = req.Quantity,
+            CreateTime = order.CreateTime,
+            ClientOrderId = order.ClientOrderId,
+            LatestPrice = order.LatestPrice,
+        };
+        _state.RecalculateOrderFields(updatedOrder);
+        _state.Orders[newId] = updatedOrder;
 
         // Recalculate balance covered/uncovered amounts
         _state.RecalculateBalanceCoveredAmounts();
@@ -260,22 +284,18 @@ public class OrdersController : ControllerBase
         if (!success)
             return BadRequest(new { error = "Failed to cancel order" });
 
-        // Mark the order as canceled in state so it is not considered open
-        if (_state.Orders.TryGetValue(id, out var order))
-        {
-            order.Status = "Canceled";
-            // Optionally, set QuantityFilled to 0 if needed
-            // order.QuantityFilled = 0;
-        }
+        // Remove the order from state entirely
+        _state.Orders.TryRemove(id, out _);
 
         // Recalculate balance covered/uncovered amounts after order cancellation
         _state.RecalculateBalanceCoveredAmounts();
 
-        // Broadcast balance updates to all clients
+        // Broadcast order and balance updates to all clients
         _ = Task.Run(async () =>
         {
             try
             {
+                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
                 await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
             }
             catch { /* Ignore broadcast errors */ }
