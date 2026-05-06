@@ -94,17 +94,16 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
         }
       }).catch(() => {});
     };
-    const loadOrders = () => { if (disposed) return; api.get('/orders').then(r => { if (!disposed) setOrders(r.data); }).catch(() => {}); };
     const loadBalances = () => { if (disposed) return; api.get('/balances').then(r => { if (!disposed) setBalances(r.data.balances || []); }).catch(() => {}); };
 
+    // Load orders once on mount — after that, OrderUpdate SignalR events keep them fresh
+    api.get('/orders').then(r => { if (!disposed) setOrders(r.data); }).catch(() => {});
     loadPrices();
-    loadOrders();
     loadBalances();
     api.get('/symbols').then(r => { if (!disposed) setSymbols(r.data.map(s => s.websocketName)); }).catch(() => {});
 
     const refreshInterval = setInterval(() => {
       loadPrices();
-      loadOrders();
       loadBalances();
     }, 60000);
 
@@ -125,12 +124,11 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       });
     };
     const balanceHandler = (data) => { if (!disposed) setBalances(data); };
-    const executionHandler = () => loadOrders();
+    // OrderUpdate already fires alongside ExecutionUpdate — no REST call needed here
     const orderHandler = (data) => { if (!disposed) setOrders(data); };
 
     conn.on('TickerUpdate', tickerHandler);
     conn.on('BalanceUpdate', balanceHandler);
-    conn.on('ExecutionUpdate', executionHandler);
     conn.on('OrderUpdate', orderHandler);
 
     return () => {
@@ -138,7 +136,6 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
       clearInterval(refreshInterval);
       conn.off('TickerUpdate', tickerHandler);
       conn.off('BalanceUpdate', balanceHandler);
-      conn.off('ExecutionUpdate', executionHandler);
       conn.off('OrderUpdate', orderHandler);
     };
   }, []);

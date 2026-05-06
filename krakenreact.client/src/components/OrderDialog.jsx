@@ -50,6 +50,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
 
   const pOffsets = priceOffsets?.length ? priceOffsets : DEFAULT_PRICE_OFFSETS;
   const qPcts = qtyPercentages?.length ? qtyPercentages : DEFAULT_QTY_PERCENTAGES;
+  const [fetchedBalances, setFetchedBalances] = useState({ usdAvailable: 0, available: 0 });
 
   useEffect(() => {
     if (!isOpen) return;
@@ -90,6 +91,18 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   }, [editOrder, initialSymbol, balanceContext, isOpen]);
 
   useEffect(() => {
+    if (!isOpen || balanceContext) { setFetchedBalances({ usdAvailable: 0, available: 0 }); return; }
+    api.get('/balances').then((r) => {
+      const list = r.data || [];
+      const usdBal = list.find((b) => b.asset === 'USD' || b.asset === 'ZUSD');
+      const s = symbol || '';
+      const base = s.split('/')[0].replace(/^X/, '') || '';
+      const baseBal = base ? list.find((b) => b.asset === base || b.asset === 'X' + base) : null;
+      setFetchedBalances({ usdAvailable: usdBal?.available || 0, available: baseBal?.available || 0 });
+    }).catch(() => {});
+  }, [isOpen, symbol, balanceContext]);
+
+  useEffect(() => {
     const onMouseMove = (e) => {
       if (!dragData.current.dragging || !dialogRef.current) return;
       dialogRef.current.style.left = e.clientX - dragData.current.offsetX + 'px';
@@ -111,6 +124,8 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const available = balanceContext?.available || 0;
   const uncoveredQty = balanceContext?.uncoveredQty || 0;
   const usdAvailable = balanceContext?.usdAvailable || 0;
+  const effectiveUsdAvailable = usdAvailable || fetchedBalances.usdAvailable;
+  const effectiveAvailable = available || fetchedBalances.available;
   const orderValue = price && quantity ? (Number(price) * Number(quantity)).toFixed(2) : '';
 
   const baseAsset = (() => {
@@ -142,16 +157,19 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
   const enteredPrice = Number(price) || 0;
 
   const applyQtyPercentage = (pct) => {
+    const lotDec = symInfo?.lotDecimals ?? 8;
+    const factor = Math.pow(10, lotDec);
+    const floorTo = (n) => Math.floor(n * factor) / factor;
     if (side === 'Buy') {
       const usePrice = enteredPrice > 0 ? enteredPrice : currentPrice;
-      if (usePrice <= 0 || usdAvailable <= 0) return;
-      const usdToSpend = pct >= 100 ? usdAvailable : usdAvailable * pct / 100;
-      const qty = Number((usdToSpend / usePrice).toPrecision(8));
+      if (usePrice <= 0 || effectiveUsdAvailable <= 0) return;
+      const usdToSpend = pct >= 100 ? effectiveUsdAvailable : effectiveUsdAvailable * pct / 100;
+      const qty = floorTo(usdToSpend / usePrice);
       if (qty > 0) setQuantity(String(qty));
     } else {
-      const base = uncoveredQty > 0.0001 ? uncoveredQty : available;
+      const base = uncoveredQty > 0.0001 ? uncoveredQty : effectiveAvailable;
       if (base <= 0) return;
-      const qty = pct >= 100 ? base : Number((base * pct / 100).toPrecision(8));
+      const qty = pct >= 100 ? base : floorTo(base * pct / 100);
       if (qty > 0) setQuantity(String(qty));
     }
   };
@@ -195,8 +213,8 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
     if (!quantity || Number(quantity) <= 0) return 'Enter a valid quantity';
     const qty = Number(quantity);
     const prc = Number(price);
-    if (side === 'Sell' && available > 0 && qty > available * 1.001)
-      return 'Cannot sell ' + qty + ' - only ' + available + ' available';
+    if (side === 'Sell' && effectiveAvailable > 0 && qty > effectiveAvailable * 1.001)
+      return 'Cannot sell ' + qty + ' - only ' + effectiveAvailable + ' available';
     if (symInfo) {
       if (symInfo.orderMin > 0 && qty < symInfo.orderMin)
         return 'Quantity ' + qty + ' is below the minimum of ' + symInfo.orderMin + ' for ' + symbol;
@@ -347,7 +365,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 <label style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Quantity</label>
-                {!editOrder && ((side === 'Sell' && available > 0) || (side === 'Buy' && usdAvailable > 0)) && (
+                {!editOrder && ((side === 'Sell' && effectiveAvailable > 0) || (side === 'Buy' && effectiveUsdAvailable > 0)) && (
                   <div style={{ display: 'flex', gap: 3, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {side === 'Sell' && uncoveredQty > 0.0001 && (
                       <button style={smallBtn} onClick={() => setQuantity(String(uncoveredQty))}>Uncov</button>
