@@ -27,14 +27,31 @@ public class PricesController : ControllerBase
     [HttpGet]
     public ActionResult<List<PriceDto>> GetAll()
     {
+
         var prices = _state.GetPriceSnapshot().Select(p =>
         {
             var latest = p.LatestKline;
+            var currentPrice = p.BestKline?.Close ?? latest?.Close ?? 0m;
             var orders = _state.Orders.Values.Where(o => o.Symbol.StartsWith(p.SymbolNoSlash) && o.Status == "Closed" && o.Side == "Buy").ToList();
             var avgBuyPrice = orders.Any() ? Math.Round(orders.Sum(o => o.AveragePrice) / orders.Count, 9) : 0m;
 
             var normalizedBase = TradingStateService.NormalizeAsset(p.Base);
             var normalizedCcy = TradingStateService.NormalizeAsset(p.CCY);
+
+            // 24h change: prefer V2 WebSocket real-time data (change_pct from Kraken), fall back to kline history
+            decimal? movement1d;
+            decimal? diff1d;
+            if (p.TickerData?.ChangePct24h.HasValue == true)
+            {
+                movement1d = p.TickerData.ChangePct24h.Value;
+                diff1d = p.TickerData.Change24h;
+            }
+            else
+            {
+                diff1d = p.ClosePriceDiff(1);
+                movement1d = p.CloseMovementDiff(1);
+            }
+
             return new PriceDto
             {
                 Symbol = p.Symbol,
@@ -52,10 +69,10 @@ public class PricesController : ControllerBase
                 OpenTime = latest?.OpenTime,
                 Age = p.Age,
                 KrakenNewPricesLoaded = p.KrakenNewPricesLoaded,
-                ClosePriceMovement = p.CloseMovementDiff(1),
+                ClosePriceMovement = movement1d ?? 0m,
                 ClosePriceMovementWeek = p.CloseMovementDiff(7),
                 ClosePriceMovementMonth = p.CloseMovementDiff(31),
-                ClosePriceDifference = p.ClosePriceDiff(1),
+                ClosePriceDifference = diff1d,
                 ClosePriceDifferenceWeek = p.ClosePriceDiff(7),
                 ClosePriceDifferenceMonth = p.ClosePriceDiff(31),
                 AvgPriceDay = p.ClosePriceAverage(1),

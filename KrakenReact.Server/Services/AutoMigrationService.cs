@@ -565,6 +565,28 @@ public static class AutoMigrationService
         {
             Log.Warning(ex, "[AutoMigration] Could not add Note column to RebalanceSchedules");
         }
+
+        try
+        {
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PriceSnapshots')
+                BEGIN
+                    CREATE TABLE [PriceSnapshots] (
+                        [Id]          int IDENTITY(1,1) NOT NULL,
+                        [Symbol]      nvarchar(100) NOT NULL DEFAULT '',
+                        [Price]       decimal(38,9) NOT NULL DEFAULT 0,
+                        [CapturedAt]  datetime2 NOT NULL,
+                        CONSTRAINT [PK_PriceSnapshots] PRIMARY KEY ([Id])
+                    )
+                    CREATE INDEX [IX_PriceSnapshots_Symbol_CapturedAt] ON [PriceSnapshots] ([Symbol], [CapturedAt])
+                END
+            ");
+            Log.Information("[AutoMigration] PriceSnapshots table ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create PriceSnapshots table");
+        }
     }
 
     private static void EnsurePredictionResultColumns(KrakenDbContext db)

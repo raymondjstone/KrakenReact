@@ -28,6 +28,7 @@ public class KrakenDbContext : DbContext
     public DbSet<OrderTemplate> OrderTemplates { get; set; }
     public DbSet<BracketOrder> BracketOrders { get; set; }
     public DbSet<AutoRepriceRule> AutoRepriceRules { get; set; }
+    public DbSet<PriceSnapshot> PriceSnapshots { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 
@@ -190,6 +191,12 @@ public class KrakenDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.MaxDeviationPct).HasColumnType("decimal(38,9)");
             entity.Property(e => e.NewPriceOffsetPct).HasColumnType("decimal(38,9)");
+        });
+        modelBuilder.Entity<PriceSnapshot>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Price).HasColumnType("decimal(38,9)");
+            entity.HasIndex(e => new { e.Symbol, e.CapturedAt });
         });
     }
 }

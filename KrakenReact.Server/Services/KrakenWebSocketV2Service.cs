@@ -17,6 +17,7 @@ public class KrakenWebSocketV2Service : BackgroundService
     private readonly NotificationService _notify;
     private readonly ILogger<KrakenWebSocketV2Service> _logger;
     private WebsocketClient? _socket;
+    private WebsocketClient? _publicSocket;
     private string? _wsToken;
     private DateTime _lastTradeSync = DateTime.MinValue;
 
@@ -70,6 +71,7 @@ public class KrakenWebSocketV2Service : BackgroundService
 
             await _socket.Start();
             await Subscribe();
+            await StartPublicSocket(stoppingToken);
 
             // Ping timer
             _ = Task.Run(async () =>
@@ -101,6 +103,114 @@ public class KrakenWebSocketV2Service : BackgroundService
         // Subscribe to balances
         var balSub = JsonSerializer.Serialize(new { method = "subscribe", @params = new { channel = "balances", token = _wsToken } });
         _socket?.Send(Encoding.UTF8.GetBytes(balSub));
+    }
+
+    private async Task StartPublicSocket(CancellationToken stoppingToken)
+    {
+        var uri = new Uri("wss://ws.kraken.com/v2");
+        _publicSocket = new WebsocketClient(uri);
+        _publicSocket.LostReconnectTimeout = TimeSpan.FromMinutes(10);
+        _publicSocket.IsReconnectionEnabled = true;
+        _publicSocket.ReconnectTimeout = TimeSpan.FromSeconds(120);
+
+        _publicSocket.ReconnectionHappened.Subscribe(info =>
+        {
+            _logger.LogInformation("[WS V2 Public] Reconnection: {Type}", info.Type);
+            _ = Task.Run(async () =>
+            {
+                try { await SubscribePublicTicker(); }
+                catch (Exception ex) { _logger.LogError(ex, "[WS V2 Public] Error during reconnect subscribe"); }
+            });
+        });
+
+        _publicSocket.MessageReceived.Subscribe(msg =>
+        {
+            try { ProcessPublicMessage(msg.Text); }
+            catch (Exception ex) { _logger.LogError(ex, "[WS V2 Public] Error processing message"); }
+        });
+
+        await _publicSocket.Start();
+        await SubscribePublicTicker();
+    }
+
+    private async Task SubscribePublicTicker()
+    {
+        var pairs = _state.Symbols.Values
+            .Where(s => TradingStateService.BaseCurrencies.Contains(s.QuoteAsset))
+            .Select(s =>
+            {
+                var parts = s.WebsocketName.Split('/');
+                return parts.Length == 2
+                    ? TradingStateService.NormalizeAsset(parts[0]) + "/" + TradingStateService.NormalizeAsset(parts[1])
+                    : s.WebsocketName;
+            })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var dp in TradingStateService.DefaultPairs.Concat(TradingStateService.RequiredPairs))
+        {
+            var parts = dp.Split('/');
+            var v2 = parts.Length == 2
+                ? TradingStateService.NormalizeAsset(parts[0]) + "/" + TradingStateService.NormalizeAsset(parts[1])
+                : dp;
+            if (!pairs.Contains(v2, StringComparer.OrdinalIgnoreCase))
+                pairs.Add(v2);
+        }
+
+        foreach (var batch in pairs.Chunk(100))
+        {
+            var sub = JsonSerializer.Serialize(new { method = "subscribe", @params = new { channel = "ticker", symbol = batch } });
+            _publicSocket?.Send(Encoding.UTF8.GetBytes(sub));
+            await Task.Delay(100);
+        }
+    }
+
+    private void ProcessPublicMessage(string? message)
+    {
+        if (string.IsNullOrEmpty(message)) return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(message);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
+            if (root.TryGetProperty("method", out _)) return;
+            if (!root.TryGetProperty("channel", out var ch)) return;
+            var channel = ch.GetString();
+            if (channel == "status" || channel == "heartbeat") return;
+            if (channel != "ticker") return;
+        }
+        catch { return; }
+
+        try
+        {
+            var tickerMsg = JsonSerializer.Deserialize<TickerV2WsMessage>(message, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (tickerMsg?.Data == null) return;
+
+            foreach (var data in tickerMsg.Data)
+            {
+                if (string.IsNullOrEmpty(data.Symbol)) continue;
+
+                var internalKey = _state.ResolveSymbolKey(data.Symbol);
+                if (!_state.Prices.TryGetValue(internalKey, out var priceItem))
+                    priceItem = _state.GetOrAddPrice(internalKey);
+
+                priceItem.TickerData ??= new TickerDataItem();
+                priceItem.TickerData.Change24h = data.Change;
+                priceItem.TickerData.ChangePct24h = data.ChangePct;
+
+                _ = _hub.Clients.All.SendAsync("TickerUpdate", new
+                {
+                    symbol = internalKey,
+                    closePriceMovement = data.ChangePct,
+                    closePriceDifference = data.Change
+                }).ContinueWith(t =>
+                {
+                    if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2 Public] TickerUpdate broadcast failed");
+                }, TaskContinuationOptions.OnlyOnFaulted);
+            }
+        }
+        catch (Exception ex) { _logger.LogError(ex, "[WS V2 Public] Error parsing ticker"); }
     }
 
     private void ProcessMessage(string? message)
@@ -366,6 +476,7 @@ public class KrakenWebSocketV2Service : BackgroundService
     public override void Dispose()
     {
         _socket?.Dispose();
+        _publicSocket?.Dispose();
         base.Dispose();
     }
 }
@@ -406,4 +517,26 @@ public class BalanceWsData
 {
     public string Asset { get; set; } = "";
     public double Balance { get; set; }
+}
+
+public class TickerV2WsMessage
+{
+    public string? Channel { get; set; }
+    public string? Type { get; set; }
+    public List<TickerV2Data>? Data { get; set; }
+}
+
+public class TickerV2Data
+{
+    public string? Symbol { get; set; }
+    public decimal Bid { get; set; }
+    public decimal Ask { get; set; }
+    public decimal Last { get; set; }
+    public decimal Volume { get; set; }
+    public decimal Vwap { get; set; }
+    public decimal Low { get; set; }
+    public decimal High { get; set; }
+    public decimal Change { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("change_pct")]
+    public decimal ChangePct { get; set; }
 }

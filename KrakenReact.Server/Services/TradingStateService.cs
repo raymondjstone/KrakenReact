@@ -196,6 +196,8 @@ public class TickerDataItem
     public decimal Volume { get; set; }
     public decimal VolumeWeightedAvgPrice { get; set; }
     public int TradeCount { get; set; }
+    public decimal? Change24h { get; set; }
+    public decimal? ChangePct24h { get; set; }
 }
 
 public class TradingStateService
