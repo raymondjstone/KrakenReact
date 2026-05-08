@@ -218,9 +218,22 @@ public static class AutoMigrationService
 
         try
         {
+            // Interval was nvarchar(max) which SQL Server rejects as an index key column.
+            // Shrink it to nvarchar(50) first (values are enum names like "OneDay"), then index.
+            db.Database.ExecuteSqlRaw(@"
+                IF EXISTS (
+                    SELECT 1 FROM sys.columns
+                    WHERE object_id = OBJECT_ID('DerivedKlines')
+                      AND name = 'Interval'
+                      AND max_length = -1
+                )
+                BEGIN
+                    ALTER TABLE [dbo].[DerivedKlines] ALTER COLUMN [Interval] nvarchar(50) NOT NULL
+                END
+            ");
+
             // Composite index on (Asset, Interval) — queries that filter on both columns
-            // (PredictionJob, FeatureEngineering) were doing a full asset-range scan because
-            // Interval was only an INCLUDE column in the old index, not a seek key.
+            // were doing a full asset-range scan because Interval was only an INCLUDE column.
             db.Database.ExecuteSqlRaw(@"
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DerivedKlines_Asset_Interval' AND object_id = OBJECT_ID('DerivedKlines'))
                 BEGIN

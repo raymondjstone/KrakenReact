@@ -96,6 +96,7 @@ public class KrakenDbContext : DbContext
             entity.HasKey(e => e.Key);
             entity.HasIndex(e => e.Asset);
             entity.HasIndex(e => new { e.Asset, e.OpenTime });
+            entity.Property(e => e.Interval).HasMaxLength(50);
             entity.Property(e => e.Open).HasColumnType("decimal(38,9)");
             entity.Property(e => e.High).HasColumnType("decimal(38,9)");
             entity.Property(e => e.Low).HasColumnType("decimal(38,9)");
