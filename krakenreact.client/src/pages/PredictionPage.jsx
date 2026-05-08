@@ -435,6 +435,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
 
   const handleRefresh = (e) => {
     e.stopPropagation();
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     originalComputedAtRef.current = result.computedAt;
     setRefreshing(true);
     api.post(`/predictions/trigger/single?symbol=${encodeURIComponent(result.symbol)}`)

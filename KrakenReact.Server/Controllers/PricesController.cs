@@ -24,6 +24,36 @@ public class PricesController : ControllerBase
         _logger = logger;
     }
 
+    [HttpGet("quote/{pair}")]
+    public ActionResult<object> GetQuote(string pair)
+    {
+        pair = Uri.UnescapeDataString(pair).Replace("-", "/");
+        var key = _state.ResolveSymbolKey(pair);
+        if (!_state.Prices.TryGetValue(key, out var p))
+        {
+            // Handles no-slash input like "SOLUSD" — extract base/quote then re-resolve
+            var noPunctuation = pair.Replace("/", "");
+            var baseAsset = _state.NormalizeOrderSymbolBase(noPunctuation);
+            var quoteAsset = _state.NormalizeOrderSymbolQuote(noPunctuation);
+            if (!string.IsNullOrEmpty(baseAsset) && !string.IsNullOrEmpty(quoteAsset))
+                key = _state.ResolveSymbolKey($"{baseAsset}/{quoteAsset}");
+            if (!_state.Prices.TryGetValue(key, out p))
+                return NotFound(new { error = $"Pair '{pair}' not found" });
+        }
+
+        var price = p.BestKline?.Close ?? 0m;
+        if (price <= 0)
+            return NotFound(new { error = $"No price data for '{pair}'" });
+
+        return Ok(new
+        {
+            pair = key,
+            price,
+            change24hPct = p.TickerData?.ChangePct24h,
+            change24h = p.TickerData?.Change24h
+        });
+    }
+
     [HttpGet]
     public ActionResult<List<PriceDto>> GetAll()
     {

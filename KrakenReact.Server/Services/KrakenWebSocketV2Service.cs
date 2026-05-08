@@ -10,6 +10,8 @@ namespace KrakenReact.Server.Services;
 
 public class KrakenWebSocketV2Service : BackgroundService
 {
+    private static readonly JsonSerializerOptions _jsonOpts = new() { PropertyNameCaseInsensitive = true };
+
     private readonly TradingStateService _state;
     private readonly KrakenRestService _kraken;
     private readonly DbMethods _db;
@@ -118,7 +120,7 @@ public class KrakenWebSocketV2Service : BackgroundService
             _logger.LogInformation("[WS V2 Public] Reconnection: {Type}", info.Type);
             _ = Task.Run(async () =>
             {
-                try { await SubscribePublicTicker(); }
+                try { await SubscribePublicTicker(stoppingToken); }
                 catch (Exception ex) { _logger.LogError(ex, "[WS V2 Public] Error during reconnect subscribe"); }
             });
         });
@@ -130,29 +132,28 @@ public class KrakenWebSocketV2Service : BackgroundService
         });
 
         await _publicSocket.Start();
-        await SubscribePublicTicker();
+        await SubscribePublicTicker(stoppingToken);
     }
 
-    private async Task SubscribePublicTicker()
+    private async Task SubscribePublicTicker(CancellationToken ct = default)
     {
+        static string ToV2Pair(string wsPair)
+        {
+            var parts = wsPair.Split('/');
+            return parts.Length == 2
+                ? TradingStateService.NormalizeAsset(parts[0]) + "/" + TradingStateService.NormalizeAsset(parts[1])
+                : wsPair;
+        }
+
         var pairs = _state.Symbols.Values
             .Where(s => TradingStateService.BaseCurrencies.Contains(s.QuoteAsset))
-            .Select(s =>
-            {
-                var parts = s.WebsocketName.Split('/');
-                return parts.Length == 2
-                    ? TradingStateService.NormalizeAsset(parts[0]) + "/" + TradingStateService.NormalizeAsset(parts[1])
-                    : s.WebsocketName;
-            })
+            .Select(s => ToV2Pair(s.WebsocketName))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         foreach (var dp in TradingStateService.DefaultPairs.Concat(TradingStateService.RequiredPairs))
         {
-            var parts = dp.Split('/');
-            var v2 = parts.Length == 2
-                ? TradingStateService.NormalizeAsset(parts[0]) + "/" + TradingStateService.NormalizeAsset(parts[1])
-                : dp;
+            var v2 = ToV2Pair(dp);
             if (!pairs.Contains(v2, StringComparer.OrdinalIgnoreCase))
                 pairs.Add(v2);
         }
@@ -161,7 +162,7 @@ public class KrakenWebSocketV2Service : BackgroundService
         {
             var sub = JsonSerializer.Serialize(new { method = "subscribe", @params = new { channel = "ticker", symbol = batch } });
             _publicSocket?.Send(Encoding.UTF8.GetBytes(sub));
-            await Task.Delay(100);
+            await Task.Delay(100, ct);
         }
     }
 
@@ -175,16 +176,13 @@ public class KrakenWebSocketV2Service : BackgroundService
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return;
             if (root.TryGetProperty("method", out _)) return;
-            if (!root.TryGetProperty("channel", out var ch)) return;
-            var channel = ch.GetString();
-            if (channel == "status" || channel == "heartbeat") return;
-            if (channel != "ticker") return;
+            if (!root.TryGetProperty("channel", out var ch) || ch.GetString() != "ticker") return;
         }
         catch { return; }
 
         try
         {
-            var tickerMsg = JsonSerializer.Deserialize<TickerV2WsMessage>(message, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var tickerMsg = JsonSerializer.Deserialize<TickerV2WsMessage>(message, _jsonOpts);
             if (tickerMsg?.Data == null) return;
 
             foreach (var data in tickerMsg.Data)
@@ -236,7 +234,7 @@ public class KrakenWebSocketV2Service : BackgroundService
         {
             try
             {
-                var execMsg = JsonSerializer.Deserialize<ExecutionWsMessage>(message, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var execMsg = JsonSerializer.Deserialize<ExecutionWsMessage>(message, _jsonOpts);
                 if (execMsg?.Data != null)
                 {
                     bool hasFill = false;
@@ -398,7 +396,7 @@ public class KrakenWebSocketV2Service : BackgroundService
         {
             try
             {
-                var balMsg = JsonSerializer.Deserialize<BalanceWsMessage>(message, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var balMsg = JsonSerializer.Deserialize<BalanceWsMessage>(message, _jsonOpts);
                 if (balMsg?.Data != null && balMsg.Data.Any())
                 {
                     var usdGbpRate = _state.GetUsdGbpRate();

@@ -24,10 +24,11 @@ public class TradesController : ControllerBase
     {
         var trades = await _db.GetTradesAsync();
         var ledgers = await _db.GetLedgersAsync();
+        var ledgersByRef = ledgers.ToLookup(l => l.ReferenceId);
 
         return Ok(trades.Select(t =>
         {
-            var linkedLedgers = ledgers.Where(l => l.ReferenceId == t.Id).ToList();
+            var linkedLedgers = ledgersByRef[t.Id];
             return new TradeDto
             {
                 Id = t.Id, OrderId = t.OrderId, Symbol = t.Symbol,
@@ -56,6 +57,7 @@ public class TradesController : ControllerBase
     {
         var trades = await _db.GetTradesAsync();
         var ledgers = await _db.GetLedgersAsync();
+        var ledgersByRef = ledgers.ToLookup(l => l.ReferenceId);
         var grouped = trades.GroupBy(t => t.OrderId).Select(g =>
         {
             var first = g.First();
@@ -77,7 +79,7 @@ public class TradesController : ControllerBase
                 ClosedMargin = g.Sum(x => x.ClosedMargin),
                 // Include constituent trades for drill-down
                 ConstituentTrades = g.Select(t => {
-                    var linkedLedgers = ledgers.Where(l => l.ReferenceId == t.Id).ToList();
+                    var linkedLedgers = ledgersByRef[t.Id];
                     return new TradeDto
                     {
                         Id = t.Id, OrderId = t.OrderId, Symbol = t.Symbol,

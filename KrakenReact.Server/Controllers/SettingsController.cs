@@ -30,88 +30,62 @@ public class SettingsController : ControllerBase
     {
         try
         {
-            // After initialization, all settings should exist in database
+            var allSettings = await _db.AppSettings.AsNoTracking()
+                .ToDictionaryAsync(s => s.Key, s => s.Value);
+            string? Get(string key) => allSettings.TryGetValue(key, out var v) ? v : null;
+            List<string> GetList(string key) => Get(key)
+                ?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToList()
+                ?? new List<string>();
+            bool GetBool(string key, bool defaultVal = false) =>
+                Get(key) is { } v ? string.Equals(v, "true", StringComparison.OrdinalIgnoreCase) : defaultVal;
+
             var settings = new AppSettingsDto
             {
-                BaseCurrencies = await GetSettingList("BaseCurrencies") ?? new List<string>(),
-                Blacklist = await GetSettingList("Blacklist") ?? new List<string>(),
-                MajorCoin = await GetSettingList("MajorCoin") ?? new List<string>(),
-                Currency = await GetSettingList("Currency") ?? new List<string>(),
-                BadPairs = await GetSettingList("BadPairs") ?? new List<string>(),
-                DefaultPairs = await GetSettingList("DefaultPairs") ?? new List<string>(),
-                AssetNormalizations = await _db.AssetNormalizations.ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName)
+                BaseCurrencies = GetList("BaseCurrencies"),
+                Blacklist = GetList("Blacklist"),
+                MajorCoin = GetList("MajorCoin"),
+                Currency = GetList("Currency"),
+                BadPairs = GetList("BadPairs"),
+                DefaultPairs = GetList("DefaultPairs"),
+                AssetNormalizations = await _db.AssetNormalizations.AsNoTracking()
+                    .ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName),
+                KrakenApiKey = Get("KrakenApiKey") ?? "",
+                KrakenApiSecret = Get("KrakenApiSecret") is { } sec ? MaskSecret(sec) : "",
+                PushoverUserKey = Get("PushoverUserKey") is { } pu ? MaskSecret(pu) : "",
+                PushoverApiToken = Get("PushoverAppToken") is { } pt ? MaskSecret(pt) : "",
+                StakingNotifications = GetBool("StakingNotifications"),
+                HideAlmostZeroBalances = GetBool("HideAlmostZeroBalances"),
+                OrderProximityNotifications = Get("OrderProximityNotifications") is null || GetBool("OrderProximityNotifications", true),
+                OrderProximityThreshold = decimal.TryParse(Get("OrderProximityThreshold"), System.Globalization.CultureInfo.InvariantCulture, out var threshold)
+                    ? Math.Clamp(threshold, 0.1m, 20.0m) : 2.0m,
+                Theme = Get("Theme") ?? "dark",
+                OrderPriceOffsets = _state.OrderPriceOffsets,
+                OrderQtyPercentages = _state.OrderQtyPercentages,
+                AutoSellOnBuyFill = _state.AutoSellOnBuyFill,
+                AutoSellPercentage = _state.AutoSellPercentage,
+                AutoAddStakingToOrder = _state.AutoAddStakingToOrder,
+                OrderBookDepth = _state.OrderBookDepth,
+                StopLossEnabled = _state.StopLossEnabled,
+                StopLossPct = _state.StopLossPct,
+                TakeProfitEnabled = _state.TakeProfitEnabled,
+                TakeProfitPct = _state.TakeProfitPct,
+                DrawdownAlertEnabled = _state.DrawdownAlertEnabled,
+                DrawdownAlertThreshold = _state.DrawdownAlertThreshold,
+                DryRunJobs = _state.DryRunJobs,
+                TrailingStopEnabled = _state.TrailingStopEnabled,
+                TrailingStopPct = _state.TrailingStopPct,
+                AutoCancelEnabled = _state.AutoCancelEnabled,
+                AutoCancelDays = _state.AutoCancelDays,
+                AutoCancelBuys = _state.AutoCancelBuys,
+                AutoCancelSells = _state.AutoCancelSells,
+                PriceDownloadTime = Get("PriceDownloadTime") ?? "04:00",
+                PredictionJobTime = Get("PredictionJobTime") ?? "05:00",
+                PredictionSymbols = Get("PredictionSymbols") ?? "XBT/USD,ETH/USD,SOL/USD",
+                PredictionInterval = Get("PredictionInterval") ?? "OneHour",
+                PredictionMode = Get("PredictionMode") ?? "specific",
+                PredictionCurrency = Get("PredictionCurrency") ?? "USD",
+                PredictionAutoRefreshIntervalMinutes = int.TryParse(Get("PredictionAutoRefreshIntervalMinutes"), out var autoMins) ? autoMins : 15,
             };
-
-            // Get Kraken API keys
-            var krakenApiKey = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "KrakenApiKey");
-            var krakenApiSecret = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "KrakenApiSecret");
-            settings.KrakenApiKey = krakenApiKey?.Value ?? "";
-            settings.KrakenApiSecret = krakenApiSecret != null ? MaskSecret(krakenApiSecret.Value) : "";
-
-            // Get Pushover keys
-            var pushoverUser = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PushoverUserKey");
-            var pushoverToken = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PushoverAppToken");
-            settings.PushoverUserKey = pushoverUser != null ? MaskSecret(pushoverUser.Value) : "";
-            settings.PushoverApiToken = pushoverToken != null ? MaskSecret(pushoverToken.Value) : "";
-
-            // Get boolean settings
-            var stakingNotif = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "StakingNotifications");
-            settings.StakingNotifications = stakingNotif != null && string.Equals(stakingNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
-
-            var hideAlmostZero = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "HideAlmostZeroBalances");
-            settings.HideAlmostZeroBalances = hideAlmostZero != null && string.Equals(hideAlmostZero.Value, "true", StringComparison.OrdinalIgnoreCase);
-
-            var orderProxNotif = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderProximityNotifications");
-            settings.OrderProximityNotifications = orderProxNotif == null || string.Equals(orderProxNotif.Value, "true", StringComparison.OrdinalIgnoreCase);
-
-            var orderProxThreshold = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "OrderProximityThreshold");
-            settings.OrderProximityThreshold = orderProxThreshold != null && decimal.TryParse(orderProxThreshold.Value, System.Globalization.CultureInfo.InvariantCulture, out var threshold)
-                ? Math.Clamp(threshold, 0.1m, 20.0m) : 2.0m;
-
-            var themeSetting = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "Theme");
-            settings.Theme = themeSetting?.Value ?? "dark";
-
-            settings.OrderPriceOffsets = _state.OrderPriceOffsets;
-            settings.OrderQtyPercentages = _state.OrderQtyPercentages;
-            settings.AutoSellOnBuyFill = _state.AutoSellOnBuyFill;
-            settings.AutoSellPercentage = _state.AutoSellPercentage;
-            settings.AutoAddStakingToOrder = _state.AutoAddStakingToOrder;
-            settings.OrderBookDepth = _state.OrderBookDepth;
-            settings.StopLossEnabled = _state.StopLossEnabled;
-            settings.StopLossPct = _state.StopLossPct;
-            settings.TakeProfitEnabled = _state.TakeProfitEnabled;
-            settings.TakeProfitPct = _state.TakeProfitPct;
-            settings.DrawdownAlertEnabled = _state.DrawdownAlertEnabled;
-            settings.DrawdownAlertThreshold = _state.DrawdownAlertThreshold;
-            settings.DryRunJobs = _state.DryRunJobs;
-            settings.TrailingStopEnabled = _state.TrailingStopEnabled;
-            settings.TrailingStopPct = _state.TrailingStopPct;
-            settings.AutoCancelEnabled = _state.AutoCancelEnabled;
-            settings.AutoCancelDays = _state.AutoCancelDays;
-            settings.AutoCancelBuys = _state.AutoCancelBuys;
-            settings.AutoCancelSells = _state.AutoCancelSells;
-
-            var priceDownloadTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PriceDownloadTime");
-            settings.PriceDownloadTime = priceDownloadTime?.Value ?? "04:00";
-
-            var predJobTime = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionJobTime");
-            settings.PredictionJobTime = predJobTime?.Value ?? "05:00";
-
-            var predSymbols = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionSymbols");
-            settings.PredictionSymbols = predSymbols?.Value ?? "XBT/USD,ETH/USD,SOL/USD";
-
-            var predInterval = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionInterval");
-            settings.PredictionInterval = predInterval?.Value ?? "OneHour";
-
-            var predMode = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionMode");
-            settings.PredictionMode = predMode?.Value ?? "specific";
-
-            var predCurrency = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionCurrency");
-            settings.PredictionCurrency = predCurrency?.Value ?? "USD";
-
-            var predAutoRefresh = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "PredictionAutoRefreshIntervalMinutes");
-            settings.PredictionAutoRefreshIntervalMinutes = predAutoRefresh != null && int.TryParse(predAutoRefresh.Value, out var autoMins)
-                ? autoMins : 15;
 
             return Ok(settings);
         }

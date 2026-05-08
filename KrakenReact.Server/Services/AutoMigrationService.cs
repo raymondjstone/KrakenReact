@@ -218,6 +218,28 @@ public static class AutoMigrationService
 
         try
         {
+            // Composite index on (Asset, Interval) — queries that filter on both columns
+            // (PredictionJob, FeatureEngineering) were doing a full asset-range scan because
+            // Interval was only an INCLUDE column in the old index, not a seek key.
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DerivedKlines_Asset_Interval' AND object_id = OBJECT_ID('DerivedKlines'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_DerivedKlines_Asset_Interval]
+                    ON [dbo].[DerivedKlines] ([Asset], [Interval])
+                    INCLUDE ([OpenTime], [Open], [High], [Low], [Close], [Volume],
+                             [VolumeWeightedAveragePrice], [TradeCount])
+                    WITH (FILLFACTOR = 90)
+                END
+            ");
+            Log.Information("[AutoMigration] DerivedKlines Asset+Interval index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create DerivedKlines Asset+Interval index");
+        }
+
+        try
+        {
             // Index on ScheduledOrders(Status, ScheduledAt) — the job polls this every minute
             db.Database.ExecuteSqlRaw(@"
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ScheduledOrders_Status_ScheduledAt' AND object_id = OBJECT_ID('ScheduledOrders'))
