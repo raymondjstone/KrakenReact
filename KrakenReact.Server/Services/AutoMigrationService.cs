@@ -254,6 +254,97 @@ public static class AutoMigrationService
         {
             Log.Warning(ex, "[AutoMigration] Could not create ScheduledOrders index");
         }
+
+        try
+        {
+            // AlertLogs(CreatedAt DESC) — COUNT(*) and TOP N ORDER BY CreatedAt DESC were doing full scans
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AlertLogs_CreatedAt' AND object_id = OBJECT_ID('AlertLogs'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_AlertLogs_CreatedAt]
+                    ON [AlertLogs] ([CreatedAt] DESC)
+                END
+            ");
+            Log.Information("[AutoMigration] AlertLogs index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create AlertLogs index");
+        }
+
+        try
+        {
+            // ProfitLadderRules(Active) — job filters WHERE Active = 1 on every tick
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ProfitLadderRules_Active' AND object_id = OBJECT_ID('ProfitLadderRules'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_ProfitLadderRules_Active]
+                    ON [ProfitLadderRules] ([Active])
+                END
+            ");
+            Log.Information("[AutoMigration] ProfitLadderRules index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create ProfitLadderRules index");
+        }
+
+        try
+        {
+            // AutoRepriceRules(Active) — job filters WHERE Active = 1 on every tick
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AutoRepriceRules_Active' AND object_id = OBJECT_ID('AutoRepriceRules'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_AutoRepriceRules_Active]
+                    ON [AutoRepriceRules] ([Active])
+                END
+            ");
+            Log.Information("[AutoMigration] AutoRepriceRules index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create AutoRepriceRules index");
+        }
+
+        try
+        {
+            // PriceAlerts(Active) — job filters WHERE Active = 1 on every tick
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PriceAlerts_Active' AND object_id = OBJECT_ID('PriceAlerts'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_PriceAlerts_Active]
+                    ON [PriceAlerts] ([Active])
+                END
+            ");
+            Log.Information("[AutoMigration] PriceAlerts index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create PriceAlerts index");
+        }
+
+        try
+        {
+            // PredictionHistories(Symbol) — COUNT(*) WHERE Symbol = @symbol was scanning the full table
+            // Also ensure the composite (Symbol, ComputedAt) index exists for history queries
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PredictionHistories_Symbol' AND object_id = OBJECT_ID('PredictionHistories'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_PredictionHistories_Symbol]
+                    ON [PredictionHistories] ([Symbol])
+                END
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PredictionHistories_Symbol_ComputedAt' AND object_id = OBJECT_ID('PredictionHistories'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_PredictionHistories_Symbol_ComputedAt]
+                    ON [PredictionHistories] ([Symbol], [ComputedAt])
+                END
+            ");
+            Log.Information("[AutoMigration] PredictionHistories indexes ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create PredictionHistories indexes");
+        }
     }
 
     private static void CreateNewFeatureTables(KrakenDbContext db)

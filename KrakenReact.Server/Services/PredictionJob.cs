@@ -297,8 +297,15 @@ public class PredictionJob
             var toAdd = newDerived.Where(k => !existingKeys.Contains(k.Key)).ToList();
             if (toAdd.Count > 0)
             {
-                db.DerivedKlines.AddRange(toAdd);
-                await db.SaveChangesAsync(ct);
+                // Batch inserts to keep each transaction short; a single large INSERT held
+                // row/page locks for 125+ seconds and cascaded timeouts to unrelated tables.
+                const int batchSize = 100;
+                for (int i = 0; i < toAdd.Count; i += batchSize)
+                {
+                    await using var batchDb = await _dbFactory.CreateDbContextAsync(ct);
+                    batchDb.DerivedKlines.AddRange(toAdd.Skip(i).Take(batchSize));
+                    await batchDb.SaveChangesAsync(ct);
+                }
                 _logger.LogInformation("[Predict] {Symbol}: stored {N} new {Interval} candles", symbol, toAdd.Count, intervalStr);
             }
         }
