@@ -48,26 +48,36 @@ public class DbMethods
 
     public async Task UpsertListAsync<TEntity, TKey>(IEnumerable<TEntity> items, Func<TEntity, TKey> keySelector, Action<TEntity, TEntity>? updateValues = null) where TEntity : class
     {
-        if (!items.Any()) return;
-        await UseDbContextAsync(async context =>
+        var list = items.ToList();
+        if (list.Count == 0) return;
+
+        // Process in small batches so each SaveChangesAsync transaction touches at most
+        // 50 rows. A single large transaction over hundreds of rows caused SQL Server
+        // lock escalation to a table lock, blocking all concurrent readers.
+        const int batchSize = 50;
+        for (int i = 0; i < list.Count; i += batchSize)
         {
-            var set = context.Set<TEntity>();
-            foreach (var item in items)
+            var batch = list.Skip(i).Take(batchSize).ToList();
+            await UseDbContextAsync(async context =>
             {
-                var key = keySelector(item);
-                var existing = await set.FindAsync(key);
-                if (existing == null)
-                    await set.AddAsync(item);
-                else
+                var set = context.Set<TEntity>();
+                foreach (var item in batch)
                 {
-                    if (updateValues != null) updateValues(existing, item);
-                    else context.Entry(existing).CurrentValues.SetValues(item);
+                    var key = keySelector(item);
+                    var existing = await set.FindAsync(key);
+                    if (existing == null)
+                        await set.AddAsync(item);
+                    else
+                    {
+                        if (updateValues != null) updateValues(existing, item);
+                        else context.Entry(existing).CurrentValues.SetValues(item);
+                    }
                 }
-            }
-            try { await context.SaveChangesAsync(); }
-            catch (DbUpdateException ex) when (ex.InnerException is SqlException sqlEx && (sqlEx.Number == 2627 || sqlEx.Number == 2601)) { }
-            return true;
-        });
+                try { await context.SaveChangesAsync(); }
+                catch (DbUpdateException ex) when (ex.InnerException is SqlException sqlEx && (sqlEx.Number == 2627 || sqlEx.Number == 2601)) { }
+                return true;
+            });
+        }
     }
 
     // --- Get Methods ---

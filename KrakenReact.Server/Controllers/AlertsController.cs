@@ -23,12 +23,13 @@ public class AlertsController : ControllerBase
     {
         limit = Math.Clamp(limit, 1, 500);
         var alerts = await _db.AlertLogs
+            .AsNoTracking()
             .OrderByDescending(a => a.CreatedAt)
             .Take(limit)
             .Select(a => new { a.Id, a.Title, a.Text, a.Type, a.CreatedAt })
             .ToListAsync();
-        var unread = await _db.AlertLogs.CountAsync();
-        return Ok(new { alerts, total = unread });
+        var total = await _db.AlertLogs.AsNoTracking().CountAsync();
+        return Ok(new { alerts, total });
     }
 
     [HttpDelete("{id}")]
@@ -44,9 +45,7 @@ public class AlertsController : ControllerBase
     [HttpDelete]
     public async Task<IActionResult> ClearAll()
     {
-        var all = await _db.AlertLogs.ToListAsync();
-        _db.AlertLogs.RemoveRange(all);
-        await _db.SaveChangesAsync();
+        await _db.Database.ExecuteSqlRawAsync("DELETE FROM [AlertLogs]");
         return NoContent();
     }
 

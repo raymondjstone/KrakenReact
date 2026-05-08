@@ -219,7 +219,8 @@ public static class AutoMigrationService
         try
         {
             // Interval was nvarchar(max) which SQL Server rejects as an index key column.
-            // Shrink it to nvarchar(50) first (values are enum names like "OneDay"), then index.
+            // Must drop the auto-generated default constraint and any index that INCLUDEs
+            // the column before ALTER COLUMN can change its type.
             db.Database.ExecuteSqlRaw(@"
                 IF EXISTS (
                     SELECT 1 FROM sys.columns
@@ -228,6 +229,19 @@ public static class AutoMigrationService
                       AND max_length = -1
                 )
                 BEGIN
+                    -- Drop auto-generated default constraint (name is not deterministic)
+                    DECLARE @dfName nvarchar(256)
+                    SELECT @dfName = dc.name
+                    FROM sys.default_constraints dc
+                    JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+                    WHERE c.object_id = OBJECT_ID('DerivedKlines') AND c.name = 'Interval'
+                    IF @dfName IS NOT NULL
+                        EXEC('ALTER TABLE [dbo].[DerivedKlines] DROP CONSTRAINT [' + @dfName + ']')
+
+                    -- Drop covering index that INCLUDEs Interval (will be recreated below)
+                    IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IXEF_DerivedKlines_Asset_INCLUDE' AND object_id = OBJECT_ID('DerivedKlines'))
+                        DROP INDEX [IXEF_DerivedKlines_Asset_INCLUDE] ON [dbo].[DerivedKlines]
+
                     ALTER TABLE [dbo].[DerivedKlines] ALTER COLUMN [Interval] nvarchar(50) NOT NULL
                 END
             ");

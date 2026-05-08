@@ -56,16 +56,16 @@ public class NotificationService
             });
             await db.SaveChangesAsync();
 
-            // Trim old rows to keep the table bounded
+            // Trim old rows to keep the table bounded.
+            // Single DELETE statement keeps the transaction short; the old pattern of
+            // RemoveRange + SaveChangesAsync generated N individual DELETEs in one
+            // transaction, holding write locks long enough to block concurrent COUNT reads.
             var count = await db.AlertLogs.CountAsync();
             if (count > MaxAlertLogRows)
             {
-                var toDelete = await db.AlertLogs
-                    .OrderBy(a => a.CreatedAt)
-                    .Take(count - MaxAlertLogRows)
-                    .ToListAsync();
-                db.AlertLogs.RemoveRange(toDelete);
-                await db.SaveChangesAsync();
+                int excess = count - MaxAlertLogRows;
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"DELETE FROM [AlertLogs] WHERE [Id] IN (SELECT TOP({excess}) [Id] FROM [AlertLogs] ORDER BY [CreatedAt] ASC)");
             }
         }
         catch (Exception ex)
