@@ -150,10 +150,36 @@ public class DbMethods
     public Task AddLedgersAsync(List<KrakenLedgerEntry> list) => UpsertListAsync(list, k => k.Id);
     public Task AddBalancesAsync(List<KrakenBalanceAvailable> list) => UpsertListAsync(list, b => b.Asset);
 
-    public Task AddKlineAsync(List<DerivedKline> list)
+    public async Task AddKlineAsync(List<DerivedKline> list)
     {
-        var deduped = list.Where(i => i.Interval == "OneDay").OrderBy(k => k.Key).GroupBy(k => k.Key).Select(g => g.First()).ToList();
-        return UpsertListAsync(deduped, k => k.Key);
+        var deduped = list
+            .Where(i => i.Interval == "OneDay")
+            .GroupBy(k => k.Key)
+            .Select(g => g.First())
+            .ToList();
+        if (deduped.Count == 0) return;
+
+        // One round-trip to load existing keys instead of N FindAsync calls.
+        // Daily klines are immutable once stored, so INSERT-only is correct here.
+        await using var db = await _factory.CreateDbContextAsync();
+        var keys = deduped.Select(k => k.Key).ToList();
+        var existing = await db.DerivedKlines
+            .Where(k => keys.Contains(k.Key))
+            .Select(k => k.Key)
+            .ToHashSetAsync();
+
+        var toAdd = deduped.Where(d => !existing.Contains(d.Key)).ToList();
+        if (toAdd.Count == 0) return;
+
+        const int batchSize = 100;
+        for (int i = 0; i < toAdd.Count; i += batchSize)
+        {
+            await using var batchDb = await _factory.CreateDbContextAsync();
+            batchDb.DerivedKlines.AddRange(toAdd.Skip(i).Take(batchSize));
+            try { await batchDb.SaveChangesAsync(); }
+            catch (DbUpdateException ex) when (ex.InnerException is SqlException sqlEx &&
+                (sqlEx.Number == 2627 || sqlEx.Number == 2601)) { }
+        }
     }
 
     public Task AddCombinedOrdersAsync(List<CombinedOrder> list)

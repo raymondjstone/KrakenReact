@@ -71,6 +71,7 @@ builder.Services.AddSingleton<DelistedPriceService>();
 builder.Services.AddHostedService<BackgroundTaskService>();
 builder.Services.AddHostedService<KrakenWebSocketV1Service>();
 builder.Services.AddHostedService<KrakenWebSocketV2Service>();
+builder.Services.AddHostedService<PriceSnapshotService>();
 
 // Controllers + SignalR
 builder.Services.AddControllers();
