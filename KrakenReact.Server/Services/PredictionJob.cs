@@ -495,44 +495,28 @@ public class PredictionJob
     private async Task UpsertResultAsync(PredictionResult result)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
+
+        // PredictionResults: Symbol is the PK (user-provided string) → EF uses plain INSERT/UPDATE, no MERGE
         var existing = await db.PredictionResults.FindAsync(result.Symbol);
-        if (existing == null)
-        {
-            db.PredictionResults.Add(result);
-        }
-        else
-        {
-            db.Entry(existing).CurrentValues.SetValues(result);
-        }
-
-        // Append to history (only on success so we track meaningful trend data)
-        if (result.Status == "success")
-        {
-            db.PredictionHistories.Add(new Models.PredictionHistory
-            {
-                Symbol              = result.Symbol,
-                ComputedAt          = result.ComputedAt,
-                PredictedUp         = result.PredictedUp,
-                Probability         = result.Probability,
-                ModelAccuracy       = result.ModelAccuracy,
-                WalkForwardAccuracy = result.WalkForwardAccuracy,
-                Interval            = result.Interval,
-            });
-
-            // Keep at most 90 history rows per symbol (rolling window)
-            var count = await db.PredictionHistories.CountAsync(h => h.Symbol == result.Symbol);
-            if (count > 90)
-            {
-                var oldest = await db.PredictionHistories
-                    .Where(h => h.Symbol == result.Symbol)
-                    .OrderBy(h => h.ComputedAt)
-                    .Take(count - 90)
-                    .ToListAsync();
-                db.PredictionHistories.RemoveRange(oldest);
-            }
-        }
-
+        if (existing == null) db.PredictionResults.Add(result);
+        else db.Entry(existing).CurrentValues.SetValues(result);
         await db.SaveChangesAsync();
+
+        if (result.Status != "success") return;
+
+        // Raw INSERT bypasses the EF MERGE that auto-increment Id would otherwise force,
+        // which acquires UPDATE locks on the whole table.
+        await db.Database.ExecuteSqlRawAsync(
+            "INSERT INTO [PredictionHistories] ([Symbol],[ComputedAt],[PredictedUp],[Probability],[ModelAccuracy],[WalkForwardAccuracy],[Interval]) " +
+            "VALUES ({0},{1},{2},{3},{4},{5},{6})",
+            result.Symbol, result.ComputedAt, result.PredictedUp, result.Probability,
+            result.ModelAccuracy, result.WalkForwardAccuracy, result.Interval);
+
+        // Trim to 90 rows per symbol in a single statement — no COUNT or ToList round-trips
+        await db.Database.ExecuteSqlRawAsync(
+            "DELETE FROM [PredictionHistories] WHERE [Symbol] = {0} AND [Id] NOT IN " +
+            "(SELECT TOP(90) [Id] FROM [PredictionHistories] WHERE [Symbol] = {0} ORDER BY [ComputedAt] DESC)",
+            result.Symbol);
     }
 
     // ── Settings helpers ────────────────────────────────────────────────────

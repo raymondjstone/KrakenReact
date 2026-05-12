@@ -47,16 +47,12 @@ public class NotificationService
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
-            db.AlertLogs.Add(new AlertLog
-            {
-                Title = title,
-                Text = text,
-                Type = type,
-                CreatedAt = DateTime.UtcNow,
-            });
-            await db.SaveChangesAsync();
 
-            // Trim to MaxAlertLogRows without a preceding COUNT round-trip
+            // Raw INSERT avoids the EF MERGE that auto-increment Id forces (acquires UPDATE lock table-wide)
+            await db.Database.ExecuteSqlRawAsync(
+                "INSERT INTO [AlertLogs] ([Title],[Text],[Type],[CreatedAt]) VALUES ({0},{1},{2},{3})",
+                title, text, type, DateTime.UtcNow);
+
             await db.Database.ExecuteSqlRawAsync(
                 $"DELETE FROM [AlertLogs] WHERE [Id] NOT IN (SELECT TOP({MaxAlertLogRows}) [Id] FROM [AlertLogs] ORDER BY [CreatedAt] DESC)");
         }

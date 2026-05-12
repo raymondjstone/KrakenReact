@@ -48,18 +48,24 @@ public class PriceSnapshotService : BackgroundService
             await using var db = await _dbFactory.CreateDbContextAsync();
 
             // Raw INSERT avoids the EF Core MERGE that auto-increment PKs force.
-            // MERGE acquires UPDATE locks on the whole table; plain INSERT does not.
-            var sb = new System.Text.StringBuilder("INSERT INTO [PriceSnapshots] ([Symbol],[Price],[CapturedAt]) VALUES ");
-            var parms = new List<object>();
-            for (int i = 0; i < snapshots.Count; i++)
+            // Batch at 500 rows (1,500 params) to stay well under SQL Server's 2,100-parameter limit
+            // and reduce individual INSERT lock hold time.
+            const int batchSize = 500;
+            for (int batchStart = 0; batchStart < snapshots.Count; batchStart += batchSize)
             {
-                if (i > 0) sb.Append(',');
-                sb.Append($"({{{i * 3}}},{{{i * 3 + 1}}},{{{i * 3 + 2}}})");
-                parms.Add(snapshots[i].Symbol);
-                parms.Add(snapshots[i].Price);
-                parms.Add(snapshots[i].CapturedAt);
+                var batch = snapshots.Skip(batchStart).Take(batchSize).ToList();
+                var sb = new System.Text.StringBuilder("INSERT INTO [PriceSnapshots] ([Symbol],[Price],[CapturedAt]) VALUES ");
+                var parms = new List<object>();
+                for (int i = 0; i < batch.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    sb.Append($"({{{i * 3}}},{{{i * 3 + 1}}},{{{i * 3 + 2}}})");
+                    parms.Add(batch[i].Symbol);
+                    parms.Add(batch[i].Price);
+                    parms.Add(batch[i].CapturedAt);
+                }
+                await db.Database.ExecuteSqlRawAsync(sb.ToString(), parms.ToArray());
             }
-            await db.Database.ExecuteSqlRawAsync(sb.ToString(), parms.ToArray());
 
             // Delete snapshots older than 26 hours (runs after the insert commits)
             var cutoff = now.AddHours(-26);
