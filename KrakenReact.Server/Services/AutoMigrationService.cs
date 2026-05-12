@@ -198,6 +198,26 @@ public static class AutoMigrationService
 
         try
         {
+            // READ_COMMITTED_SNAPSHOT lets readers see the last committed row version instead of
+            // waiting for write locks to release. Eliminates the 120-second read timeouts that
+            // occur when prediction write batches hold row/page locks.
+            var dbNameRcsi = db.Database.GetDbConnection().Database;
+#pragma warning disable EF1003
+            db.Database.ExecuteSqlRaw(@"
+                IF (SELECT is_read_committed_snapshot_on FROM sys.databases WHERE name = " + QuoteSqlLiteral(dbNameRcsi) + @") = 0
+                BEGIN
+                    ALTER DATABASE " + QuoteSqlIdentifier(dbNameRcsi) + @" SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE
+                END");
+#pragma warning restore EF1003
+            Log.Information("[AutoMigration] READ_COMMITTED_SNAPSHOT isolation ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not enable READ_COMMITTED_SNAPSHOT (may require elevated permissions)");
+        }
+
+        try
+        {
             // Covering index on DerivedKlines for faster asset lookups
             db.Database.ExecuteSqlRaw(@"
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IXEF_DerivedKlines_Asset_INCLUDE' AND object_id = OBJECT_ID('DerivedKlines'))
@@ -371,6 +391,25 @@ public static class AutoMigrationService
         catch (Exception ex)
         {
             Log.Warning(ex, "[AutoMigration] Could not create PredictionHistories indexes");
+        }
+
+        try
+        {
+            // PriceSnapshots(CapturedAt) — DELETE WHERE CapturedAt < cutoff scans without a
+            // leading-CapturedAt index; the composite (Symbol,CapturedAt) has Symbol first so
+            // it cannot be used for a range delete over CapturedAt alone.
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PriceSnapshots_CapturedAt' AND object_id = OBJECT_ID('PriceSnapshots'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_PriceSnapshots_CapturedAt]
+                    ON [PriceSnapshots] ([CapturedAt])
+                END
+            ");
+            Log.Information("[AutoMigration] PriceSnapshots CapturedAt index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create PriceSnapshots CapturedAt index");
         }
     }
 
@@ -820,4 +859,7 @@ public static class AutoMigrationService
 
         return "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
     }
+
+    private static string QuoteSqlLiteral(string value)
+        => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 }

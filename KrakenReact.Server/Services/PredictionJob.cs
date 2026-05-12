@@ -28,6 +28,10 @@ public class PredictionJob
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _symbolLocks
         = new(StringComparer.OrdinalIgnoreCase);
 
+    // Shared across PredictionJob and StalePredictionRefreshJob so the bulk hourly run
+    // and the stale-refresh run never overlap — overlapping was saturating SQL Server.
+    internal static readonly SemaphoreSlim PipelineLock = new(1, 1);
+
     private const int MinTrainRows = 80;
     private const int WalkForwardFolds = 4;
     private const int SeedHistoryCandles = 240;
@@ -83,32 +87,44 @@ public class PredictionJob
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
-        var symbols     = await GetSymbolsAsync(ct);
-        var interval    = GetInterval();
-        var intervalStr = interval.ToString();
-
-        _logger.LogInformation("[Predict] Job starting - {Count} symbols @ {Interval}", symbols.Count, intervalStr);
-
-        foreach (var symbol in symbols)
+        if (!await PipelineLock.WaitAsync(TimeSpan.FromMinutes(30), ct))
         {
-            if (ct.IsCancellationRequested) break;
-            try
-            {
-                var result = await ProcessSymbolAsync(symbol, interval, intervalStr, ct);
-                await UpsertResultAsync(result);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[Predict] Error processing {Symbol}", symbol);
-            }
-
-            try { await Task.Delay(600, ct); } catch (OperationCanceledException) { break; }
+            _logger.LogWarning("[Predict] Bulk job skipped — pipeline semaphore not available after 30 min");
+            return;
         }
+        try
+        {
+            var symbols     = await GetSymbolsAsync(ct);
+            var interval    = GetInterval();
+            var intervalStr = interval.ToString();
 
-        try { await _hub.Clients.All.SendAsync("PredictionsUpdated", (string?)null, ct); }
-        catch { /* non-critical */ }
+            _logger.LogInformation("[Predict] Job starting - {Count} symbols @ {Interval}", symbols.Count, intervalStr);
 
-        _logger.LogInformation("[Predict] Job complete");
+            foreach (var symbol in symbols)
+            {
+                if (ct.IsCancellationRequested) break;
+                try
+                {
+                    var result = await ProcessSymbolAsync(symbol, interval, intervalStr, ct);
+                    await UpsertResultAsync(result);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[Predict] Error processing {Symbol}", symbol);
+                }
+
+                try { await Task.Delay(600, ct); } catch (OperationCanceledException) { break; }
+            }
+
+            try { await _hub.Clients.All.SendAsync("PredictionsUpdated", (string?)null, ct); }
+            catch { /* non-critical */ }
+
+            _logger.LogInformation("[Predict] Job complete");
+        }
+        finally
+        {
+            PipelineLock.Release();
+        }
     }
 
     // ── Per-symbol pipeline ─────────────────────────────────────────────────
@@ -299,12 +315,14 @@ public class PredictionJob
             {
                 // Batch inserts to keep each transaction short; a single large INSERT held
                 // row/page locks for 125+ seconds and cascaded timeouts to unrelated tables.
-                const int batchSize = 100;
+                const int batchSize = 25;
                 for (int i = 0; i < toAdd.Count; i += batchSize)
                 {
                     await using var batchDb = await _dbFactory.CreateDbContextAsync(ct);
                     batchDb.DerivedKlines.AddRange(toAdd.Skip(i).Take(batchSize));
                     await batchDb.SaveChangesAsync(ct);
+                    if (i + batchSize < toAdd.Count)
+                        await Task.Delay(50, ct);
                 }
                 _logger.LogInformation("[Predict] {Symbol}: stored {N} new {Interval} candles", symbol, toAdd.Count, intervalStr);
             }

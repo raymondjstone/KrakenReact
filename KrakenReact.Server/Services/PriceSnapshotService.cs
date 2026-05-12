@@ -46,13 +46,24 @@ public class PriceSnapshotService : BackgroundService
             if (snapshots.Count == 0) return;
 
             await using var db = await _dbFactory.CreateDbContextAsync();
-            db.PriceSnapshots.AddRange(snapshots);
 
-            // Delete snapshots older than 26 hours to keep the table small
+            // Raw INSERT avoids the EF Core MERGE that auto-increment PKs force.
+            // MERGE acquires UPDATE locks on the whole table; plain INSERT does not.
+            var sb = new System.Text.StringBuilder("INSERT INTO [PriceSnapshots] ([Symbol],[Price],[CapturedAt]) VALUES ");
+            var parms = new List<object>();
+            for (int i = 0; i < snapshots.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append($"({{{i * 3}}},{{{i * 3 + 1}}},{{{i * 3 + 2}}})");
+                parms.Add(snapshots[i].Symbol);
+                parms.Add(snapshots[i].Price);
+                parms.Add(snapshots[i].CapturedAt);
+            }
+            await db.Database.ExecuteSqlRawAsync(sb.ToString(), parms.ToArray());
+
+            // Delete snapshots older than 26 hours (runs after the insert commits)
             var cutoff = now.AddHours(-26);
             await db.PriceSnapshots.Where(s => s.CapturedAt < cutoff).ExecuteDeleteAsync();
-
-            await db.SaveChangesAsync();
             _logger.LogDebug("[PriceSnapshot] Captured {Count} snapshots at {Time}", snapshots.Count, now);
         }
         catch (Exception ex)

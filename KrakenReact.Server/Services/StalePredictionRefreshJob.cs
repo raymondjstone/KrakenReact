@@ -25,31 +25,43 @@ public class StalePredictionRefreshJob
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
-        await using var db = await _dbFactory.CreateDbContextAsync(ct);
-        var cutoff = DateTime.UtcNow.AddMinutes(-StalenessThresholdMinutes);
-
-        var staleSymbols = await db.PredictionResults
-            .AsNoTracking()
-            .Where(r => r.ComputedAt < cutoff)
-            .Select(r => r.Symbol)
-            .OrderBy(r => r)
-            .ToListAsync(ct);
-
-        if (staleSymbols.Count == 0)
+        if (!await PredictionJob.PipelineLock.WaitAsync(TimeSpan.FromMinutes(30), ct))
         {
-            _logger.LogInformation("[StalePredictJob] No predictions older than {Mins} min", StalenessThresholdMinutes);
+            _logger.LogWarning("[StalePredictJob] Skipped — bulk prediction job is running (pipeline semaphore held > 30 min)");
             return;
         }
-
-        _logger.LogInformation("[StalePredictJob] Refreshing {Count} stale prediction(s)", staleSymbols.Count);
-
-        foreach (var symbol in staleSymbols)
+        try
         {
-            if (ct.IsCancellationRequested) break;
-            await _predictionJob.ExecuteSingleAsync(symbol, ct);
-            try { await Task.Delay(600, ct); } catch (OperationCanceledException) { break; }
-        }
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var cutoff = DateTime.UtcNow.AddMinutes(-StalenessThresholdMinutes);
 
-        _logger.LogInformation("[StalePredictJob] Done");
+            var staleSymbols = await db.PredictionResults
+                .AsNoTracking()
+                .Where(r => r.ComputedAt < cutoff)
+                .Select(r => r.Symbol)
+                .OrderBy(r => r)
+                .ToListAsync(ct);
+
+            if (staleSymbols.Count == 0)
+            {
+                _logger.LogInformation("[StalePredictJob] No predictions older than {Mins} min", StalenessThresholdMinutes);
+                return;
+            }
+
+            _logger.LogInformation("[StalePredictJob] Refreshing {Count} stale prediction(s)", staleSymbols.Count);
+
+            foreach (var symbol in staleSymbols)
+            {
+                if (ct.IsCancellationRequested) break;
+                await _predictionJob.ExecuteSingleAsync(symbol, ct);
+                try { await Task.Delay(600, ct); } catch (OperationCanceledException) { break; }
+            }
+
+            _logger.LogInformation("[StalePredictJob] Done");
+        }
+        finally
+        {
+            PredictionJob.PipelineLock.Release();
+        }
     }
 }
