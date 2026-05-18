@@ -10,6 +10,9 @@ export function getConnection() {
       .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
       .configureLogging(signalR.LogLevel.Warning)
       .build();
+    // Permanent no-op so SignalR never warns "No client method found" for
+    // high-frequency events when their page isn't mounted.
+    connection.on('AutoTradeUpdate', () => {});
   }
   return connection;
 }

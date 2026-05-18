@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { createChart, CandlestickSeries } from 'lightweight-charts';
+import { createChart, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
@@ -30,17 +30,36 @@ const INTERVALS = [
 // Intervals where candles represent less than a day — show time on the axis
 const INTRADAY = new Set(['1', '5', '15', '30', '60', '240']);
 
+// Snap a trade timestamp (seconds) to the candle bucket for the given interval key
+function snapToInterval(timeSec, intervalKey) {
+  if (intervalKey === '1W') {
+    const d = new Date(timeSec * 1000);
+    const dayOfWeek = d.getUTCDay(); // 0=Sun
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const startOfDay = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+    return startOfDay - mondayOffset * 86400;
+  }
+  if (intervalKey === '1D') {
+    const d = new Date(timeSec * 1000);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+  }
+  const mins = parseInt(intervalKey, 10);
+  const secs = mins * 60;
+  return Math.floor(timeSec / secs) * secs;
+}
+
 export default function ChartPage({ symbol, displaySymbol, chartId }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const orderLinesRef = useRef([]);
+  const markersPluginRef = useRef(null);
   const resizeHandlerRef = useRef(null);
   const resizeObserverRef = useRef(null);
   const { theme } = useTheme();
   const intervalKey = chartId ? `kraken_chart_interval_${chartId}` : 'kraken_chart_interval';
   const [interval, setInterval_] = useState(() =>
-    localStorage.getItem(intervalKey) || localStorage.getItem('kraken_chart_interval') || '1D'
+    localStorage.getItem(intervalKey) || '1D'
   );
   const [loading, setLoading] = useState(true);
   const [noData, setNoData] = useState(false);
@@ -66,6 +85,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       chartRef.current.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      markersPluginRef.current = null;
       orderLinesRef.current = [];
     }
 
@@ -105,6 +125,45 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       }).catch(() => {});
     }
 
+    let cachedTrades = null;
+
+    function applyTradeMarkers() {
+      if (!cachedTrades || disposed || !markersPluginRef.current) return;
+      const symbolNorm = symbol.replace('/', '').toUpperCase();
+      const filtered = cachedTrades.filter(t => {
+        const ts = (t.symbol || '').replace('/', '').toUpperCase();
+        return ts === symbolNorm || ts.includes(symbolNorm) || symbolNorm.includes(ts);
+      });
+      const markers = filtered
+        .map(t => {
+          const timeSec = Math.floor(new Date(t.timestamp).getTime() / 1000);
+          const snapped = snapToInterval(timeSec, interval);
+          return {
+            time: snapped,
+            position: t.side === 'Buy' ? 'belowBar' : 'aboveBar',
+            shape: 'circle',
+            color: t.side === 'Buy' ? '#f0b90b' : '#ffffff',
+            text: t.side === 'Buy' ? 'B' : 'S',
+            size: 1,
+          };
+        })
+        .sort((a, b) => a.time - b.time);
+      try {
+        markersPluginRef.current.setMarkers(markers);
+      } catch { /* ignore */ }
+    }
+
+    function updateTradeMarkers() {
+      if (disposed || !markersPluginRef.current) return;
+      api.get('/trades/grouped')
+        .then(r => {
+          if (disposed) return;
+          cachedTrades = r.data;
+          applyTradeMarkers();
+        })
+        .catch(() => {});
+    }
+
     setLoading(true);
     setNoData(false);
 
@@ -137,6 +196,16 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
         },
       });
       seriesRef.current = candleSeries;
+      markersPluginRef.current = createSeriesMarkers(candleSeries);
+
+      // Fetch grouped trades (one per order, weighted avg price) in parallel with klines
+      api.get('/trades/grouped')
+        .then(r => {
+          if (disposed) return;
+          cachedTrades = r.data;
+          requestAnimationFrame(() => { if (!disposed) applyTradeMarkers(); });
+        })
+        .catch(() => {});
 
       // Double rAF to ensure flexbox/layout is complete before resizing
       requestAnimationFrame(() => {
@@ -168,12 +237,14 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
           if (!disposed) { setLoading(false); setNoData(true); }
         }
 
-        // Double rAF after data load to ensure chart fills container
+        // Double rAF after data load to ensure chart fills container and visible
+        // range is computed before we attempt to position markers.
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             if (chartRef.current && container) {
               chartRef.current.applyOptions({ width: container.clientWidth, height: container.clientHeight });
             }
+            if (!disposed) applyTradeMarkers();
           });
         });
 
@@ -227,9 +298,10 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       };
       conn.on('TickerUpdate', handler);
 
-      orderHandler = () => updateOrderLines();
+      orderHandler = () => { updateOrderLines(); updateTradeMarkers(); };
       conn.on('OrderUpdate', orderHandler);
       conn.on('ExecutionUpdate', orderHandler);
+      conn.on('TradesUpdated', updateTradeMarkers);
     }
 
     // Remove previous resize handler if any (from prior effect run)
@@ -286,11 +358,13 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       if (orderHandler) {
         conn.off('OrderUpdate', orderHandler);
         conn.off('ExecutionUpdate', orderHandler);
+        conn.off('TradesUpdated', updateTradeMarkers);
       }
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
         seriesRef.current = null;
+        markersPluginRef.current = null;
         orderLinesRef.current = [];
       }
     };
