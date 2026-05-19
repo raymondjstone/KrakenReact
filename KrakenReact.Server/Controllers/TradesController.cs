@@ -53,11 +53,21 @@ public class TradesController : ControllerBase
     }
 
     [HttpGet("grouped")]
-    public async Task<ActionResult<List<TradeDto>>> GetGrouped()
+    public async Task<ActionResult<List<TradeDto>>> GetGrouped([FromQuery] string? symbol = null)
     {
         var trades = await _db.GetTradesAsync();
         var ledgers = await _db.GetLedgersAsync();
         var ledgersByRef = ledgers.ToLookup(l => l.ReferenceId);
+
+        // Filter by base asset if symbol provided, using server-side normalization
+        // that correctly handles Kraken legacy pair names (XETHZUSD → ETH, XXBTZUSD → BTC)
+        if (!string.IsNullOrEmpty(symbol))
+        {
+            var filterBase = _state.NormalizeOrderSymbolBase(symbol);
+            if (!string.IsNullOrEmpty(filterBase))
+                trades = trades.Where(t => _state.NormalizeOrderSymbolBase(t.Symbol ?? "") == filterBase).ToList();
+        }
+
         var grouped = trades.GroupBy(t => t.OrderId).Select(g =>
         {
             var first = g.First();

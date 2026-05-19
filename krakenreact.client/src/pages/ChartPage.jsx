@@ -54,6 +54,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
   const seriesRef = useRef(null);
   const orderLinesRef = useRef([]);
   const markersPluginRef = useRef(null);
+  const dataRangeRef = useRef({ from: 0, to: 0 });
   const resizeHandlerRef = useRef(null);
   const resizeObserverRef = useRef(null);
   const { theme } = useTheme();
@@ -87,6 +88,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       seriesRef.current = null;
       markersPluginRef.current = null;
       orderLinesRef.current = [];
+      dataRangeRef.current = { from: 0, to: 0 };
     }
 
     function updateOrderLines() {
@@ -129,12 +131,8 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
 
     function applyTradeMarkers() {
       if (!cachedTrades || disposed || !markersPluginRef.current) return;
-      const symbolNorm = symbol.replace('/', '').toUpperCase();
-      const filtered = cachedTrades.filter(t => {
-        const ts = (t.symbol || '').replace('/', '').toUpperCase();
-        return ts === symbolNorm || ts.includes(symbolNorm) || symbolNorm.includes(ts);
-      });
-      const markers = filtered
+      const { from } = dataRangeRef.current;
+      const markers = cachedTrades
         .map(t => {
           const timeSec = Math.floor(new Date(t.timestamp).getTime() / 1000);
           const snapped = snapToInterval(timeSec, interval);
@@ -147,6 +145,9 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
             size: 1,
           };
         })
+        // Only show markers within the loaded klines range so old trades don't
+        // cluster at the far-left edge on intraday charts.
+        .filter(m => from === 0 || m.time >= from)
         .sort((a, b) => a.time - b.time);
       try {
         markersPluginRef.current.setMarkers(markers);
@@ -155,7 +156,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
 
     function updateTradeMarkers() {
       if (disposed || !markersPluginRef.current) return;
-      api.get('/trades/grouped')
+      api.get(`/trades/grouped?symbol=${encodeURIComponent(symbol)}`)
         .then(r => {
           if (disposed) return;
           cachedTrades = r.data;
@@ -198,8 +199,9 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       seriesRef.current = candleSeries;
       markersPluginRef.current = createSeriesMarkers(candleSeries);
 
-      // Fetch grouped trades (one per order, weighted avg price) in parallel with klines
-      api.get('/trades/grouped')
+      // Fetch grouped trades (one per order, weighted avg price) in parallel with klines.
+      // Server filters by symbol using Kraken-aware normalization (handles XETHZUSD etc.)
+      api.get(`/trades/grouped?symbol=${encodeURIComponent(symbol)}`)
         .then(r => {
           if (disposed) return;
           cachedTrades = r.data;
@@ -231,6 +233,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
           .filter((v, i, arr) => i === 0 || v.time !== arr[i - 1].time);
         console.log(`[Chart] ${symbol}: ${data.length} after filter`);
         if (data.length) {
+          dataRangeRef.current = { from: data[0].time, to: data[data.length - 1].time };
           candleSeries.setData(data);
           if (!disposed) { setLoading(false); setNoData(false); }
         } else {
