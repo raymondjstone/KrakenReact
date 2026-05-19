@@ -25,16 +25,30 @@ public class PredictionController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetPredictions()
     {
-        var results = await _db.PredictionResults.AsNoTracking().ToListAsync();
-        return Ok(results);
+        try
+        {
+            var results = await _db.PredictionResults.AsNoTracking().ToListAsync();
+            return Ok(results);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>POST /api/predictions/trigger — enqueue the job immediately</summary>
     [HttpPost("trigger")]
     public IActionResult TriggerNow()
     {
-        _backgroundJobClient.Enqueue<PredictionJob>(j => j.ExecuteAsync(CancellationToken.None));
-        return Ok(new { message = "Prediction job enqueued" });
+        try
+        {
+            _backgroundJobClient.Enqueue<PredictionJob>(j => j.ExecuteAsync(CancellationToken.None));
+            return Ok(new { message = "Prediction job enqueued" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>POST /api/predictions/trigger/single?symbol=XBT/USD — enqueue for one symbol</summary>

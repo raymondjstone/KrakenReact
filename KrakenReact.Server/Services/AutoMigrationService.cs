@@ -832,6 +832,17 @@ public static class AutoMigrationService
                 IF COL_LENGTH('PredictionResults', 'TestSamples6') IS NULL
                     ALTER TABLE [PredictionResults] ADD [TestSamples6] int NOT NULL CONSTRAINT [DF_PredictionResults_TestSamples6] DEFAULT 0;
 
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure PredictionResults walk-forward columns");
+        }
+
+        // Separate block so a failure above does not prevent these newer columns from being added.
+        try
+        {
+            db.Database.ExecuteSqlRaw(@"
                 IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAccuracy') IS NULL
                     ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAccuracy] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAccuracy] DEFAULT 0;
                 IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAuc') IS NULL
@@ -845,10 +856,11 @@ public static class AutoMigrationService
                 IF COL_LENGTH('PredictionResults', 'WalkForwardLogRegAuc6') IS NULL
                     ALTER TABLE [PredictionResults] ADD [WalkForwardLogRegAuc6] real NOT NULL CONSTRAINT [DF_PredictionResults_WalkForwardLogRegAuc6] DEFAULT 0;
             ");
+            Log.Information("[AutoMigration] PredictionResults WalkForwardLogReg columns ensured");
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "[AutoMigration] Could not ensure PredictionResults walk-forward columns");
+            Log.Warning(ex, "[AutoMigration] Could not ensure PredictionResults WalkForwardLogReg columns");
         }
     }
 

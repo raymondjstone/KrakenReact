@@ -136,12 +136,14 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
         .map(t => {
           const timeSec = Math.floor(new Date(t.timestamp).getTime() / 1000);
           const snapped = snapToInterval(timeSec, interval);
+          const p = Number(t.price);
+          const priceStr = p >= 1000 ? p.toFixed(0) : p >= 1 ? p.toFixed(2) : p >= 0.01 ? p.toFixed(4) : p.toFixed(6);
           return {
             time: snapped,
             position: t.side === 'Buy' ? 'belowBar' : 'aboveBar',
             shape: 'circle',
             color: t.side === 'Buy' ? '#f0b90b' : '#ffffff',
-            text: t.side === 'Buy' ? 'B' : 'S',
+            text: `${t.side === 'Buy' ? 'B' : 'S'} ${priceStr}`,
             size: 1,
           };
         })
@@ -220,8 +222,6 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
 
       const encodedSymbol = encodeURIComponent(symbol);
       api.get(`/prices/${encodedSymbol}/klines?interval=${interval}`).then(r => {
-        console.log(`[Chart] ${symbol} interval=${interval}: ${r.data.length} raw klines, disposed=${disposed}`);
-        if (r.data.length > 0) console.log('[Chart] sample:', r.data[0]);
         if (disposed) return;
         const data = r.data
           .filter(k => k.openTime && k.open > 0)
@@ -231,7 +231,6 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
           }))
           .sort((a, b) => a.time - b.time)
           .filter((v, i, arr) => i === 0 || v.time !== arr[i - 1].time);
-        console.log(`[Chart] ${symbol}: ${data.length} after filter`);
         if (data.length) {
           dataRangeRef.current = { from: data[0].time, to: data[data.length - 1].time };
           candleSeries.setData(data);

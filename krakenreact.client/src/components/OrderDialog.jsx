@@ -339,8 +339,8 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
               <div>
                 <label style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Side</label>
                 <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                  <button onClick={() => setSide('Buy')} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13, background: side === 'Buy' ? 'var(--green)' : 'var(--bg-input)', color: side === 'Buy' ? '#fff' : 'var(--text-secondary)' }}>Buy</button>
-                  <button onClick={() => setSide('Sell')} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13, background: side === 'Sell' ? 'var(--red)' : 'var(--bg-input)', color: side === 'Sell' ? '#fff' : 'var(--text-secondary)' }}>Sell</button>
+                  <button onClick={() => setSide('Buy')} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13, background: side === 'Buy' ? 'var(--green)' : 'var(--bg-input)', color: side === 'Buy' ? '#fff' : 'var(--text-secondary)' }}>Buy{price ? ` @ ${price}` : ''}</button>
+                  <button onClick={() => setSide('Sell')} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13, background: side === 'Sell' ? 'var(--red)' : 'var(--bg-input)', color: side === 'Sell' ? '#fff' : 'var(--text-secondary)' }}>Sell{price ? ` @ ${price}` : ''}</button>
                 </div>
               </div>
             )}
