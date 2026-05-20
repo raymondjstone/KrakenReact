@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 
 const CRON_PRESETS = [
@@ -16,6 +16,7 @@ export default function DcaPage() {
   const [form, setForm] = useState(null); // null = closed, object = new/edit rule
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const flashTimerRef = useRef(null);
 
   const fetchRules = useCallback(() => {
     api.get('/dca').then(r => { setRules(r.data || []); setLoading(false); }).catch(() => setLoading(false));
@@ -25,7 +26,8 @@ export default function DcaPage() {
 
   const flash = (msg) => {
     setStatusMsg(msg);
-    setTimeout(() => setStatusMsg(''), 4000);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setStatusMsg(''), 4000);
   };
 
   const handleSave = async () => {

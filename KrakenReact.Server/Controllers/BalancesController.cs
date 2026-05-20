@@ -10,6 +10,9 @@ namespace KrakenReact.Server.Controllers;
 [Route("api/[controller]")]
 public class BalancesController : ControllerBase
 {
+    private static readonly HashSet<string> FiatAssets = new(StringComparer.OrdinalIgnoreCase)
+        { "USD", "USDT", "USDC", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF" };
+
     private readonly TradingStateService _state;
     private readonly KrakenDbContext _db;
     private readonly ILogger<BalancesController> _logger;
@@ -68,8 +71,7 @@ public class BalancesController : ControllerBase
             foreach (var balance in balances)
             {
                 // Skip P/L calculation for fiat currencies (they don't have a "cost basis")
-                var fiatCurrencies = new[] { "USD", "USDT", "USDC", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF" };
-                if (fiatCurrencies.Contains(balance.Asset))
+                if (FiatAssets.Contains(balance.Asset))
                 {
                     // Leave cost basis and P/L fields as null/zero
                     continue;

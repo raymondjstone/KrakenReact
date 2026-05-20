@@ -8,12 +8,14 @@ public class NotificationService
 {
     private readonly DbMethods _db;
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
+    private readonly ILogger<NotificationService> _logger;
     private const int MaxAlertLogRows = 500;
 
-    public NotificationService(DbMethods db, IDbContextFactory<KrakenDbContext> dbFactory)
+    public NotificationService(DbMethods db, IDbContextFactory<KrakenDbContext> dbFactory, ILogger<NotificationService> logger)
     {
         _db = db;
         _dbFactory = dbFactory;
+        _logger = logger;
     }
 
     public async Task<bool> Pushover(string title, string text, string sound = Altairis.Pushover.Client.MessageSound.Falling)
@@ -37,7 +39,7 @@ public class NotificationService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Pushover notification failed: {ex.Message}");
+            _logger.LogWarning(ex, "Pushover notification failed");
         }
         return false;
     }
@@ -58,7 +60,7 @@ public class NotificationService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Alert log failed: {ex.Message}");
+            _logger.LogWarning(ex, "Alert log write failed");
         }
     }
 }

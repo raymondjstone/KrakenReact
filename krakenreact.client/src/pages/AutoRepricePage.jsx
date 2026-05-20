@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 
 const EMPTY = {
@@ -12,8 +12,13 @@ export default function AutoRepricePage() {
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const flashTimerRef = useRef(null);
 
-  const flash = (msg) => { setStatusMsg(msg); setTimeout(() => setStatusMsg(''), 4000); };
+  const flash = (msg) => {
+    setStatusMsg(msg);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setStatusMsg(''), 4000);
+  };
 
   const load = useCallback(() => {
     api.get('/autoreprice').then(r => { setRules(r.data || []); setLoading(false); }).catch(() => setLoading(false));

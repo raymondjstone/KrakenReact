@@ -11,11 +11,15 @@ async function fetchTemplates() {
 }
 
 let _symbolsCache = null;
+let _symbolsFetch = null;
 async function fetchSymbolConstraints() {
   if (_symbolsCache) return _symbolsCache;
-  const r = await api.get('/symbols');
-  _symbolsCache = r.data || [];
-  return _symbolsCache;
+  if (!_symbolsFetch) {
+    _symbolsFetch = api.get('/symbols')
+      .then(r => { _symbolsCache = r.data || []; _symbolsFetch = null; return _symbolsCache; })
+      .catch(err => { _symbolsFetch = null; throw err; });
+  }
+  return _symbolsFetch;
 }
 
 function findSymbolInfo(symbolsList, symbol) {
@@ -54,13 +58,16 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
 
   useEffect(() => {
     if (!isOpen) return;
+    let cancelled = false;
     api.get('/balances/atr').then((r) => {
+      if (cancelled) return;
       const map = {};
       (r.data || []).forEach((a) => { map[a.asset] = a; });
       setAtrData(map);
     }).catch(() => { /* ignore */ });
-    fetchSymbolConstraints().then(setSymbolsList).catch(() => { /* ignore */ });
-    fetchTemplates().then(setTemplates).catch(() => { /* ignore */ });
+    fetchSymbolConstraints().then(r => { if (!cancelled) setSymbolsList(r); }).catch(() => { /* ignore */ });
+    fetchTemplates().then(r => { if (!cancelled) setTemplates(r); }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
   }, [isOpen]);
 
   useEffect(() => {
@@ -92,7 +99,9 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
 
   useEffect(() => {
     if (!isOpen || balanceContext) { setFetchedBalances({ usdAvailable: 0, available: 0 }); return; }
+    let cancelled = false;
     api.get('/balances').then((r) => {
+      if (cancelled) return;
       const list = r.data || [];
       const usdBal = list.find((b) => b.asset === 'USD' || b.asset === 'ZUSD');
       const s = symbol || '';
@@ -100,6 +109,7 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
       const baseBal = base ? list.find((b) => b.asset === base || b.asset === 'X' + base) : null;
       setFetchedBalances({ usdAvailable: usdBal?.available || 0, available: baseBal?.available || 0 });
     }).catch(() => {});
+    return () => { cancelled = true; };
   }, [isOpen, symbol, balanceContext]);
 
   useEffect(() => {

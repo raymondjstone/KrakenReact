@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 
 const EMPTY_SCHED = { targets: '', cronExpression: '0 9 * * 1', driftMinPct: 5, autoExecute: false, note: '', active: true };
@@ -28,6 +28,12 @@ export default function RebalancePage() {
   const [schedEditId, setSchedEditId] = useState(null);
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedStatus, setSchedStatus] = useState('');
+  const schedTimerRef = useRef(null);
+  const flashSched = (msg) => {
+    setSchedStatus(msg);
+    if (schedTimerRef.current) clearTimeout(schedTimerRef.current);
+    schedTimerRef.current = setTimeout(() => setSchedStatus(''), 3000);
+  };
 
   const loadSchedules = useCallback(() => {
     api.get('/rebalanceschedules').then(r => setSchedules(r.data || [])).catch(() => {});
@@ -230,8 +236,8 @@ export default function RebalancePage() {
                 const req = schedEditId
                   ? api.put(`/rebalanceschedules/${schedEditId}`, schedForm)
                   : api.post('/rebalanceschedules', schedForm);
-                req.then(() => { loadSchedules(); setShowSchedForm(false); setSchedEditId(null); setSchedStatus(schedEditId ? 'Schedule updated' : 'Schedule created'); setTimeout(() => setSchedStatus(''), 3000); })
-                  .catch(() => setSchedStatus('Error saving schedule'));
+                req.then(() => { loadSchedules(); setShowSchedForm(false); setSchedEditId(null); flashSched(schedEditId ? 'Schedule updated' : 'Schedule created'); })
+                  .catch(() => flashSched('Error saving schedule'));
               }} style={{ padding: '6px 16px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
                 {schedEditId ? 'Update' : 'Create'}
               </button>
@@ -271,7 +277,7 @@ export default function RebalancePage() {
                   <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                     <button onClick={() => { setSchedEditId(s.id); setSchedForm({ targets: s.targets, cronExpression: s.cronExpression, driftMinPct: s.driftMinPct, autoExecute: s.autoExecute, note: s.note || '', active: s.active }); setShowSchedForm(true); }}
                       style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', fontSize: 13, padding: '0 8px 0 0' }}>Edit</button>
-                    <button onClick={() => { api.post(`/rebalanceschedules/${s.id}/trigger`).then(() => setSchedStatus('Triggered')).catch(() => setSchedStatus('Error')); setTimeout(() => setSchedStatus(''), 3000); }}
+                    <button onClick={() => { api.post(`/rebalanceschedules/${s.id}/trigger`).then(() => flashSched('Triggered')).catch(() => flashSched('Error')); }}
                       style={{ background: 'none', border: 'none', color: 'var(--yellow)', cursor: 'pointer', fontSize: 13, padding: '0 8px 0 0' }}>Run</button>
                     <button onClick={() => { if (confirm('Delete schedule?')) api.delete(`/rebalanceschedules/${s.id}`).then(loadSchedules).catch(() => {}); }}
                       style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 13, padding: 0 }}>Delete</button>

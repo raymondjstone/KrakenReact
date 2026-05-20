@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 
 const emptyRule = { symbol: '', triggerPct: 20, sellPct: 25, active: true, cooldownHours: 24 };
@@ -16,9 +16,11 @@ export default function ProfitLadderPage() {
 
   useEffect(() => { fetchRules(); }, [fetchRules]);
 
+  const flashTimerRef = useRef(null);
   const flash = (msg) => {
     setStatusMsg(msg);
-    setTimeout(() => setStatusMsg(''), 4000);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setStatusMsg(''), 4000);
   };
 
   const handleSave = async () => {

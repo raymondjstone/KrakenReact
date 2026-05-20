@@ -218,7 +218,9 @@ public class BackgroundTaskService : BackgroundService
         var temp = result.Select(a => new DerivedKline(a, priceItem.Symbol, KlineInterval.OneDay)).ToList();
         if (temp.Any())
         {
-            _ = _db.AddKlineAsync(temp);
+            _ = _db.AddKlineAsync(temp).ContinueWith(
+                t => _logger.LogError(t.Exception!.InnerException, "[BG] AddKlineAsync failed for {Symbol}", priceItem.Symbol),
+                TaskContinuationOptions.OnlyOnFaulted);
             priceItem.AddKlineHistory(temp);
         }
         else if (!old.Any())
@@ -229,7 +231,9 @@ public class BackgroundTaskService : BackgroundService
             if (csvKlines != null && csvKlines.Any())
             {
                 priceItem.AddKlineHistory(csvKlines);
-                _ = _db.AddKlineAsync(csvKlines);
+                _ = _db.AddKlineAsync(csvKlines).ContinueWith(
+                    t => _logger.LogError(t.Exception!.InnerException, "[BG] AddKlineAsync (CSV) failed for {Symbol}", priceItem.Symbol),
+                    TaskContinuationOptions.OnlyOnFaulted);
                 _logger.LogInformation("[BG] Loaded {Count} klines from delisted CSV for {Symbol}", csvKlines.Count, priceItem.Symbol);
             }
         }

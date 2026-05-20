@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 
 const EMPTY_FORM = {
@@ -36,9 +36,11 @@ export default function ScheduledOrdersPage() {
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
 
+  const flashTimerRef = useRef(null);
   const flash = (msg) => {
     setStatusMsg(msg);
-    setTimeout(() => setStatusMsg(''), 4000);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setStatusMsg(''), 4000);
   };
 
   const load = useCallback(() => {

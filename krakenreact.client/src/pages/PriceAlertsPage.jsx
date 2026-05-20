@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../api/apiClient';
 
 const EMPTY_FORM = {
@@ -25,7 +25,12 @@ export default function PriceAlertsPage() {
 
   useEffect(() => { load(); }, []);
 
-  const flash = (msg) => { setStatus(msg); setTimeout(() => setStatus(''), 3500); };
+  const flashTimerRef = useRef(null);
+  const flash = (msg) => {
+    setStatus(msg);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setStatus(''), 3500);
+  };
 
   const openCreate = () => {
     setEditId(null);
