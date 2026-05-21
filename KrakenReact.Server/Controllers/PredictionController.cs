@@ -285,7 +285,7 @@ public class PredictionController : ControllerBase
         var adxValues = Services.FeatureEngineering.ComputeAdx(highs, lows, closes);
         var adx = adxValues.Length > 0 ? adxValues[^1] : 0f;
 
-        var (upper, lower, mid) = Services.FeatureEngineering.ComputeBollingerBands(closes);
+        var (upper, _, lower) = Services.FeatureEngineering.ComputeBollingerBands(closes);
         var lastClose = closes[^1];
         var bbWidth = lastClose > 0 && upper.Length > 0
             ? (upper[^1] - lower[^1]) / lastClose
