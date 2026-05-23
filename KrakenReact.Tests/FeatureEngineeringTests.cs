@@ -143,6 +143,40 @@ public class FeatureEngineeringTests
         Assert.All(rsi.Skip(14), v => Assert.Equal(100f, v, 1));
     }
 
+    // ── ComputeMacd ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ComputeMacd_FlatPrices_AllComponentsZero()
+    {
+        var closes = Flat(100f, 60);
+        var (macd, sig, hist) = FeatureEngineering.ComputeMacd(closes);
+        for (int i = 35; i < 60; i++)
+        {
+            Assert.Equal(0f, macd[i], 3);
+            Assert.Equal(0f, sig[i], 3);
+            Assert.Equal(0f, hist[i], 3);
+        }
+    }
+
+    [Fact]
+    public void ComputeMacd_Rising_HistogramEqualsMacdMinusSignal()
+    {
+        var closes = Linear(100f, 1f, 80);
+        var (macd, sig, hist) = FeatureEngineering.ComputeMacd(closes);
+        for (int i = 26; i < 80; i++)
+            Assert.Equal(macd[i] - sig[i], hist[i], 3);
+    }
+
+    [Fact]
+    public void ComputeMacd_OutputArrayLengthsMatchInput()
+    {
+        var closes = Linear(100f, 0.5f, 50);
+        var (macd, sig, hist) = FeatureEngineering.ComputeMacd(closes);
+        Assert.Equal(50, macd.Length);
+        Assert.Equal(50, sig.Length);
+        Assert.Equal(50, hist.Length);
+    }
+
     // ── ComputeAtr ─────────────────────────────────────────────────────────────
 
     [Fact]
