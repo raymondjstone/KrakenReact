@@ -253,7 +253,8 @@ public class PredictionJob
         var (lrAcc, _)              = TrainLogisticRegression(mlContext, trainRows, testRows);
         var (wfFtAcc, wfFtAuc, wfLrAcc, wfLrAuc, wfFolds) = EvaluateWalkForward(mlContext, features.Rows);
 
-        var engine = mlContext.Model.CreatePredictionEngine<CandleFeatures, BinaryPrediction>(ffModel);
+        // PredictionEngine wraps native ML.NET buffers — dispose or it leaks unmanaged memory every run.
+        using var engine = mlContext.Model.CreatePredictionEngine<CandleFeatures, BinaryPrediction>(ffModel);
         var next   = engine.Predict(features.LatestFeatures);
 
         float buyHold  = (float)testRows.Count(r => r.Label) / testRows.Count;

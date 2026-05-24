@@ -97,6 +97,36 @@ public class TradingStateServiceExtraTests
         return new TradingStateService(new DelistedPriceService(dlog.Object));
     }
 
+    // SeenLedger dedup (bounded)
+
+    [Fact]
+    public void HasSeenLedger_Unknown_ReturnsFalse()
+    {
+        Assert.False(Create().HasSeenLedger("L1"));
+    }
+
+    [Fact]
+    public void AddSeenLedger_ThenHasSeenLedger_ReturnsTrue()
+    {
+        var svc = Create();
+        svc.AddSeenLedger("L1");
+        Assert.True(svc.HasSeenLedger("L1"));
+    }
+
+    [Fact]
+    public void AddSeenLedger_ClearsOnOverflow()
+    {
+        var svc = Create();
+        // Capped at 5000 — push past it, oldest IDs should be evicted.
+        for (int i = 0; i < 5000; i++)
+            svc.AddSeenLedger($"L{i}");
+        Assert.True(svc.HasSeenLedger("L4999"));
+
+        svc.AddSeenLedger("overflow");
+        Assert.True(svc.HasSeenLedger("overflow"));
+        Assert.False(svc.HasSeenLedger("L0"));
+    }
+
     // IsOpenOrderStatus
 
     [Theory]

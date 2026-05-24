@@ -268,7 +268,26 @@ public class TradingStateService
     public bool HideAlmostZeroBalances { get; set; }
     public bool OrderProximityNotifications { get; set; } = true;
     public decimal OrderProximityThreshold { get; set; } = 2.0m;
-    public HashSet<string> SeenLedgerIds { get; } = new();
+    // Bounded ledger-ID dedup set. Backed by HashSet but capped so long-running
+    // instances don't accumulate every historical ledger id forever.
+    private readonly HashSet<string> _seenLedgerIds = new();
+    private readonly object _seenLedgerLock = new();
+    private const int MaxSeenLedgerIds = 5000;
+
+    public bool HasSeenLedger(string id)
+    {
+        lock (_seenLedgerLock) { return _seenLedgerIds.Contains(id); }
+    }
+
+    public void AddSeenLedger(string id)
+    {
+        lock (_seenLedgerLock)
+        {
+            if (_seenLedgerIds.Count >= MaxSeenLedgerIds)
+                _seenLedgerIds.Clear();
+            _seenLedgerIds.Add(id);
+        }
+    }
 
     public ConcurrentDictionary<string, PriceDataItem> Prices { get; } = new();
     public ConcurrentDictionary<string, OrderDto> Orders { get; } = new();

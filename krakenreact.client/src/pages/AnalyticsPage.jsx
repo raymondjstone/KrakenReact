@@ -43,10 +43,19 @@ function PerformanceChart() {
   const [hoverIdx, setHoverIdx] = useState(null);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     api.get(`/portfolio/history?days=${days}`)
-      .then(r => { setHistory(r.data || []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(r => {
+        if (!active) return;
+        setHistory(r.data || []);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setLoading(false);
+      });
+    return () => { active = false; };
   }, [days]);
 
   if (loading) return <p style={{ color: 'var(--text-muted)' }}>Loading…</p>;
@@ -321,7 +330,7 @@ function PlCalendar() {
 function CorrelationMatrix() {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(30);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [customSymbols, setCustomSymbols] = useState('');
   const [error, setError] = useState('');
 
@@ -428,16 +437,28 @@ function CorrelationMatrix() {
 function PortfolioMetrics() {
   const [metrics, setMetrics] = useState(null);
   const [days, setDays] = useState(365);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const fetchMetrics = useCallback(() => {
+    let active = true;
     setLoading(true);
     api.get(`/portfolio/metrics?days=${days}`)
-      .then(r => { setMetrics(r.data); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(r => {
+        if (!active) return;
+        setMetrics(r.data);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setLoading(false);
+      });
+    return () => { active = false; };
   }, [days]);
 
-  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
+  useEffect(() => {
+    const cleanup = fetchMetrics();
+    return cleanup;
+  }, [fetchMetrics]);
 
   const metricCard = (label, value, sub, color) => (
     <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 20px', minWidth: 160 }}>

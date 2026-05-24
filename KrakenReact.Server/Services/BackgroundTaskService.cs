@@ -246,8 +246,10 @@ public class BackgroundTaskService : BackgroundService
     private async Task LoadOrders(bool initialLoad)
     {
         var result = await _kraken.GetOrders(initialLoad);
+        var seenIds = new HashSet<string>(result.Count);
         foreach (var order in result)
         {
+            seenIds.Add(order.Id);
             _state.Orders.TryGetValue(order.Id, out var existingOrder);
             var dto = new OrderDto
             {
@@ -263,6 +265,17 @@ public class BackgroundTaskService : BackgroundService
             // Calculate LatestPrice, Distance, DistancePercentage, OrderValue using normalized symbol lookup
             _state.RecalculateOrderFields(dto);
             _state.Orders[order.Id] = dto;
+        }
+
+        // Evict orders the REST poll no longer returns AND that are definitively closed > 30 days ago.
+        // Without this, WS V2 executions and falling-out-of-window closed orders pile up forever.
+        var staleCutoff = DateTime.UtcNow.AddDays(-30);
+        foreach (var existing in _state.Orders.Values.ToList())
+        {
+            if (seenIds.Contains(existing.Id)) continue;
+            if (TradingStateService.IsOpenOrderStatus(existing.Status)) continue;
+            if (existing.CloseTime is null || existing.CloseTime > staleCutoff) continue;
+            _state.Orders.TryRemove(existing.Id, out _);
         }
     }
 
@@ -282,11 +295,13 @@ public class BackgroundTaskService : BackgroundService
 
     private async Task CheckStakingRewards(List<Kraken.Net.Objects.Models.KrakenLedgerEntry> ledgers)
     {
-        // On first call, seed all existing IDs so we don't notify on historical entries
+        // On first call, seed only the most-recent IDs so we don't notify on historical entries.
+        // Capped seed keeps the dedup set bounded; older entries that age out of Kraken's
+        // returned window won't show up again to trigger duplicate notifications.
         if (!_initialLedgerSeeded)
         {
-            foreach (var l in ledgers)
-                _state.SeenLedgerIds.Add(l.Id);
+            foreach (var l in ledgers.OrderByDescending(l => l.Timestamp).Take(2000))
+                _state.AddSeenLedger(l.Id);
             _initialLedgerSeeded = true;
             return;
         }
@@ -298,12 +313,12 @@ public class BackgroundTaskService : BackgroundService
                 && l.Quantity > 0
                 && l.SubType != "spotFromStaking"
                 && l.SubType != "spotToStaking"
-                && !_state.SeenLedgerIds.Contains(l.Id))
+                && !_state.HasSeenLedger(l.Id))
             .ToList();
 
         foreach (var reward in newRewards)
         {
-            _state.SeenLedgerIds.Add(reward.Id);
+            _state.AddSeenLedger(reward.Id);
             var asset = TradingStateService.NormalizeAsset(reward.Asset);
             var amount = reward.Quantity;
             _logger.LogInformation("[BG] Staking reward: {Asset} +{Amount}", asset, amount);
