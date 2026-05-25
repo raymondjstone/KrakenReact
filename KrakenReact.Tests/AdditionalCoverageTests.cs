@@ -114,17 +114,32 @@ public class TradingStateServiceExtraTests
     }
 
     [Fact]
-    public void AddSeenLedger_ClearsOnOverflow()
+    public void AddSeenLedger_EvictsOldestFifo_NotClearAll()
     {
         var svc = Create();
-        // Capped at 5000 — push past it, oldest IDs should be evicted.
         for (int i = 0; i < 5000; i++)
             svc.AddSeenLedger($"L{i}");
         Assert.True(svc.HasSeenLedger("L4999"));
 
+        // Adding past the cap evicts only the oldest entry, not the whole set —
+        // wholesale clearing was the cause of the staking-reward notification flood.
         svc.AddSeenLedger("overflow");
         Assert.True(svc.HasSeenLedger("overflow"));
-        Assert.False(svc.HasSeenLedger("L0"));
+        Assert.False(svc.HasSeenLedger("L0"));      // oldest evicted
+        Assert.True(svc.HasSeenLedger("L1"));        // everything else retained
+        Assert.True(svc.HasSeenLedger("L4999"));     // newest pre-overflow retained
+    }
+
+    [Fact]
+    public void AddSeenLedger_DuplicateAdd_DoesNotEvict()
+    {
+        var svc = Create();
+        for (int i = 0; i < 5000; i++)
+            svc.AddSeenLedger($"L{i}");
+        // Re-adding an existing id must be a no-op, not advance the FIFO position.
+        svc.AddSeenLedger("L0");
+        Assert.True(svc.HasSeenLedger("L0"));
+        Assert.True(svc.HasSeenLedger("L4999"));
     }
 
     // IsOpenOrderStatus

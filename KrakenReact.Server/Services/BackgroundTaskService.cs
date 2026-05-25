@@ -295,12 +295,12 @@ public class BackgroundTaskService : BackgroundService
 
     private async Task CheckStakingRewards(List<Kraken.Net.Objects.Models.KrakenLedgerEntry> ledgers)
     {
-        // On first call, seed only the most-recent IDs so we don't notify on historical entries.
-        // Capped seed keeps the dedup set bounded; older entries that age out of Kraken's
-        // returned window won't show up again to trigger duplicate notifications.
+        // On first call, seed only staking IDs so we don't notify on historical staking
+        // rewards. Other ledger types are never queried against the dedup set, so we
+        // don't bother tracking them — keeps the set tiny and the FIFO bound far away.
         if (!_initialLedgerSeeded)
         {
-            foreach (var l in ledgers.OrderByDescending(l => l.Timestamp).Take(2000))
+            foreach (var l in ledgers.Where(l => l.Type == Kraken.Net.Enums.LedgerEntryType.Staking))
                 _state.AddSeenLedger(l.Id);
             _initialLedgerSeeded = true;
             return;
@@ -308,17 +308,29 @@ public class BackgroundTaskService : BackgroundService
 
         if (!_state.StakingNotifications && !_state.AutoAddStakingToOrder) return;
 
+        // Defensive guard: even if the dedup set is incomplete (e.g. after restart, or
+        // because an entry aged out of the FIFO), never notify on rewards that arrived
+        // more than 24 hours ago. This is what was causing the user-visible symptom of
+        // historical staking rewards re-notifying with "today's date" on restarts.
+        var freshCutoff = DateTime.UtcNow.AddHours(-24);
+
         var newRewards = ledgers
             .Where(l => l.Type == Kraken.Net.Enums.LedgerEntryType.Staking
                 && l.Quantity > 0
                 && l.SubType != "spotFromStaking"
                 && l.SubType != "spotToStaking"
+                && l.Timestamp >= freshCutoff
                 && !_state.HasSeenLedger(l.Id))
             .ToList();
 
+        // Mark every staking ledger we just observed — including ones that pre-date
+        // the freshness window — so a later poll returning the same batch won't
+        // reprocess them. Only staking IDs are tracked (others aren't queried).
+        foreach (var l in ledgers.Where(l => l.Type == Kraken.Net.Enums.LedgerEntryType.Staking))
+            _state.AddSeenLedger(l.Id);
+
         foreach (var reward in newRewards)
         {
-            _state.AddSeenLedger(reward.Id);
             var asset = TradingStateService.NormalizeAsset(reward.Asset);
             var amount = reward.Quantity;
             _logger.LogInformation("[BG] Staking reward: {Asset} +{Amount}", asset, amount);

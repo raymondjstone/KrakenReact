@@ -268,9 +268,13 @@ public class TradingStateService
     public bool HideAlmostZeroBalances { get; set; }
     public bool OrderProximityNotifications { get; set; } = true;
     public decimal OrderProximityThreshold { get; set; } = 2.0m;
-    // Bounded ledger-ID dedup set. Backed by HashSet but capped so long-running
-    // instances don't accumulate every historical ledger id forever.
+    // Bounded ledger-ID dedup set with FIFO eviction. Clear-on-overflow (used by
+    // _notifiedOrders) is wrong here — wiping the set would trigger a re-notification
+    // storm on the next Kraken ledger poll because every recently-returned ledger
+    // entry would suddenly look "unseen". FIFO keeps the oldest dedup state aging
+    // out one at a time so the set never empties.
     private readonly HashSet<string> _seenLedgerIds = new();
+    private readonly Queue<string> _seenLedgerOrder = new();
     private readonly object _seenLedgerLock = new();
     private const int MaxSeenLedgerIds = 5000;
 
@@ -283,9 +287,10 @@ public class TradingStateService
     {
         lock (_seenLedgerLock)
         {
-            if (_seenLedgerIds.Count >= MaxSeenLedgerIds)
-                _seenLedgerIds.Clear();
-            _seenLedgerIds.Add(id);
+            if (!_seenLedgerIds.Add(id)) return; // already present
+            _seenLedgerOrder.Enqueue(id);
+            while (_seenLedgerOrder.Count > MaxSeenLedgerIds)
+                _seenLedgerIds.Remove(_seenLedgerOrder.Dequeue());
         }
     }
 
