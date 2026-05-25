@@ -32,7 +32,18 @@ public class PredictionJob
     // and the stale-refresh run never overlap — overlapping was saturating SQL Server.
     internal static readonly SemaphoreSlim PipelineLock = new(1, 1);
 
+    // Synchronous mutex around every native ML.NET Fit call. Microsoft.ML's FastTree
+    // native interop has a history of fatal ExecutionEngineException crashes when two
+    // Fit calls overlap in the same process. Bulk ExecuteAsync, ExecuteSingleAsync, and
+    // ExecuteMultiTfAsync each have separate concurrency gates, so a single sync lock
+    // around the Fit call itself is the simplest way to serialise every entry point.
+    private static readonly object _fitLock = new();
+
     private const int MinTrainRows = 80;
+    // Hard upper bound on rows fed into a single Fit call. Larger inputs make the native
+    // FastTree initialisation phase more likely to crash on long-running processes and
+    // give no meaningful accuracy improvement at this horizon.
+    private const int MaxTrainingRows = 25000;
     private const int WalkForwardFolds = 4;
     private const int SeedHistoryCandles = 240;
     private const string MarketContextSymbol = "XBT/USD";
@@ -242,16 +253,43 @@ public class PredictionJob
         if (features.LatestFeatures == null)
             return HorizonEvaluation.Error(horizon, "error", "Could not compute latest feature row.");
 
-        int splitIdx  = (int)(features.Rows.Count * 0.70);
-        var trainRows = features.Rows.Take(splitIdx).ToList();
-        var testRows  = features.Rows.Skip(splitIdx).ToList();
+        // Cap input size: native FastTree initialisation is sensitive to row count, and
+        // anything past ~25k recent rows adds no signal at these horizons.
+        var allRows = features.Rows.Count > MaxTrainingRows
+            ? features.Rows.Skip(features.Rows.Count - MaxTrainingRows).ToList()
+            : features.Rows;
+
+        int splitIdx  = (int)(allRows.Count * 0.70);
+        var trainRows = allRows.Take(splitIdx).ToList();
+        var testRows  = allRows.Skip(splitIdx).ToList();
         if (trainRows.Count < MinTrainRows || testRows.Count == 0)
             return HorizonEvaluation.Error(horizon, "insufficient_data", "Not enough train/test samples after chronological split.");
 
         var mlContext = new MLContext(seed: 42 + horizon);
-        var (ffAcc, ffAuc, ffModel) = TrainFastTree(mlContext, trainRows, testRows);
-        var (lrAcc, _)              = TrainLogisticRegression(mlContext, trainRows, testRows);
-        var (wfFtAcc, wfFtAuc, wfLrAcc, wfLrAuc, wfFolds) = EvaluateWalkForward(mlContext, features.Rows);
+
+        // Train logistic regression first — it's robust and acts as the fallback model
+        // if FastTree's native trainer throws (managed exceptions only; a fatal
+        // ExecutionEngineException still kills the process — see MaxTrainingRows + _fitLock).
+        var (lrAcc, lrAuc, lrModel) = TrainLogisticRegression(mlContext, trainRows, testRows);
+
+        ITransformer? ffModel = null;
+        float ffAcc = 0f, ffAuc = 0f;
+        try
+        {
+            (ffAcc, ffAuc, ffModel) = TrainFastTree(mlContext, trainRows, testRows);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Predict] FastTree training threw for horizon {Horizon}; falling back to logistic regression", horizon);
+            ffAcc = lrAcc;
+            ffAuc = lrAuc;
+            ffModel = lrModel;
+        }
+
+        if (ffModel is null)
+            return HorizonEvaluation.Error(horizon, "error", "Both FastTree and logistic-regression training failed.");
+
+        var (wfFtAcc, wfFtAuc, wfLrAcc, wfLrAuc, wfFolds) = EvaluateWalkForward(mlContext, allRows);
 
         // PredictionEngine wraps native ML.NET buffers — dispose or it leaks unmanaged memory every run.
         using var engine = mlContext.Model.CreatePredictionEngine<CandleFeatures, BinaryPrediction>(ffModel);
@@ -382,14 +420,18 @@ public class PredictionJob
                 minimumExampleCountPerLeaf: 5,
                 learningRate: 0.08));
 
-        var model   = pipeline.Fit(ml.Data.LoadFromEnumerable(trainRows));
+        // Serialise the native Fit call across all PredictionJob entry points.
+        ITransformer model;
+        lock (_fitLock)
+            model = pipeline.Fit(ml.Data.LoadFromEnumerable(trainRows));
+
         var metrics = ml.BinaryClassification.Evaluate(
             model.Transform(ml.Data.LoadFromEnumerable(testRows)));
 
         return (SafeMetric(metrics.Accuracy), SafeMetric(metrics.AreaUnderRocCurve), model);
     }
 
-    private static (float Accuracy, float Auc) TrainLogisticRegression(
+    private static (float Accuracy, float Auc, ITransformer? Model) TrainLogisticRegression(
         MLContext ml, List<CandleFeatures> trainRows, List<CandleFeatures> testRows)
     {
         try
@@ -398,15 +440,18 @@ public class PredictionJob
                 .Append(ml.Transforms.NormalizeMinMax("Features"))
                 .Append(ml.BinaryClassification.Trainers.LbfgsLogisticRegression());
 
-            var model   = pipeline.Fit(ml.Data.LoadFromEnumerable(trainRows));
+            ITransformer model;
+            lock (_fitLock)
+                model = pipeline.Fit(ml.Data.LoadFromEnumerable(trainRows));
+
             var metrics = ml.BinaryClassification.Evaluate(
                 model.Transform(ml.Data.LoadFromEnumerable(testRows)));
 
-            return (SafeMetric(metrics.Accuracy), SafeMetric(metrics.AreaUnderRocCurve));
+            return (SafeMetric(metrics.Accuracy), SafeMetric(metrics.AreaUnderRocCurve), model);
         }
         catch
         {
-            return (0f, 0f);
+            return (0f, 0f, null);
         }
     }
 
@@ -449,8 +494,13 @@ public class PredictionJob
             var foldTest  = rows.Skip(testStart).Take(testCount).ToList();
             if (foldTrain.Count < MinTrainRows || foldTest.Count == 0) continue;
 
-            var (ftAcc, ftAuc, _) = TrainFastTree(ml, foldTrain, foldTest);
-            var (lrAcc, lrAuc)    = TrainLogisticRegression(ml, foldTrain, foldTest);
+            // FastTree may throw a managed exception on a degenerate fold; skip it and
+            // continue with the other folds rather than aborting the whole evaluation.
+            float ftAcc = 0f, ftAuc = 0f;
+            try { (ftAcc, ftAuc, _) = TrainFastTree(ml, foldTrain, foldTest); }
+            catch { /* keep zeros; fold still counted via LR */ }
+
+            var (lrAcc, lrAuc, _) = TrainLogisticRegression(ml, foldTrain, foldTest);
 
             ftAccSum += ftAcc * foldTest.Count;
             ftAucSum += ftAuc * foldTest.Count;
