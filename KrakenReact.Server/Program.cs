@@ -44,7 +44,15 @@ builder.Services.AddHangfire(config => config
         UseRecommendedIsolationLevel = true,
         DisableGlobalLocks = true
     }));
-builder.Services.AddHangfireServer();
+// Slower heartbeat and schedule-polling intervals to reduce baseline write rate on the
+// Kraken DB — the SQL host shares disk with two other Hangfire instances and was hitting
+// PREEMPTIVE_OS_FLUSHFILEBUFFERS waits on every heartbeat UPDATE.
+builder.Services.AddHangfireServer(opts =>
+{
+    opts.HeartbeatInterval        = TimeSpan.FromMinutes(1);   // was 30 s default
+    opts.ServerCheckInterval      = TimeSpan.FromMinutes(10);  // was 5 min default
+    opts.SchedulePollingInterval  = TimeSpan.FromSeconds(30);  // was 15 s default
+});
 builder.Services.AddTransient<DailyPriceRefreshJob>();
 builder.Services.AddTransient<PredictionJob>();
 builder.Services.AddTransient<StalePredictionRefreshJob>();
@@ -66,6 +74,7 @@ builder.Services.AddSingleton<KrakenRestService>();
 builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<AutoOrderService>();
 builder.Services.AddSingleton<DelistedPriceService>();
+builder.Services.AddSingleton<SqlTimeoutDiagnostics>();
 
 // Background services
 builder.Services.AddHostedService<BackgroundTaskService>();

@@ -13,29 +13,44 @@ public class ScheduledOrderJob
     private readonly TradingStateService _state;
     private readonly NotificationService _notify;
     private readonly ILogger<ScheduledOrderJob> _logger;
+    private readonly SqlTimeoutDiagnostics _sqlDiag;
 
     public ScheduledOrderJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
         KrakenRestService kraken,
         TradingStateService state,
         NotificationService notify,
-        ILogger<ScheduledOrderJob> logger)
+        ILogger<ScheduledOrderJob> logger,
+        SqlTimeoutDiagnostics sqlDiag)
     {
         _dbFactory = dbFactory;
         _kraken = kraken;
         _state = state;
         _notify = notify;
         _logger = logger;
+        _sqlDiag = sqlDiag;
     }
 
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        // Short timeout for the polling read — every-minute job; if it can't get in fast,
+        // fail fast and free the pool slot rather than holding it for 120s.
+        db.Database.SetCommandTimeout(TimeSpan.FromSeconds(15));
 
-        var pending = await db.ScheduledOrders
-            .Where(o => o.Status == "Pending" && o.ScheduledAt <= DateTime.UtcNow)
-            .ToListAsync(ct);
+        List<ScheduledOrder> pending;
+        try
+        {
+            pending = await db.ScheduledOrders
+                .Where(o => o.Status == "Pending" && o.ScheduledAt <= DateTime.UtcNow)
+                .ToListAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _sqlDiag.CaptureIfTimeout("ScheduledOrderJob.PollPending", ex);
+            throw;
+        }
 
         if (pending.Count == 0) return;
 

@@ -17,6 +17,7 @@ public class PredictionJob
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly IHubContext<TradingHub> _hub;
     private readonly ILogger<PredictionJob> _logger;
+    private readonly SqlTimeoutDiagnostics _sqlDiag;
 
     // Per-run cache: interval string → market context map.
     // Instance-level is fine because this service is transient (one instance per job invocation).
@@ -54,13 +55,15 @@ public class PredictionJob
         TradingStateService state,
         IDbContextFactory<KrakenDbContext> dbFactory,
         IHubContext<TradingHub> hub,
-        ILogger<PredictionJob> logger)
+        ILogger<PredictionJob> logger,
+        SqlTimeoutDiagnostics sqlDiag)
     {
         _kraken   = kraken;
         _state    = state;
         _dbFactory = dbFactory;
         _hub      = hub;
         _logger   = logger;
+        _sqlDiag  = sqlDiag;
     }
 
     public async Task ExecuteSingleAsync(string symbol, CancellationToken ct = default)
@@ -88,6 +91,7 @@ public class PredictionJob
         catch (Exception ex)
         {
             _logger.LogError(ex, "[Predict] Error processing {Symbol}", symbol);
+            _sqlDiag.CaptureIfTimeout($"PredictionJob.ExecuteSingle({symbol})", ex);
         }
         finally
         {
@@ -122,6 +126,7 @@ public class PredictionJob
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[Predict] Error processing {Symbol}", symbol);
+                    _sqlDiag.CaptureIfTimeout($"PredictionJob.Execute({symbol})", ex);
                 }
 
                 try { await Task.Delay(600, ct); } catch (OperationCanceledException) { break; }
@@ -325,17 +330,24 @@ public class PredictionJob
     {
         try
         {
-            await using var db = await _dbFactory.CreateDbContextAsync(ct);
-            var query = db.DerivedKlines
-                .Where(k => k.Asset == symbol && k.Interval == intervalStr)
-                .AsNoTracking();
-
-            var existingCount = await query.CountAsync(ct);
-            var lastStored    = await query.MaxAsync(k => (DateTime?)k.OpenTime, ct);
+            // Phase 1: probe existing data, then RELEASE the DbContext before the HTTP call
+            // so the connection pool slot isn't held across network I/O to Kraken.
+            int existingCount;
+            DateTime? lastStored;
+            await using (var probeDb = await _dbFactory.CreateDbContextAsync(ct))
+            {
+                var query = probeDb.DerivedKlines
+                    .Where(k => k.Asset == symbol && k.Interval == intervalStr)
+                    .AsNoTracking();
+                existingCount = await query.CountAsync(ct);
+                lastStored    = await query.MaxAsync(k => (DateTime?)k.OpenTime, ct);
+            }
 
             var since = existingCount < SeedHistoryCandles
                 ? GetBootstrapSinceUtc(interval)
                 : lastStored;
+
+            // Network call to Kraken — no DbContext is open during this await.
             var apiKlines = await _kraken.GetKlinesAsync(symbol, interval, since);
 
             var newDerived = apiKlines
@@ -344,10 +356,15 @@ public class PredictionJob
 
             if (newDerived.Count == 0) return;
 
-            var existingKeys = await db.DerivedKlines
-                .Where(k => k.Asset == symbol && k.Interval == intervalStr)
-                .Select(k => k.Key)
-                .ToHashSetAsync(ct);
+            // Phase 2: dedupe with a fresh DbContext, then write in batches.
+            HashSet<string> existingKeys;
+            await using (var dedupeDb = await _dbFactory.CreateDbContextAsync(ct))
+            {
+                existingKeys = await dedupeDb.DerivedKlines
+                    .Where(k => k.Asset == symbol && k.Interval == intervalStr)
+                    .Select(k => k.Key)
+                    .ToHashSetAsync(ct);
+            }
 
             var toAdd = newDerived.Where(k => !existingKeys.Contains(k.Key)).ToList();
             if (toAdd.Count > 0)
@@ -369,6 +386,7 @@ public class PredictionJob
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[Predict] {Symbol}: kline fetch failed (will use existing data)", symbol);
+            _sqlDiag.CaptureIfTimeout($"PredictionJob.FetchAndStoreKlines({symbol})", ex);
         }
     }
 

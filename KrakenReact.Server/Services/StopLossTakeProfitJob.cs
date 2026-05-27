@@ -11,24 +11,32 @@ public class StopLossTakeProfitJob
     private readonly NotificationService _notify;
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly ILogger<StopLossTakeProfitJob> _logger;
+    private readonly SqlTimeoutDiagnostics _sqlDiag;
     private static readonly HashSet<string> FIAT = new(StringComparer.OrdinalIgnoreCase)
         { "USD", "USDT", "USDC", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF" };
 
     public StopLossTakeProfitJob(TradingStateService state, KrakenRestService kraken, NotificationService notify,
-        IDbContextFactory<KrakenDbContext> dbFactory, ILogger<StopLossTakeProfitJob> logger)
+        IDbContextFactory<KrakenDbContext> dbFactory, ILogger<StopLossTakeProfitJob> logger,
+        SqlTimeoutDiagnostics sqlDiag)
     {
         _state = state;
         _kraken = kraken;
         _notify = notify;
         _dbFactory = dbFactory;
         _logger = logger;
+        _sqlDiag = sqlDiag;
     }
 
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
-        await CheckStopLossTakeProfitAsync(ct);
-        await CheckTrailingStopAsync(ct);
-        await CheckProfitLadderAsync(ct);
+        try { await CheckStopLossTakeProfitAsync(ct); }
+        catch (Exception ex) { _sqlDiag.CaptureIfTimeout("StopLossTakeProfitJob.StopLoss", ex); throw; }
+
+        try { await CheckTrailingStopAsync(ct); }
+        catch (Exception ex) { _sqlDiag.CaptureIfTimeout("StopLossTakeProfitJob.TrailingStop", ex); throw; }
+
+        try { await CheckProfitLadderAsync(ct); }
+        catch (Exception ex) { _sqlDiag.CaptureIfTimeout("StopLossTakeProfitJob.ProfitLadder", ex); throw; }
     }
 
     private async Task CheckStopLossTakeProfitAsync(CancellationToken ct)
@@ -160,6 +168,9 @@ public class StopLossTakeProfitJob
     private async Task CheckProfitLadderAsync(CancellationToken ct)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        // Short timeout for the polling read — tiny table, runs every 5 min;
+        // failing fast frees the pool slot for jobs that need it more.
+        db.Database.SetCommandTimeout(TimeSpan.FromSeconds(15));
         var rules = await db.ProfitLadderRules.Where(r => r.Active).ToListAsync(ct);
         if (rules.Count == 0) return;
 
