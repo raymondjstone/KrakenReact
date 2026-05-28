@@ -1,4 +1,5 @@
 using KrakenReact.Server.Models;
+using KrakenReact.Server.Services;
 using Kraken.Net.Objects.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -10,11 +11,13 @@ public class DbMethods
 {
     private readonly IDbContextFactory<KrakenDbContext> _factory;
     private readonly ILogger<DbMethods> _logger;
+    private readonly SqlTimeoutDiagnostics _sqlDiag;
 
-    public DbMethods(IDbContextFactory<KrakenDbContext> factory, ILogger<DbMethods> logger)
+    public DbMethods(IDbContextFactory<KrakenDbContext> factory, ILogger<DbMethods> logger, SqlTimeoutDiagnostics sqlDiag)
     {
         _factory = factory;
         _logger = logger;
+        _sqlDiag = sqlDiag;
     }
 
     public async Task<T> UseDbContextAsync<T>(Func<KrakenDbContext, Task<T>> dbOperation, int maxRetries = 3, int delayMs = 500)
@@ -39,6 +42,11 @@ public class DbMethods
             catch (SqlException ex) when (ex.Message.Contains("Timeout expired") && ex.Message.Contains("obtaining a connection from the pool"))
             {
                 _logger.LogError(ex, "Connection pool exhausted");
+                throw;
+            }
+            catch (Exception ex) when (SqlTimeoutDiagnostics.IsSqlTimeout(ex))
+            {
+                _sqlDiag.CaptureIfTimeout("DbMethods.UseDbContext", ex);
                 throw;
             }
             finally
