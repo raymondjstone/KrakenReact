@@ -66,38 +66,23 @@ public class KrakenWebSocketV1Service : BackgroundService
             }
             if (!_state.Symbols.Any()) { _logger.LogWarning("Symbols not loaded, WS V1 not starting"); return; }
 
-            var uri = new Uri("wss://ws.kraken.com");
-            _socket = new WebsocketClient(uri);
-            _socket.LostReconnectTimeout = TimeSpan.FromMinutes(10);
-            _socket.IsReconnectionEnabled = true;
-            _socket.ReconnectTimeout = TimeSpan.FromSeconds(120);
-
-            _socket.ReconnectionHappened.Subscribe(info =>
+            // Connect with backoff so a network outage at startup neither crashes the host
+            // nor permanently disables the public feed; auto-reconnect handles later drops.
+            var retryDelay = TimeSpan.FromSeconds(10);
+            while (!stoppingToken.IsCancellationRequested)
             {
-                _logger.LogInformation("[WS V1] Reconnection: {Type}", info.Type);
-                _ = Task.Run(async () =>
+                try
                 {
-                    try { await SubscribeToAssets(); }
-                    catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error during reconnect subscribe"); }
-                });
-            });
-
-            _socket.MessageReceived.Subscribe(msg =>
-            {
-                try { ProcessMessage(msg.Text); }
-                catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error processing message"); }
-            });
-
-            await _socket.Start();
-
-            // Start ping timer
-            _pingTimer = new System.Timers.Timer(60000);
-            _pingTimer.Elapsed += (s, e) => Ping();
-            _pingTimer.AutoReset = true;
-            _pingTimer.Enabled = true;
-
-            // Subscribe
-            await SubscribeToAssets();
+                    if (await TryStartAsync(stoppingToken)) break;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[WS V1] Initial connection attempt failed; retrying in {Seconds}s", (int)retryDelay.TotalSeconds);
+                }
+                await Task.Delay(retryDelay, stoppingToken);
+                retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 2, 120));
+            }
 
             // Re-subscription timer
             _ = Task.Run(async () =>
@@ -121,6 +106,57 @@ public class KrakenWebSocketV1Service : BackgroundService
         {
             _logger.LogInformation("[WS V1] Shutting down gracefully");
         }
+        catch (Exception ex)
+        {
+            // Last-resort guard: never let an unhandled exception escape and stop the host.
+            _logger.LogError(ex, "[WS V1] Unexpected fatal error; feed stopping but host stays up");
+        }
+    }
+
+    private async Task<bool> TryStartAsync(CancellationToken stoppingToken)
+    {
+        // Dispose any half-initialised socket from a previous failed attempt
+        _socket?.Dispose();
+
+        var uri = new Uri("wss://ws.kraken.com");
+        _socket = new WebsocketClient(uri);
+        _socket.LostReconnectTimeout = TimeSpan.FromMinutes(10);
+        _socket.IsReconnectionEnabled = true;
+        _socket.ReconnectTimeout = TimeSpan.FromSeconds(120);
+
+        _socket.ReconnectionHappened.Subscribe(info =>
+        {
+            _logger.LogInformation("[WS V1] Reconnection: {Type}", info.Type);
+            _ = Task.Run(async () =>
+            {
+                try { await SubscribeToAssets(); }
+                catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error during reconnect subscribe"); }
+            });
+        });
+
+        _socket.DisconnectionHappened.Subscribe(info =>
+            _logger.LogWarning("[WS V1] Disconnected: {Type}", info.Type));
+
+        _socket.MessageReceived.Subscribe(msg =>
+        {
+            try { ProcessMessage(msg.Text); }
+            catch (Exception ex) { _logger.LogError(ex, "[WS V1] Error processing message"); }
+        });
+
+        await _socket.Start();
+
+        // Start ping timer (replace any timer from a previous attempt)
+        _pingTimer?.Stop();
+        _pingTimer?.Dispose();
+        _pingTimer = new System.Timers.Timer(60000);
+        _pingTimer.Elapsed += (s, e) => Ping();
+        _pingTimer.AutoReset = true;
+        _pingTimer.Enabled = true;
+
+        // Subscribe
+        await SubscribeToAssets();
+        _logger.LogInformation("[WS V1] Connected and subscribed");
+        return true;
     }
 
     private async Task SubscribeToAssets()

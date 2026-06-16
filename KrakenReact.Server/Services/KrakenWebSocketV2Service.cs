@@ -40,40 +40,25 @@ public class KrakenWebSocketV2Service : BackgroundService
             // Wait for initial data to load
             await Task.Delay(15000, stoppingToken);
 
-            var tokenResult = await _kraken.GetWebSocketAsyncToken();
-            if (tokenResult == null) { _logger.LogError("[WS V2] Could not get token"); return; }
-            _wsToken = tokenResult.Token;
-
-            var uri = new Uri("wss://ws-auth.kraken.com/v2");
-            _socket = new WebsocketClient(uri);
-            _socket.LostReconnectTimeout = TimeSpan.FromMinutes(10);
-            _socket.IsReconnectionEnabled = true;
-            _socket.ReconnectTimeout = TimeSpan.FromSeconds(120);
-
-            _socket.ReconnectionHappened.Subscribe(info =>
+            // Establish the initial connection, retrying with backoff until the network is
+            // reachable. A connectivity outage at startup must neither crash the host nor
+            // permanently disable the feed — once the link returns this loop connects, and
+            // the WebsocketClient's own auto-reconnect keeps it alive through later drops.
+            var retryDelay = TimeSpan.FromSeconds(10);
+            while (!stoppingToken.IsCancellationRequested)
             {
-                _logger.LogInformation("[WS V2] Reconnection: {Type}", info.Type);
-                _ = Task.Run(async () =>
+                try
                 {
-                    try
-                    {
-                        var freshToken = await _kraken.GetWebSocketAsyncToken();
-                        if (freshToken != null) _wsToken = freshToken.Token;
-                        await Subscribe();
-                    }
-                    catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error during reconnect subscribe"); }
-                });
-            });
-
-            _socket.MessageReceived.Subscribe(msg =>
-            {
-                try { ProcessMessage(msg.Text); }
-                catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error processing message"); }
-            });
-
-            await _socket.Start();
-            await Subscribe();
-            await StartPublicSocket(stoppingToken);
+                    if (await TryStartAsync(stoppingToken)) break;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[WS V2] Initial connection attempt failed; retrying in {Seconds}s", (int)retryDelay.TotalSeconds);
+                }
+                await Task.Delay(retryDelay, stoppingToken);
+                retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 2, 120));
+            }
 
             // Ping timer
             _ = Task.Run(async () =>
@@ -92,6 +77,61 @@ public class KrakenWebSocketV2Service : BackgroundService
         {
             _logger.LogInformation("[WS V2] Shutting down gracefully");
         }
+        catch (Exception ex)
+        {
+            // Last-resort guard: never let an unhandled exception escape and stop the host.
+            _logger.LogError(ex, "[WS V2] Unexpected fatal error; feed stopping but host stays up");
+        }
+    }
+
+    private async Task<bool> TryStartAsync(CancellationToken stoppingToken)
+    {
+        var tokenResult = await _kraken.GetWebSocketAsyncToken();
+        if (tokenResult == null)
+        {
+            _logger.LogWarning("[WS V2] Could not get WS token (network unavailable?)");
+            return false;
+        }
+        _wsToken = tokenResult.Token;
+
+        // Dispose any half-initialised socket from a previous failed attempt
+        _socket?.Dispose();
+
+        var uri = new Uri("wss://ws-auth.kraken.com/v2");
+        _socket = new WebsocketClient(uri);
+        _socket.LostReconnectTimeout = TimeSpan.FromMinutes(10);
+        _socket.IsReconnectionEnabled = true;
+        _socket.ReconnectTimeout = TimeSpan.FromSeconds(120);
+
+        _socket.ReconnectionHappened.Subscribe(info =>
+        {
+            _logger.LogInformation("[WS V2] Reconnection: {Type}", info.Type);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var freshToken = await _kraken.GetWebSocketAsyncToken();
+                    if (freshToken != null) _wsToken = freshToken.Token;
+                    await Subscribe();
+                }
+                catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error during reconnect subscribe"); }
+            });
+        });
+
+        _socket.DisconnectionHappened.Subscribe(info =>
+            _logger.LogWarning("[WS V2] Disconnected: {Type}", info.Type));
+
+        _socket.MessageReceived.Subscribe(msg =>
+        {
+            try { ProcessMessage(msg.Text); }
+            catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error processing message"); }
+        });
+
+        await _socket.Start();
+        await Subscribe();
+        await StartPublicSocket(stoppingToken);
+        _logger.LogInformation("[WS V2] Connected and subscribed");
+        return true;
     }
 
     private async Task Subscribe()
@@ -109,6 +149,9 @@ public class KrakenWebSocketV2Service : BackgroundService
 
     private async Task StartPublicSocket(CancellationToken stoppingToken)
     {
+        // Dispose any socket left over from a previous (failed) connection attempt
+        _publicSocket?.Dispose();
+
         var uri = new Uri("wss://ws.kraken.com/v2");
         _publicSocket = new WebsocketClient(uri);
         _publicSocket.LostReconnectTimeout = TimeSpan.FromMinutes(10);

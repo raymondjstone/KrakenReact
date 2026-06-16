@@ -76,6 +76,16 @@ builder.Services.AddSingleton<AutoOrderService>();
 builder.Services.AddSingleton<DelistedPriceService>();
 builder.Services.AddSingleton<SqlTimeoutDiagnostics>();
 
+// Never let an unhandled exception in a background service tear down the whole host.
+// A transient loss of internet connectivity (e.g. the Kraken WebSocket feeds becoming
+// unreachable) used to bubble up out of a BackgroundService and, with the .NET default
+// of BackgroundServiceExceptionBehavior.StopHost, stop the entire container. The feeds
+// below are written to retry and resume on their own, so the host must stay alive.
+builder.Services.Configure<HostOptions>(opts =>
+{
+    opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore;
+});
+
 // Background services
 builder.Services.AddHostedService<BackgroundTaskService>();
 builder.Services.AddHostedService<KrakenWebSocketV1Service>();
