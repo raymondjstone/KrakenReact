@@ -6,6 +6,7 @@ import BalancesPage from '../pages/BalancesPage';
 import AutoTradePage from '../pages/AutoTradePage';
 import GroupedTradesPage from '../pages/GroupedTradesPage';
 import TradesPage from '../pages/TradesPage';
+import PairedTradesPage from '../pages/PairedTradesPage';
 import OrdersPage from '../pages/OrdersPage';
 import LedgerPage from '../pages/LedgerPage';
 import ChartPage from '../pages/ChartPage';
@@ -41,6 +42,7 @@ const fixedTabs = [
   { id: 'autotrade', label: 'AutoTrade' },
   { id: 'grouptrades', label: 'Grouped Trades' },
   { id: 'trades', label: 'Trades' },
+  { id: 'pairedtrades', label: 'Buy/Sell Pairs' },
   { id: 'orders', label: 'Orders' },
   { id: 'ledger', label: 'Ledger' },
   { id: 'delisted', label: 'Delisted Pairs' },
@@ -233,6 +235,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'autotrade' && <AutoTradePage />}
         {activeTab === 'grouptrades' && <GroupedTradesPage />}
         {activeTab === 'trades' && <TradesPage />}
+        {activeTab === 'pairedtrades' && <PairedTradesPage />}
         {activeTab === 'orders' && <OrdersPage />}
         {activeTab === 'ledger' && <LedgerPage />}
         {activeTab === 'delisted' && <DelistedPairsPage />}
