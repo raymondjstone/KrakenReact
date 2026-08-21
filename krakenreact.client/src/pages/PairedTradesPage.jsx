@@ -45,6 +45,34 @@ function pairOrders(orders, tolerancePct) {
     .sort((a, b) => b.sortTime - a.sortTime);
 }
 
+/**
+ * Pairs the orders, gives each staking reward a row of its own, and works out the
+ * running holding. Rewards take no part in pairing — they are acquisitions with no
+ * cost basis — but they do add to the balance, so a row's holding is the quantity
+ * held immediately after that row's defining event (its sell, else its buy, else
+ * the reward).
+ */
+function buildRows(orders, rewards, tolerancePct) {
+  const rows = [
+    ...pairOrders(orders, tolerancePct),
+    ...rewards.map(reward => ({ buy: null, sell: null, reward, sortTime: new Date(reward.timestamp).getTime() })),
+  ].sort((a, b) => b.sortTime - a.sortTime);
+
+  const events = [
+    ...orders.map(o => ({ at: new Date(o.timestamp).getTime(), delta: (o.side === 'Buy' ? 1 : -1) * Number(o.quantity), source: o })),
+    ...rewards.map(r => ({ at: new Date(r.timestamp).getTime(), delta: Number(r.quantity), source: r })),
+  ].sort((a, b) => a.at - b.at);
+
+  const holdingAfter = new Map();
+  let running = 0;
+  for (const e of events) {
+    running += e.delta;
+    holdingAfter.set(e.source, running);
+  }
+
+  return rows.map(r => ({ ...r, holding: holdingAfter.get(r.reward || r.sell || r.buy) }));
+}
+
 function formatQty(value) {
   if (value == null) return '';
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 8 });
@@ -70,6 +98,8 @@ export default function PairedTradesPage() {
   const [assets, setAssets] = useState([]);
   const [asset, setAsset] = useState('');
   const [orders, setOrders] = useState([]);
+  const [rewards, setRewards] = useState([]);
+  const [showRewards, setShowRewards] = useState(true);
   const [tolerance, setTolerance] = useState(DEFAULT_TOLERANCE);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -89,12 +119,22 @@ export default function PairedTradesPage() {
   }, []);
 
   const load = useCallback(() => {
-    if (!asset) { setOrders([]); setError(''); return; }
+    if (!asset) { setOrders([]); setRewards([]); setError(''); return; }
     setLoading(true);
-    api.get(`/trades/grouped?symbol=${encodeURIComponent(asset)}`)
-      .then(r => { setOrders(r.data || []); setError(''); setLoading(false); })
+    Promise.all([
+      api.get(`/trades/grouped?symbol=${encodeURIComponent(asset)}`),
+      // Rewards are supplementary — a failure here shouldn't blank out the trades.
+      api.get(`/ledger/staking/entries?asset=${encodeURIComponent(asset)}`).catch(() => ({ data: [] })),
+    ])
+      .then(([tradeRes, rewardRes]) => {
+        setOrders(tradeRes.data || []);
+        setRewards(rewardRes.data || []);
+        setError('');
+        setLoading(false);
+      })
       .catch(err => {
         setOrders([]);
+        setRewards([]);
         setError(err.response?.data?.message || 'Failed to load trades');
         setLoading(false);
       });
@@ -112,7 +152,12 @@ export default function PairedTradesPage() {
     return () => conn.off('TradesUpdated', load);
   }, [load]);
 
-  const rows = useMemo(() => pairOrders(orders, Number(tolerance) || 0), [orders, tolerance]);
+  const activeRewards = useMemo(() => (showRewards ? rewards : []), [showRewards, rewards]);
+
+  const rows = useMemo(
+    () => buildRows(orders, activeRewards, Number(tolerance) || 0),
+    [orders, activeRewards, tolerance]
+  );
 
   const showSymbol = useMemo(() => new Set(orders.map(o => o.symbol)).size > 1, [orders]);
 
@@ -123,8 +168,11 @@ export default function PairedTradesPage() {
       openBuys: rows.filter(r => r.buy && !r.sell).length,
       loneSells: rows.filter(r => r.sell && !r.buy).length,
       pnl: paired.reduce((sum, r) => sum + (r.sell.nettTotal - r.buy.nettTotal), 0),
+      rewardCount: activeRewards.length,
+      rewardQty: activeRewards.reduce((sum, r) => sum + Number(r.quantity), 0),
+      holding: rows.length ? rows[0].holding : 0,
     };
-  }, [rows]);
+  }, [rows, activeRewards]);
 
   const inputStyle = {
     padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 4,
@@ -134,6 +182,7 @@ export default function PairedTradesPage() {
   const th = { padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 };
   const td = { padding: '3px 8px', textAlign: 'right', whiteSpace: 'nowrap' };
   const divider = { borderLeft: '2px solid var(--border)' };
+  const rewardBg = 'color-mix(in srgb, var(--yellow) 10%, transparent)';
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -163,6 +212,10 @@ export default function PairedTradesPage() {
           />
           %
         </label>
+        <label style={{ ...labelStyle, cursor: 'pointer' }}>
+          <input type="checkbox" checked={showRewards} onChange={e => setShowRewards(e.target.checked)} />
+          Staking rewards
+        </label>
         {loading && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading...</span>}
         {error && <span style={{ fontSize: 12, color: 'var(--red)' }}>{error}</span>}
         {!loading && !error && orders.length > 0 && (
@@ -172,6 +225,14 @@ export default function PairedTradesPage() {
             <strong style={{ color: stats.pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
               {stats.pnl >= 0 ? '+' : '-'}{formatMoney(Math.abs(stats.pnl))}
             </strong>
+            {stats.rewardCount > 0 && (
+              <>
+                {' · '}{stats.rewardCount} rewards{' '}
+                <strong style={{ color: 'var(--yellow)' }}>+{formatQty(stats.rewardQty)}</strong>
+              </>
+            )}
+            {' · '}holding{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{formatQty(stats.holding)} {asset}</strong>
           </span>
         )}
       </div>
@@ -185,10 +246,11 @@ export default function PairedTradesPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
               <tr style={{ background: 'var(--detail-header-bg)', color: 'var(--text-secondary)' }}>
-                <th colSpan={showSymbol ? 5 : 4} style={{ ...th, textAlign: 'center', color: 'var(--green)', borderBottom: '1px solid var(--border)' }}>Buys</th>
+                <th colSpan={showSymbol ? 5 : 4} style={{ ...th, textAlign: 'center', color: 'var(--green)', borderBottom: '1px solid var(--border)' }}>Buys &amp; Rewards</th>
                 <th colSpan={2} style={{ ...th, ...divider, textAlign: 'center', borderBottom: '1px solid var(--border)' }}>Match</th>
                 <th colSpan={showSymbol ? 5 : 4} style={{ ...th, ...divider, textAlign: 'center', color: 'var(--red)', borderBottom: '1px solid var(--border)' }}>Sells</th>
                 <th style={{ ...th, ...divider, textAlign: 'center', borderBottom: '1px solid var(--border)' }}>Round Trip</th>
+                <th style={{ ...th, ...divider, textAlign: 'center', borderBottom: '1px solid var(--border)' }}>Position</th>
               </tr>
               <tr style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}>
                 <th style={{ ...th, textAlign: 'left' }}>Date</th>
@@ -204,25 +266,36 @@ export default function PairedTradesPage() {
                 <th style={th}>Price</th>
                 <th style={th}>Proceeds</th>
                 <th style={{ ...th, ...divider }}>P&amp;L</th>
+                <th style={{ ...th, ...divider }}>Holding</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ buy, sell }) => {
+              {rows.map(({ buy, sell, reward, holding }) => {
                 const matched = buy && sell;
                 const pnl = matched ? sell.nettTotal - buy.nettTotal : null;
                 const pnlPct = matched && buy.nettTotal ? pnl / Math.abs(buy.nettTotal) * 100 : null;
                 const held = matched ? new Date(sell.timestamp) - new Date(buy.timestamp) : null;
-                const buyCell = { ...td, background: buy ? 'var(--buy-row-bg)' : 'transparent' };
+                const buyCell = { ...td, background: reward ? rewardBg : buy ? 'var(--buy-row-bg)' : 'transparent' };
                 const sellCell = { ...td, background: sell ? 'var(--sell-row-bg)' : 'transparent' };
+                const acquired = reward || buy;
                 return (
-                  <tr key={`${buy?.id || ''}|${sell?.id || ''}`} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ ...buyCell, textAlign: 'left', color: 'var(--text-secondary)' }} title={buy?.orderId}>
-                      {buy ? new Date(buy.timestamp).toLocaleString() : ''}
+                  <tr key={reward ? `reward|${reward.id}` : `${buy?.id || ''}|${sell?.id || ''}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ ...buyCell, textAlign: 'left', color: 'var(--text-secondary)' }} title={reward ? reward.referenceId : buy?.orderId}>
+                      {acquired ? new Date(acquired.timestamp).toLocaleString() : ''}
+                      {reward && (
+                        <span style={{ marginLeft: 6, padding: '0 4px', borderRadius: 3, fontSize: 10, fontWeight: 600, color: 'var(--yellow)', border: '1px solid var(--yellow)' }}>
+                          REWARD
+                        </span>
+                      )}
                     </td>
-                    {showSymbol && <td style={{ ...buyCell, textAlign: 'left' }}>{buy?.symbol || ''}</td>}
-                    <td style={{ ...buyCell, color: buy ? 'var(--green)' : undefined }}>{buy ? formatQty(buy.quantity) : ''}</td>
-                    <td style={buyCell}>{buy ? formatPrice(buy.price) : ''}</td>
-                    <td style={buyCell}>{buy ? formatMoney(buy.nettTotal) : ''}</td>
+                    {showSymbol && <td style={{ ...buyCell, textAlign: 'left' }}>{reward ? reward.asset : buy?.symbol || ''}</td>}
+                    <td style={{ ...buyCell, color: reward ? 'var(--yellow)' : buy ? 'var(--green)' : undefined }}>
+                      {acquired ? formatQty(acquired.quantity) : ''}
+                    </td>
+                    <td style={buyCell}>{buy && !reward ? formatPrice(buy.price) : ''}</td>
+                    <td style={{ ...buyCell, color: reward ? 'var(--text-muted)' : undefined }}>
+                      {reward ? '—' : buy ? formatMoney(buy.nettTotal) : ''}
+                    </td>
                     <td style={{ ...td, ...divider, color: 'var(--text-muted)' }}>
                       {matched ? `${qtyDiffPct(buy.quantity, sell.quantity).toFixed(2)}%` : ''}
                     </td>
@@ -241,6 +314,9 @@ export default function PairedTradesPage() {
                           ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
                         </span>
                       )}
+                    </td>
+                    <td style={{ ...td, ...divider, color: 'var(--text-primary)' }} title="Quantity held immediately after this row's latest event">
+                      {holding == null ? '' : formatQty(holding)}
                     </td>
                   </tr>
                 );

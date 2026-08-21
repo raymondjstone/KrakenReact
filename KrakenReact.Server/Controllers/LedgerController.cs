@@ -1,4 +1,4 @@
-using KrakenReact.Server.Data;
+﻿using KrakenReact.Server.Data;
 using KrakenReact.Server.DTOs;
 using KrakenReact.Server.Services;
 using Kraken.Net.Enums;
@@ -31,6 +31,41 @@ public class LedgerController : ControllerBase
             FeePercentage = l.BalanceAfter == 0 ? 0 : Math.Round(l.Fee / (l.BalanceAfter + l.Fee) * 100, 2),
             AssetClass = l.AssetClass
         }).ToList());
+    }
+
+    /// <summary>GET /api/ledger/staking/entries?asset=BTC — individual staking reward payments, oldest first</summary>
+    [HttpGet("staking/entries")]
+    public async Task<ActionResult> GetStakingEntries([FromQuery] string? asset = null)
+    {
+        // Reads from the DB rather than the in-memory cache so the timeline lines up
+        // with the full trade history the paired-trades view is built from.
+        var rewards = (await _db.GetLedgersAsync())
+            .Where(l =>
+                l.Type == LedgerEntryType.Staking &&
+                l.Quantity > 0 &&
+                l.SubType != "spotFromStaking" &&
+                l.SubType != "spotToStaking");
+
+        if (!string.IsNullOrEmpty(asset))
+        {
+            var wanted = TradingStateService.NormalizeAsset(asset);
+            rewards = rewards.Where(l =>
+                string.Equals(TradingStateService.NormalizeAsset(l.Asset), wanted, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return Ok(rewards
+            .OrderBy(l => l.Timestamp)
+            .Select(l => new
+            {
+                id           = l.Id,
+                referenceId  = l.ReferenceId,
+                timestamp    = l.Timestamp,
+                asset        = TradingStateService.NormalizeAsset(l.Asset),
+                quantity     = l.Quantity,
+                fee          = l.Fee,
+                balanceAfter = l.BalanceAfter,
+            })
+            .ToList());
     }
 
     /// <summary>GET /api/ledger/staking — staking rewards summary per asset</summary>
