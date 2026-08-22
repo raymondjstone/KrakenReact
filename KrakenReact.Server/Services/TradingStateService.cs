@@ -938,6 +938,7 @@ public class TradingStateService
             ["PredictionCurrency"] = ("USD", "Quote currency to use when PredictionMode is 'all'"),
             ["PredictionJobTime"] = ("05:00", "Daily ML prediction job time (HH:MM, 24-hour)"),
             ["PredictionAutoRefreshIntervalMinutes"] = ("15", "How often (minutes) the stale-prediction auto-refresh job runs (minimum 5)"),
+            ["HangfireFailedJobRetentionDays"] = ("14", "How long to keep Hangfire records of failed jobs before purging (1 to 365 days)"),
             ["MinuteCandleCollectionEnabled"] = ("true", "Collect and retain one-minute candles for traded pairs (needed for minute-resolution analysis)"),
             ["MinuteCandleLookbackMonths"] = ("5", "Collect minute candles for pairs traded within this many months (1 to 120)"),
             ["MinuteCandleRetentionDays"] = ("400", "How long to keep one-minute candles before pruning (7 to 3650 days)"),

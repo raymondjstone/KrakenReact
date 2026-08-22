@@ -67,6 +67,7 @@ builder.Services.AddTransient<MultiTfPredictionJob>();
 builder.Services.AddTransient<BracketMonitorJob>();
 builder.Services.AddTransient<SmartRepriceJob>();
 builder.Services.AddTransient<MinuteCandleJob>();
+builder.Services.AddTransient<HangfireCleanupJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -230,6 +231,15 @@ app.Lifetime.ApplicationStarted.Register(() =>
             manager.RemoveIfExists("minute-candle-collection");
             Log.Information("[Hangfire] Minute-candle collection is disabled by setting");
         }
+
+        // Hangfire never expires failed jobs, so a persistently failing job grows these tables
+        // without bound. Runs in the small hours, when the server has least to contend with.
+        manager.AddOrUpdate<HangfireCleanupJob>(
+            "hangfire-failed-job-cleanup",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "40 3 * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Log.Information("[Hangfire] Failed-job cleanup scheduled at 03:40 UTC");
 
         manager.AddOrUpdate<PortfolioSnapshotJob>(
             "portfolio-snapshot",
