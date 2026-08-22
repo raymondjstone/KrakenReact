@@ -6,10 +6,26 @@ using KrakenReact.Server.DTOs;
 using KrakenReact.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace KrakenReact.Tests;
+
+/// <summary>
+/// Builds the SQL timeout diagnostics DbMethods now requires. The tests run against the EF in-memory
+/// provider, so nothing here ever opens the connection — it only needs a string to be constructed with.
+/// </summary>
+internal static class TestDiagnostics
+{
+    public static SqlTimeoutDiagnostics Create()
+    {
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:EFDB"] = "Server=(local);Database=test;" })
+            .Build();
+        return new SqlTimeoutDiagnostics(cfg, new Mock<ILogger<SqlTimeoutDiagnostics>>().Object);
+    }
+}
 
 internal sealed class InMemoryDbFactory : IDbContextFactory<KrakenDbContext>
 {
@@ -34,7 +50,7 @@ public class TradesControllerTests : IDisposable
     {
         var dbName = $"trades-{Guid.NewGuid()}";
         _factory = new InMemoryDbFactory(dbName);
-        _dbm = new DbMethods(_factory, new Mock<ILogger<DbMethods>>().Object);
+        _dbm = new DbMethods(_factory, new Mock<ILogger<DbMethods>>().Object, TestDiagnostics.Create());
 
         var dlog = new Mock<ILogger<DelistedPriceService>>();
         _state = new TradingStateService(new DelistedPriceService(dlog.Object));
@@ -216,7 +232,7 @@ public class LedgerGetAllTests
     public async Task GetAll_Empty_ReturnsEmpty()
     {
         var factory = new InMemoryDbFactory($"ledger-{Guid.NewGuid()}");
-        var dbm = new DbMethods(factory, new Mock<ILogger<DbMethods>>().Object);
+        var dbm = new DbMethods(factory, new Mock<ILogger<DbMethods>>().Object, TestDiagnostics.Create());
         var state = new TradingStateService(new DelistedPriceService(new Mock<ILogger<DelistedPriceService>>().Object));
         var ctrl = new LedgerController(dbm, state);
 
@@ -239,7 +255,7 @@ public class LedgerGetAllTests
             });
             await ctx.SaveChangesAsync();
         }
-        var dbm = new DbMethods(factory, new Mock<ILogger<DbMethods>>().Object);
+        var dbm = new DbMethods(factory, new Mock<ILogger<DbMethods>>().Object, TestDiagnostics.Create());
         var state = new TradingStateService(new DelistedPriceService(new Mock<ILogger<DelistedPriceService>>().Object));
         var ctrl = new LedgerController(dbm, state);
 
@@ -265,7 +281,7 @@ public class LedgerGetAllTests
             });
             await ctx.SaveChangesAsync();
         }
-        var dbm = new DbMethods(factory, new Mock<ILogger<DbMethods>>().Object);
+        var dbm = new DbMethods(factory, new Mock<ILogger<DbMethods>>().Object, TestDiagnostics.Create());
         var state = new TradingStateService(new DelistedPriceService(new Mock<ILogger<DelistedPriceService>>().Object));
         var ctrl = new LedgerController(dbm, state);
 
