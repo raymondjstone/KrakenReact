@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using KrakenReact.Server.Models;
 using KrakenReact.Server.Services;
 using Kraken.Net.Objects.Models;
@@ -56,10 +57,28 @@ public class DbMethods
         }
     }
 
-    public async Task UpsertListAsync<TEntity, TKey>(IEnumerable<TEntity> items, Func<TEntity, TKey> keySelector, Action<TEntity, TEntity>? updateValues = null) where TEntity : class
+    /// <summary>
+    /// Inserts or updates a list of entities, keyed by the given property.
+    /// <para>
+    /// The batch's existing rows are fetched in a single <c>WHERE key IN (...)</c> query rather than
+    /// one lookup per item. The per-item form issued a round trip for every row on every sync, which
+    /// against the closed-order history alone had accumulated some 794,000 index seeks — for a table
+    /// holding under two thousand rows.
+    /// </para>
+    /// <para>
+    /// The key selector is an expression rather than a delegate so the same lambda can both build
+    /// that query and be compiled for matching in memory.
+    /// </para>
+    /// </summary>
+    public async Task UpsertListAsync<TEntity, TKey>(
+        IEnumerable<TEntity> items,
+        Expression<Func<TEntity, TKey>> keySelector,
+        Action<TEntity, TEntity>? updateValues = null) where TEntity : class
     {
         var list = items.ToList();
         if (list.Count == 0) return;
+
+        var readKey = keySelector.Compile();
 
         // Process in small batches so each SaveChangesAsync transaction touches at most
         // 50 rows. A single large transaction over hundreds of rows caused SQL Server
@@ -71,23 +90,46 @@ public class DbMethods
             await UseDbContextAsync(async context =>
             {
                 var set = context.Set<TEntity>();
+
+                // One query for the whole batch: WHERE key IN (...). The rows come back tracked, so
+                // assigning to them below still produces an UPDATE exactly as the per-item form did.
+                var keys = batch.Select(readKey).Distinct().ToList();
+                var existingRows = await set.Where(BuildKeyInPredicate(keySelector, keys)).ToListAsync();
+
+                var existingByKey = new Dictionary<TKey, TEntity>();
+                foreach (var row in existingRows) existingByKey[readKey(row)] = row;
+
                 foreach (var item in batch)
                 {
-                    var key = keySelector(item);
-                    var existing = await set.FindAsync(key);
-                    if (existing == null)
-                        await set.AddAsync(item);
-                    else
+                    if (existingByKey.TryGetValue(readKey(item), out var existing))
                     {
                         if (updateValues != null) updateValues(existing, item);
                         else context.Entry(existing).CurrentValues.SetValues(item);
                     }
+                    else
+                    {
+                        await set.AddAsync(item);
+                        // A batch containing the same key twice would otherwise insert it twice and
+                        // trip the unique-violation catch below, silently losing the whole batch.
+                        existingByKey[readKey(item)] = item;
+                    }
                 }
+
                 try { await context.SaveChangesAsync(); }
                 catch (DbUpdateException ex) when (ex.InnerException is SqlException sqlEx && (sqlEx.Number == 2627 || sqlEx.Number == 2601)) { }
                 return true;
             });
         }
+    }
+
+    /// <summary>Builds <c>e =&gt; keys.Contains(e.Key)</c> from a key selector, for a batched lookup.</summary>
+    private static Expression<Func<TEntity, bool>> BuildKeyInPredicate<TEntity, TKey>(
+        Expression<Func<TEntity, TKey>> keySelector, List<TKey> keys)
+    {
+        var contains = Expression.Call(
+            typeof(Enumerable), nameof(Enumerable.Contains), [typeof(TKey)],
+            Expression.Constant(keys), keySelector.Body);
+        return Expression.Lambda<Func<TEntity, bool>>(contains, keySelector.Parameters[0]);
     }
 
     // --- Get Methods ---
@@ -137,17 +179,73 @@ public class DbMethods
         finally { _pushoverLock.Release(); }
     }
 
+    // ── Transaction history cache ──────────────────────────────────────────
+    //
+    // Trades, ledgers and closed orders are read constantly — several endpoints load the whole lot
+    // on every request, and the hourly sync reads all of them again just to find its high-water
+    // mark. Measured against the live database that was over 17,000 full scans of each table.
+    //
+    // They are also tiny: under six megabytes for all three together, against a database of 625 MB.
+    // Holding them in memory costs almost nothing and removes those scans entirely.
+    //
+    // Every write to these tables goes through this class, so each Add method drops the matching
+    // cache. That is what keeps the copy honest: nothing else can change the table behind its back.
+    private List<KrakenUserTrade>? _tradesCache;
+    private List<KrakenLedgerEntry>? _ledgersCache;
+    private List<CombinedOrder>? _combinedOrdersCache;
+    private readonly SemaphoreSlim _cacheLock = new(1, 1);
+
+    /// <summary>
+    /// Serves a cached table, loading it once on first use.
+    /// <para>
+    /// The lock is held across the load so a burst of concurrent callers on a cold cache produces one
+    /// query rather than one each — which is precisely the moment this matters, at startup.
+    /// </para>
+    /// </summary>
+    private async Task<List<T>> GetCachedAsync<T>(Func<List<T>?> read, Action<List<T>> write, Func<Task<List<T>>> load)
+    {
+        var cached = read();
+        if (cached is not null) return cached;
+
+        await _cacheLock.WaitAsync();
+        try
+        {
+            cached = read();
+            if (cached is not null) return cached;
+
+            var loaded = await load();
+            write(loaded);
+            return loaded;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
+    }
+
+    /// <summary>Drops the cached copies, so the next read reloads from the database.</summary>
+    public void InvalidateTransactionCaches()
+    {
+        _tradesCache = null;
+        _ledgersCache = null;
+        _combinedOrdersCache = null;
+    }
+
     public Task<List<KrakenUserTrade>> GetTradesAsync() =>
-        UseDbContextAsync(async context => await context.Trades.AsNoTracking().OrderByDescending(c => c.Timestamp).ToListAsync());
+        GetCachedAsync(() => _tradesCache, v => _tradesCache = v,
+            () => UseDbContextAsync(async context => await context.Trades.AsNoTracking().OrderByDescending(c => c.Timestamp).ToListAsync()));
 
     public Task<List<KrakenLedgerEntry>> GetLedgersAsync() =>
-        UseDbContextAsync(context => context.Ledgers.AsNoTracking().OrderByDescending(c => c.Timestamp).ToListAsync());
+        GetCachedAsync(() => _ledgersCache, v => _ledgersCache = v,
+            () => UseDbContextAsync(context => context.Ledgers.AsNoTracking().OrderByDescending(c => c.Timestamp).ToListAsync()));
+
 
     public Task<List<DerivedKline>> GetKlineAsync(string asset) =>
         UseDbContextAsync(context => context.DerivedKlines.Where(k => k.Asset == asset).AsNoTracking().OrderBy(c => c.OpenTime).ToListAsync());
 
     public Task<List<CombinedOrder>> GetCombinedOrdersAsync() =>
-        UseDbContextAsync(context => context.CombinedOrders.AsNoTracking().OrderByDescending(c => c.CloseTime ?? DateTime.MaxValue).ToListAsync());
+        GetCachedAsync(() => _combinedOrdersCache, v => _combinedOrdersCache = v,
+            () => UseDbContextAsync(context => context.CombinedOrders.AsNoTracking().OrderByDescending(c => c.CloseTime ?? DateTime.MaxValue).ToListAsync()));
 
     public Task<List<KrakenSymbol>> GetSymbolsAsync() =>
         UseDbContextAsync(context => context.Symbols.AsNoTracking().ToListAsync());
@@ -156,8 +254,18 @@ public class DbMethods
         UseDbContextAsync(context => context.Balances.AsNoTracking().OrderByDescending(c => c.Asset).ToListAsync());
 
     // --- Add Methods ---
-    public Task AddTradesAsync(List<KrakenUserTrade> trades) => UpsertListAsync(trades, t => t.Id);
-    public Task AddLedgersAsync(List<KrakenLedgerEntry> list) => UpsertListAsync(list, k => k.Id);
+    public async Task AddTradesAsync(List<KrakenUserTrade> trades)
+    {
+        await UpsertListAsync(trades, t => t.Id);
+        _tradesCache = null;
+    }
+
+    public async Task AddLedgersAsync(List<KrakenLedgerEntry> list)
+    {
+        await UpsertListAsync(list, k => k.Id);
+        _ledgersCache = null;
+    }
+
     public Task AddBalancesAsync(List<KrakenBalanceAvailable> list) => UpsertListAsync(list, b => b.Asset);
 
     public async Task AddKlineAsync(List<DerivedKline> list)
@@ -199,7 +307,13 @@ public class DbMethods
             item.Reason ??= string.Empty;
             item.ReferenceId ??= string.Empty;
         }
-        return UpsertListAsync(list, o => o.Id);
+        return UpsertCombinedOrdersAsync(list);
+    }
+
+    private async Task UpsertCombinedOrdersAsync(List<CombinedOrder> list)
+    {
+        await UpsertListAsync(list, o => o.Id);
+        _combinedOrdersCache = null;
     }
 
     public Task AddSymbolsAsync(List<KrakenSymbol> list) => UpsertListAsync(list, s => s.WebsocketName);
