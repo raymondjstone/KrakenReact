@@ -37,6 +37,15 @@ public class MinuteCandleJob
     /// <summary>Stops two overlapping runs from fetching and inserting the same bars.</summary>
     private static readonly SemaphoreSlim RunLock = new(1, 1);
 
+    /// <summary>
+    /// When the retention sweep last ran. The delete filters on Interval and OpenTime, and no index
+    /// leads with either, so it scans the whole kline table — cheap once a day, wasteful every ten
+    /// minutes when there is at most one day's worth of newly expired rows to find.
+    /// </summary>
+    private static DateTime _lastPruneUtc = DateTime.MinValue;
+
+    private static readonly TimeSpan PruneEvery = TimeSpan.FromHours(20);
+
     public MinuteCandleJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
         KrakenRestService kraken,
@@ -93,7 +102,11 @@ public class MinuteCandleJob
                 totalStored, pairs.Count,
                 pairsWithGaps > 0 ? $"; {pairsWithGaps} pair(s) had an unrecoverable gap" : "");
 
-            await PruneAsync(ct);
+            if (DateTime.UtcNow - _lastPruneUtc >= PruneEvery)
+            {
+                _lastPruneUtc = DateTime.UtcNow;
+                await PruneAsync(ct);
+            }
         }
         finally
         {

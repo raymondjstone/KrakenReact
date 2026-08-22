@@ -448,7 +448,12 @@ public static class AutoMigrationService
 
         // Only drop the redundant ones once the replacement is in place, so a failure part-way
         // through never leaves the table worse indexed than it started.
-        foreach (var name in new[] { "IX_DerivedKlines_Asset", "IXEF_DerivedKlines_Asset_INCLUDE" })
+        //
+        // IX_DerivedKlines_Asset_Interval is a strict prefix of the new index, so every seek it
+        // served is served there too, and covered rather than needing a key lookup.
+        // IX_DerivedKlines_Asset_OpenTime is deliberately kept: it is not a prefix of anything, and
+        // GetKlineAsync filters on Asset alone while ordering by OpenTime, which it answers directly.
+        foreach (var name in new[] { "IX_DerivedKlines_Asset", "IXEF_DerivedKlines_Asset_INCLUDE", "IX_DerivedKlines_Asset_Interval" })
         {
             try
             {
