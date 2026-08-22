@@ -73,15 +73,27 @@ public static class SupportResistance
 {
     private const int VolumeAveragePeriodBars = 50;
 
-    /// <summary>The levels the series has built, most-touched first.</summary>
-    public static List<PriceLevel> BuildLevels(IReadOnlyList<AnalysisCandle> candles, SupportResistanceStudyParameters parameters)
+    /// <summary>
+    /// The levels the series has built, most-touched first.
+    /// <para>
+    /// The average true range and the pivots may be supplied by a caller that has already computed
+    /// them. Both are derived from the whole series, and a report that wants levels almost always
+    /// wants encounters too, so recomputing them per call means walking every candle twice for the
+    /// same answer.
+    /// </para>
+    /// </summary>
+    public static List<PriceLevel> BuildLevels(
+        IReadOnlyList<AnalysisCandle> candles,
+        SupportResistanceStudyParameters parameters,
+        decimal[]? averageTrueRange = null,
+        IReadOnlyList<TrendPivot>? trendPivots = null)
     {
         var result = new List<PriceLevel>();
         int count = candles?.Count ?? 0;
         if (count < parameters.AtrPeriod + 2) return result;
 
-        var atr = Indicators.AverageTrueRange(candles!, parameters.AtrPeriod);
-        var pivots = TrendDetection.FindTrendPivots(candles!, atr, parameters.AtrPeriod, parameters.ReversalAtrMultiple);
+        var atr = averageTrueRange ?? Indicators.AverageTrueRange(candles!, parameters.AtrPeriod);
+        var pivots = trendPivots ?? TrendDetection.FindTrendPivots(candles!, atr, parameters.AtrPeriod, parameters.ReversalAtrMultiple);
         if (pivots.Count == 0) return result;
 
         var volumeAverages = ComputeVolumeAverages(candles!, VolumeAveragePeriodBars);
@@ -105,15 +117,20 @@ public static class SupportResistance
             .ToList();
     }
 
+    /// <inheritdoc cref="BuildLevels(IReadOnlyList{AnalysisCandle},SupportResistanceStudyParameters,decimal[],IReadOnlyList{TrendPivot})"/>
     /// <summary>Every approach to a level in the series, in the order they occurred.</summary>
-    public static List<LevelEncounter> AnalyzeLevelEncounters(IReadOnlyList<AnalysisCandle> candles, SupportResistanceStudyParameters parameters)
+    public static List<LevelEncounter> AnalyzeLevelEncounters(
+        IReadOnlyList<AnalysisCandle> candles,
+        SupportResistanceStudyParameters parameters,
+        decimal[]? averageTrueRange = null,
+        IReadOnlyList<TrendPivot>? trendPivots = null)
     {
         var encounters = new List<LevelEncounter>();
         int count = candles?.Count ?? 0;
         if (count < parameters.AtrPeriod + 2) return encounters;
 
-        var atr = Indicators.AverageTrueRange(candles!, parameters.AtrPeriod);
-        var pivots = TrendDetection.FindTrendPivots(candles!, atr, parameters.AtrPeriod, parameters.ReversalAtrMultiple);
+        var atr = averageTrueRange ?? Indicators.AverageTrueRange(candles!, parameters.AtrPeriod);
+        var pivots = trendPivots ?? TrendDetection.FindTrendPivots(candles!, atr, parameters.AtrPeriod, parameters.ReversalAtrMultiple);
         if (pivots.Count == 0) return encounters;
 
         var contexts = ComputeTrendContexts(candles!, parameters);

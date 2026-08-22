@@ -89,8 +89,16 @@ public class MarketAnalysisService
             Math.Round(rsi[^1], 1),
             last.Close > 0m ? Math.Round(atr[^1] / last.Close * 100m, 2) : 0m);
 
-        var plummetReport = BuildPlummetReport(candles, intervalMinutes, options, last);
-        var backtest = BuildBacktest(candles, intervalMinutes, options);
+        // Detect the falls once. The report describes them and the backtest trades them, and running
+        // the detector twice over the same three and a half thousand candles is the single largest
+        // avoidable cost in answering this request.
+        var plummetParameters = BuildPlummetParameters(options, intervalMinutes);
+        var plummetEvents = PlummetDetection.DetectPlummetEvents(candles, intervalMinutes, plummetParameters);
+
+        var plummetReport = BuildPlummetReport(candles, intervalMinutes, options, last, plummetParameters, plummetEvents);
+        var backtest = StrategyBacktest.Run(
+            candles, plummetEvents, options.TradeWindowBars, options.Stake,
+            options.FeeFractionPerSide, options.SpreadAllowanceFraction);
         var surgeReport = BuildSurgeReport(candles, intervalMinutes, options, last);
         var levelReport = BuildLevelReport(candles, options, last);
 
@@ -100,28 +108,31 @@ public class MarketAnalysisService
             trendReport, plummetReport, surgeReport, levelReport, backtest);
     }
 
-    private PlummetReport BuildPlummetReport(IReadOnlyList<AnalysisCandle> candles, int intervalMinutes, AnalysisOptions options, AnalysisCandle last)
+    /// <summary>
+    /// The detector takes its windows in minutes, but they are only meaningful as a number of bars:
+    /// these thresholds were calibrated on one-minute candles, where 120 minutes is 120 bars. Handed
+    /// hourly bars that same 120 becomes a two-bar window, and daily bars round it to zero, which
+    /// switches detection off entirely. Scaling by the interval keeps every timeframe looking at the
+    /// same shape.
+    /// </summary>
+    private static PlummetStudyParameters BuildPlummetParameters(AnalysisOptions options, int intervalMinutes) => new()
     {
-        // The detector takes its windows in minutes, but they are only meaningful as a number of
-        // bars: these thresholds were calibrated on one-minute candles, where 120 minutes is 120
-        // bars. Handed hourly bars that same 120 becomes a two-bar window, and daily bars round it
-        // to zero, which switches detection off entirely. Scaling by the interval keeps every
-        // timeframe looking at the same shape.
-        var parameters = new PlummetStudyParameters
-        {
-            MinimumDropFraction = options.MinimumDropFraction,
-            QuietnessMultiple = options.PlummetQuietnessMultiple,
-            DropWindowMinutes = options.DropWindowBars * intervalMinutes,
-            BaselineWindowMinutes = options.BaselineWindowBars * intervalMinutes,
-            AveragePriceWindowMinutes = options.AveragePriceWindowBars * intervalMinutes,
-            ReboundWindowMinutes = options.ReboundWindowBars * intervalMinutes,
-            MinimumFallBelowAverageFraction = options.MinimumFallBelowAverageFraction,
-            MaximumReferenceHighAboveAverageFraction = options.MaximumReferenceHighAboveAverageFraction,
-        };
+        MinimumDropFraction = options.MinimumDropFraction,
+        QuietnessMultiple = options.PlummetQuietnessMultiple,
+        DropWindowMinutes = options.DropWindowBars * intervalMinutes,
+        BaselineWindowMinutes = options.BaselineWindowBars * intervalMinutes,
+        AveragePriceWindowMinutes = options.AveragePriceWindowBars * intervalMinutes,
+        ReboundWindowMinutes = options.ReboundWindowBars * intervalMinutes,
+        MinimumFallBelowAverageFraction = options.MinimumFallBelowAverageFraction,
+        MaximumReferenceHighAboveAverageFraction = options.MaximumReferenceHighAboveAverageFraction,
+    };
 
+    private PlummetReport BuildPlummetReport(
+        IReadOnlyList<AnalysisCandle> candles, int intervalMinutes, AnalysisOptions options,
+        AnalysisCandle last, PlummetStudyParameters parameters, IReadOnlyList<PlummetEvent> events)
+    {
         var decayGridMinutes = DecayGridBars.Select(b => b * intervalMinutes).ToArray();
 
-        var events = PlummetDetection.DetectPlummetEvents(candles, intervalMinutes, parameters);
         if (events.Count == 0)
             return new PlummetReport(0, 0, 0m, 0m, 0m, null, null, [], [], decayGridMinutes);
 
@@ -179,27 +190,6 @@ public class MarketAnalysisService
             decayGridMinutes);
     }
 
-    /// <summary>Replays the rebound strategies over the same falls the plummet report describes.</summary>
-    private static BacktestReport BuildBacktest(IReadOnlyList<AnalysisCandle> candles, int intervalMinutes, AnalysisOptions options)
-    {
-        var parameters = new PlummetStudyParameters
-        {
-            MinimumDropFraction = options.MinimumDropFraction,
-            QuietnessMultiple = options.PlummetQuietnessMultiple,
-            DropWindowMinutes = options.DropWindowBars * intervalMinutes,
-            BaselineWindowMinutes = options.BaselineWindowBars * intervalMinutes,
-            AveragePriceWindowMinutes = options.AveragePriceWindowBars * intervalMinutes,
-            ReboundWindowMinutes = options.ReboundWindowBars * intervalMinutes,
-            MinimumFallBelowAverageFraction = options.MinimumFallBelowAverageFraction,
-            MaximumReferenceHighAboveAverageFraction = options.MaximumReferenceHighAboveAverageFraction,
-        };
-
-        var events = PlummetDetection.DetectPlummetEvents(candles, intervalMinutes, parameters);
-        return StrategyBacktest.Run(
-            candles, events, options.TradeWindowBars, options.Stake,
-            options.FeeFractionPerSide, options.SpreadAllowanceFraction);
-    }
-
     private static SurgeReport BuildSurgeReport(IReadOnlyList<AnalysisCandle> candles, int intervalMinutes, AnalysisOptions options, AnalysisCandle last)
     {
         // Scaled by the interval for the same reason as the fall windows: a fifteen-minute surge
@@ -253,8 +243,13 @@ public class MarketAnalysisService
             ReversalAtrMultiple = options.PivotReversalAtrMultiple,
         };
 
-        var levels = SupportResistance.BuildLevels(candles, parameters);
-        var encounters = SupportResistance.AnalyzeLevelEncounters(candles, parameters);
+        // Both of these derive the same average true range and the same pivots from the whole
+        // series; computing them here means walking the candles once instead of twice.
+        var atr = Indicators.AverageTrueRange(candles, parameters.AtrPeriod);
+        var pivots = TrendDetection.FindTrendPivots(candles, atr, parameters.AtrPeriod, parameters.ReversalAtrMultiple);
+
+        var levels = SupportResistance.BuildLevels(candles, parameters, atr, pivots);
+        var encounters = SupportResistance.AnalyzeLevelEncounters(candles, parameters, atr, pivots);
         var summaries = SupportResistance.Summarize(encounters);
 
         // The rate at which a level of each maturity held, pooled across kind and trend, is the number
