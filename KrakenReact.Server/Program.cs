@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Hangfire;
 using Hangfire.SqlServer;
+using KrakenReact.Server.Analysis;
 using KrakenReact.Server.Data;
 using KrakenReact.Server.Hubs;
 using KrakenReact.Server.Services;
@@ -76,6 +77,7 @@ builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<AutoOrderService>();
 builder.Services.AddSingleton<DelistedPriceService>();
 builder.Services.AddSingleton<SqlTimeoutDiagnostics>();
+builder.Services.AddSingleton<MarketAnalysisService>();
 
 // Never let an unhandled exception in a background service tear down the whole host.
 // A transient loss of internet connectivity (e.g. the Kraken WebSocket feeds becoming
