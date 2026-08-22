@@ -411,6 +411,61 @@ public static class AutoMigrationService
         {
             Log.Warning(ex, "[AutoMigration] Could not create PriceSnapshots CapturedAt index");
         }
+
+        EnsureDerivedKlineIndexes(db);
+    }
+
+    /// <summary>
+    /// Reshapes the DerivedKlines indexes around the query the app actually runs.
+    /// <para>
+    /// Every read filters on Asset and Interval and orders by OpenTime, but no index led with that
+    /// combination, so the server seeked on (Asset, Interval) and then jumped back to the clustered
+    /// index for the OHLCV columns — measured at fifteen thousand key lookups. Two further indexes on
+    /// Asset alone had recorded no seeks at all while occupying 286 MB and being maintained on every
+    /// insert, which now happens continuously as minute candles arrive.
+    /// </para>
+    /// </summary>
+    private static void EnsureDerivedKlineIndexes(KrakenDbContext db)
+    {
+        try
+        {
+            // Covering: the seek keys in order, and every column a read wants carried along, so the
+            // query is answered from this index alone.
+            db.Database.ExecuteSqlRaw(@"
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DerivedKlines_Asset_Interval_OpenTime' AND object_id = OBJECT_ID('DerivedKlines'))
+                BEGIN
+                    CREATE NONCLUSTERED INDEX [IX_DerivedKlines_Asset_Interval_OpenTime]
+                    ON [DerivedKlines] ([Asset], [Interval], [OpenTime])
+                    INCLUDE ([Open], [High], [Low], [Close], [Volume], [VolumeWeightedAveragePrice], [TradeCount])
+                END
+            ");
+            Log.Information("[AutoMigration] DerivedKlines covering index ensured");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not create DerivedKlines covering index");
+        }
+
+        // Only drop the redundant ones once the replacement is in place, so a failure part-way
+        // through never leaves the table worse indexed than it started.
+        foreach (var name in new[] { "IX_DerivedKlines_Asset", "IXEF_DerivedKlines_Asset_INCLUDE" })
+        {
+            try
+            {
+                db.Database.ExecuteSqlRaw($@"
+                    IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = '{name}' AND object_id = OBJECT_ID('DerivedKlines'))
+                       AND EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DerivedKlines_Asset_Interval_OpenTime' AND object_id = OBJECT_ID('DerivedKlines'))
+                    BEGIN
+                        DROP INDEX [{name}] ON [DerivedKlines]
+                    END
+                ");
+                Log.Information("[AutoMigration] Dropped redundant index {Index}", name);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[AutoMigration] Could not drop redundant index {Index}", name);
+            }
+        }
     }
 
     private static void CreateNewFeatureTables(KrakenDbContext db)
