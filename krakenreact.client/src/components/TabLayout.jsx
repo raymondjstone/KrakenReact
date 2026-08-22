@@ -13,6 +13,8 @@ import ChartPage from '../pages/ChartPage';
 import DelistedPairsPage from '../pages/DelistedPairsPage';
 import SettingsPage, { loadSettings, saveSettings } from '../pages/SettingsPage';
 import PredictionPage from '../pages/PredictionPage';
+import MarketAnalysisPage from '../pages/MarketAnalysisPage';
+import TaxReportPage from '../pages/TaxReportPage';
 import PriceAlertsPage from '../pages/PriceAlertsPage';
 import AnalyticsPage from '../pages/AnalyticsPage';
 import DcaPage from '../pages/DcaPage';
@@ -49,6 +51,8 @@ const fixedTabs = [
   { id: 'predictions', label: 'Predictions' },
   { id: 'pricealerts', label: 'Price Alerts' },
   { id: 'analytics', label: 'Analytics' },
+  { id: 'marketanalysis', label: 'Market Analysis' },
+  { id: 'tax', label: 'Tax Report' },
   { id: 'dca', label: 'DCA' },
   { id: 'profitladder', label: 'Profit Ladder' },
   { id: 'staking', label: 'Staking' },
@@ -243,6 +247,8 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'predictions' && <PredictionPage onSymbolClick={openChart} />}
         {activeTab === 'pricealerts' && <PriceAlertsPage />}
         {activeTab === 'analytics' && <AnalyticsPage />}
+        {activeTab === 'marketanalysis' && <MarketAnalysisPage />}
+        {activeTab === 'tax' && <TaxReportPage />}
         {activeTab === 'dca' && <DcaPage />}
         {activeTab === 'profitladder' && <ProfitLadderPage />}
         {activeTab === 'staking' && <StakingPage />}
