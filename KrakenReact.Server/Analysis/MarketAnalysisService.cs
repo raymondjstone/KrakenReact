@@ -102,10 +102,20 @@ public class MarketAnalysisService
         var surgeReport = BuildSurgeReport(candles, intervalMinutes, options, last);
         var levelReport = BuildLevelReport(candles, options, last);
 
+        // The entry-detector families and the level study both want the pivots of the whole series;
+        // deriving them here from the ATR already computed above means one walk of the candles, not two.
+        var entryPivots = TrendDetection.FindTrendPivots(candles, atr, trendParameters.AtrPeriod, options.PivotReversalAtrMultiple);
+        var entrySignals = EntrySignalBacktest.Run(
+            candles, trendParameters, atr, entryPivots,
+            options.TradeWindowBars,
+            Math.Clamp(options.EntryTargetFraction, 0.005m, 1m),
+            Math.Clamp(options.EntryStopFraction, 0.005m, 1m),
+            options.Stake, options.FeeFractionPerSide, options.SpreadAllowanceFraction);
+
         return new MarketAnalysisReport(
             symbol, interval, "ok", null,
             candles.Count, intervalMinutes, candles[0].OpenTime, last.OpenTime, last.Close,
-            trendReport, plummetReport, surgeReport, levelReport, backtest);
+            trendReport, plummetReport, surgeReport, levelReport, backtest, entrySignals);
     }
 
     /// <summary>
@@ -344,6 +354,12 @@ public sealed record AnalysisOptions
 
     public int MaxEvents { get; init; } = 25;
     public int MaxLevels { get; init; } = 12;
+
+    /// <summary>The profit target an entry-detector trade aims for, as a fraction of the entry price.</summary>
+    public decimal EntryTargetFraction { get; init; } = 0.08m;
+
+    /// <summary>The stop an entry-detector trade sits behind, as a fraction of the entry price.</summary>
+    public decimal EntryStopFraction { get; init; } = 0.06m;
 }
 
 public sealed record AnalysisSymbolOption(string Symbol, string Interval, int CandleCount, DateTime LastOpenTime);
@@ -351,12 +367,13 @@ public sealed record AnalysisSymbolOption(string Symbol, string Interval, int Ca
 public sealed record MarketAnalysisReport(
     string Symbol, string Interval, string Status, string? Message,
     int CandleCount, int IntervalMinutes, DateTime? FirstOpenTime, DateTime? LastOpenTime, decimal LastClose,
-    TrendReport? Trend, PlummetReport? Plummets, SurgeReport? Surges, LevelReport? Levels, BacktestReport? Backtest)
+    TrendReport? Trend, PlummetReport? Plummets, SurgeReport? Surges, LevelReport? Levels, BacktestReport? Backtest,
+    EntrySignalsReport? EntrySignals = null)
 {
     public static MarketAnalysisReport Insufficient(string symbol, string interval, int candleCount, int intervalMinutes) =>
         new(symbol, interval, "insufficient_data",
             $"Only {candleCount} candles stored for this market and interval. At least 60 with a readable spacing are needed.",
-            candleCount, intervalMinutes, null, null, 0m, null, null, null, null, null);
+            candleCount, intervalMinutes, null, null, 0m, null, null, null, null, null, null);
 }
 
 public sealed record TrendReport(

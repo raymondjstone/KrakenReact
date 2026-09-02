@@ -160,6 +160,7 @@ export default function MarketAnalysisPage() {
   const surges = report?.surges;
   const levels = report?.levels;
   const backtest = report?.backtest;
+  const entrySignals = report?.entrySignals;
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
@@ -636,6 +637,93 @@ export default function MarketAnalysisPage() {
                     A resting limit that never filled counts as no trade, not a win. Returns are measured
                     against peak capital actually committed, not the sum of the stakes.
                     None of this is a forecast: it is what the rule would have done, on data it has now seen.
+                  </p>
+                </Card>
+              </div>
+            )}
+
+            {/* ── Entry detectors, full width ─────────────────────────── */}
+            {entrySignals && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <Card
+                  title="Where a base detector would have bought"
+                  subtitle={`each family replayed as non-overlapping trades · +${pct(entrySignals.targetPercent)} target, −${pct(entrySignals.stopPercent)} stop, ${entrySignals.scoredWindowBars} bars max · ${formatMoney(entrySignals.stake, 0)} a trade`}
+                >
+                  {entrySignals.caveat && (
+                    <div style={{
+                      fontSize: 11, lineHeight: 1.55, padding: '7px 10px', borderRadius: 5,
+                      color: 'var(--text-secondary)',
+                      background: 'color-mix(in srgb, var(--yellow) 10%, transparent)',
+                      border: '1px solid color-mix(in srgb, var(--yellow) 35%, var(--border))',
+                    }}>{entrySignals.caveat}</div>
+                  )}
+
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={tableStyle}>
+                      <thead>
+                        <tr>
+                          <th style={{ ...th, textAlign: 'left' }}>Family</th>
+                          <th style={th}>Scored</th>
+                          <th style={th}>Won</th>
+                          <th style={th}>Avg fwd</th>
+                          <th style={th}>Med best</th>
+                          <th style={th}>Med worst</th>
+                          <th style={th}>Net</th>
+                          <th style={th}>On stake</th>
+                          <th style={th}>1st half</th>
+                          <th style={th}>2nd half</th>
+                          <th style={th}>Lag</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {entrySignals.families.map(f => {
+                          const faded = f.scored === 0;
+                          const inconsistent = f.netProfit > 0 && (f.firstHalfNetProfit <= 0 || f.secondHalfNetProfit <= 0);
+                          return (
+                            <tr key={f.name} style={{ borderTop: '1px solid var(--border)', opacity: faded ? 0.5 : 1 }}>
+                              <td style={{ ...td, textAlign: 'left' }} title={f.description}>
+                                <strong style={{ color: 'var(--text-primary)' }}>{f.name}</strong>
+                                {inconsistent && (
+                                  <span style={{ marginLeft: 6, fontSize: 9.5, color: 'var(--yellow)' }} title="All the profit came from one half of the period.">
+                                    one-sided
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ ...td, color: 'var(--text-muted)' }}>{f.scored}/{f.signals}</td>
+                              <td style={td}>{f.scored === 0 ? '—' : pct(f.winRatePercent, 0)}</td>
+                              <td style={{ ...td, color: f.averageForwardReturnPercent >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                {f.scored === 0 ? '—' : signedPct(f.averageForwardReturnPercent)}
+                              </td>
+                              <td style={{ ...td, color: 'var(--text-muted)' }}>{f.scored === 0 ? '—' : signedPct(f.medianMaxFavourablePercent)}</td>
+                              <td style={{ ...td, color: 'var(--text-muted)' }}>{f.scored === 0 ? '—' : signedPct(f.medianMaxAdversePercent)}</td>
+                              <td style={{ ...td, fontWeight: 700, color: f.netProfit > 0 ? 'var(--green)' : f.netProfit < 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                                {f.netProfit >= 0 ? '+' : '-'}{formatMoney(Math.abs(f.netProfit))}
+                              </td>
+                              <td style={{ ...td, color: f.netReturnOnStakePercent >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                {f.scored === 0 ? '—' : signedPct(f.netReturnOnStakePercent)}
+                              </td>
+                              <td style={{ ...td, fontSize: 11, color: f.firstHalfNetProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                {f.scored === 0 ? '—' : formatMoney(f.firstHalfNetProfit, 0)}
+                              </td>
+                              <td style={{ ...td, fontSize: 11, color: f.secondHalfNetProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                {f.scored === 0 ? '—' : formatMoney(f.secondHalfNetProfit, 0)}
+                              </td>
+                              <td style={{ ...td, color: 'var(--text-muted)' }}>{f.scored === 0 ? '—' : `${f.medianConfirmationLagBars}b`}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p style={{ margin: 0, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    Ported from the KrakenPlusPlus base-detector study. Each family names a moment a fall could be
+                    bought — a drawdown, a momentum crossing, a band reclaim, a volume climax, a curve turning, a
+                    swept level — and every one is measured only from candles up to and including the bar it fires
+                    on, so the same reading can be taken live. Trades are replayed one at a time per family: a bar
+                    that gaps through the stop fills at its open, a bar touching both stop and target is read as a
+                    loss, and a signal with no full window ahead of it is left unscored. &quot;Lag&quot; is the median
+                    bars between the low and the confirmation — the distance the entry pays.
                   </p>
                 </Card>
               </div>

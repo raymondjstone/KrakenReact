@@ -93,6 +93,8 @@ public class AnalysisController : ControllerBase
         [FromQuery] decimal feePercentPerSide = 0.26m,
         [FromQuery] decimal spreadAllowancePercent = 0.1m,
         [FromQuery] int tradeWindowBars = 72,
+        [FromQuery] decimal entryTargetPercent = 8m,
+        [FromQuery] decimal entryStopPercent = 6m,
         [FromQuery] bool useZeroLag = false,
         CancellationToken ct = default)
     {
@@ -114,6 +116,8 @@ public class AnalysisController : ControllerBase
                 FeeFractionPerSide = Math.Clamp(feePercentPerSide, 0m, 5m) / 100m,
                 SpreadAllowanceFraction = Math.Clamp(spreadAllowancePercent, 0m, 5m) / 100m,
                 TradeWindowBars = Math.Clamp(tradeWindowBars, 2, 2000),
+                EntryTargetFraction = Math.Clamp(entryTargetPercent, 0.5m, 100m) / 100m,
+                EntryStopFraction = Math.Clamp(entryStopPercent, 0.5m, 100m) / 100m,
                 UseZeroLagMovingAverages = useZeroLag,
             };
             return Ok(_analysis.Analyse(symbol, interval, candles, options));
