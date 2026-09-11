@@ -563,6 +563,50 @@ public static class AutoMigrationService
                     )
                 END
 
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'MicroTradeRules')
+                BEGIN
+                    CREATE TABLE [MicroTradeRules] (
+                        [Id]                 int IDENTITY(1,1) NOT NULL,
+                        [Symbol]             nvarchar(100) NOT NULL DEFAULT '',
+                        [DropPct]            decimal(38,9) NOT NULL DEFAULT 0,
+                        [RisePct]            decimal(38,9) NOT NULL DEFAULT 0,
+                        [BuyOrderTotal]      decimal(38,9) NOT NULL DEFAULT 0,
+                        [MaxOrdersPerWindow] int NOT NULL DEFAULT 2,
+                        [WindowHours]        int NOT NULL DEFAULT 2,
+                        [CooldownHours]      int NOT NULL DEFAULT 1,
+                        [Active]             bit NOT NULL DEFAULT 1,
+                        [DryRun]             bit NOT NULL DEFAULT 0,
+                        [CreatedAt]          datetime2 NOT NULL,
+                        [LastCheckedAt]      datetime2 NULL,
+                        [LastResult]         nvarchar(max) NOT NULL DEFAULT '',
+                        CONSTRAINT [PK_MicroTradeRules] PRIMARY KEY ([Id])
+                    )
+                    CREATE INDEX [IX_MicroTradeRules_Active] ON [MicroTradeRules] ([Active])
+                END
+
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'MicroTradeOrders')
+                BEGIN
+                    CREATE TABLE [MicroTradeOrders] (
+                        [Id]          int IDENTITY(1,1) NOT NULL,
+                        [RuleId]      int NOT NULL,
+                        [Symbol]      nvarchar(100) NOT NULL DEFAULT '',
+                        [BuyOrderId]  nvarchar(100) NULL,
+                        [BuyPrice]    decimal(38,9) NOT NULL DEFAULT 0,
+                        [Quantity]    decimal(38,9) NOT NULL DEFAULT 0,
+                        [SellOrderId] nvarchar(100) NULL,
+                        [SellPrice]   decimal(38,9) NOT NULL DEFAULT 0,
+                        [Status]      nvarchar(20) NOT NULL DEFAULT 'Buying',
+                        [DryRun]      bit NOT NULL DEFAULT 0,
+                        [CreatedAt]   datetime2 NOT NULL,
+                        [BuyFilledAt] datetime2 NULL,
+                        [SoldAt]      datetime2 NULL,
+                        [Note]        nvarchar(max) NOT NULL DEFAULT '',
+                        CONSTRAINT [PK_MicroTradeOrders] PRIMARY KEY ([Id])
+                    )
+                    CREATE INDEX [IX_MicroTradeOrders_RuleId_CreatedAt] ON [MicroTradeOrders] ([RuleId], [CreatedAt])
+                    CREATE INDEX [IX_MicroTradeOrders_Status] ON [MicroTradeOrders] ([Status])
+                END
+
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'MultiTfPredictionResults')
                 BEGIN
                     CREATE TABLE [MultiTfPredictionResults] (
@@ -596,6 +640,19 @@ public static class AutoMigrationService
 
     private static void EnsureNewFeatureColumns(KrakenDbContext db)
     {
+        try
+        {
+            // MicroTradeRules.CooldownHours — minimum gap between orders on the same pair (added after initial release)
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('MicroTradeRules', 'CooldownHours') IS NULL
+                    ALTER TABLE [MicroTradeRules] ADD [CooldownHours] int NOT NULL CONSTRAINT [DF_MicroTradeRules_CooldownHours] DEFAULT 1;
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure MicroTradeRules.CooldownHours column");
+        }
+
         try
         {
             // PriceAlert auto-order columns (added in new feature release)

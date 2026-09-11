@@ -23,6 +23,7 @@ import StakingPage from '../pages/StakingPage';
 import RebalancePage from '../pages/RebalancePage';
 import FundingRatesPage from '../pages/FundingRatesPage';
 import ProfitLadderPage from '../pages/ProfitLadderPage';
+import MicroTradePage from '../pages/MicroTradePage';
 import RealizedPnLPage from '../pages/RealizedPnLPage';
 import ScheduledOrdersPage from '../pages/ScheduledOrdersPage';
 import AutoRepricePage from '../pages/AutoRepricePage';
@@ -55,6 +56,7 @@ const fixedTabs = [
   { id: 'tax', label: 'Tax Report' },
   { id: 'dca', label: 'DCA' },
   { id: 'profitladder', label: 'Profit Ladder' },
+  { id: 'microtrade', label: 'Micro Trading' },
   { id: 'staking', label: 'Staking' },
   { id: 'rebalance', label: 'Rebalance' },
   { id: 'funding', label: 'Funding Rates' },
@@ -251,6 +253,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'tax' && <TaxReportPage />}
         {activeTab === 'dca' && <DcaPage />}
         {activeTab === 'profitladder' && <ProfitLadderPage />}
+        {activeTab === 'microtrade' && <MicroTradePage />}
         {activeTab === 'staking' && <StakingPage />}
         {activeTab === 'rebalance' && <RebalancePage />}
         {activeTab === 'funding' && <FundingRatesPage />}

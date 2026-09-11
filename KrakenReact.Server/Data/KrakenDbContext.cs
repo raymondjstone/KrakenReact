@@ -29,6 +29,8 @@ public class KrakenDbContext : DbContext
     public DbSet<BracketOrder> BracketOrders { get; set; }
     public DbSet<AutoRepriceRule> AutoRepriceRules { get; set; }
     public DbSet<PriceSnapshot> PriceSnapshots { get; set; }
+    public DbSet<MicroTradeRule> MicroTradeRules { get; set; }
+    public DbSet<MicroTradeOrder> MicroTradeOrders { get; set; }
 
     public KrakenDbContext(DbContextOptions<KrakenDbContext> options) : base(options) { }
 
@@ -198,6 +200,23 @@ public class KrakenDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Price).HasColumnType("decimal(38,9)");
             entity.HasIndex(e => new { e.Symbol, e.CapturedAt });
+        });
+        modelBuilder.Entity<MicroTradeRule>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.DropPct).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.RisePct).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.BuyOrderTotal).HasColumnType("decimal(38,9)");
+            entity.HasIndex(e => e.Active);
+        });
+        modelBuilder.Entity<MicroTradeOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.BuyPrice).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.Quantity).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.SellPrice).HasColumnType("decimal(38,9)");
+            entity.HasIndex(e => new { e.RuleId, e.CreatedAt });
+            entity.HasIndex(e => e.Status);
         });
     }
 }

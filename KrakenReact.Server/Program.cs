@@ -68,6 +68,7 @@ builder.Services.AddTransient<BracketMonitorJob>();
 builder.Services.AddTransient<SmartRepriceJob>();
 builder.Services.AddTransient<MinuteCandleJob>();
 builder.Services.AddTransient<HangfireCleanupJob>();
+builder.Services.AddTransient<MicroTradeJob>();
 
 // Data access
 builder.Services.AddSingleton<DbMethods>();
@@ -306,6 +307,14 @@ app.Lifetime.ApplicationStarted.Register(() =>
             "*/5 * * * *",
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
         Log.Information("[Hangfire] Smart reprice job registered (every 5 minutes)");
+
+        // Micro trading — 24h-drop entry detector and buy/sell fill monitor, every 15 minutes
+        manager.AddOrUpdate<MicroTradeJob>(
+            "micro-trade",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/15 * * * *",
+            new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Log.Information("[Hangfire] Micro trade job registered (every 15 minutes)");
 
         // Restore rebalance schedule jobs from DB
         var rebalSchedules = db.RebalanceSchedules.Where(s => s.Active).ToList();
