@@ -2,6 +2,7 @@ using KrakenReact.Server.Data;
 using KrakenReact.Server.DTOs;
 using KrakenReact.Server.Hubs;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using System.Text;
 using System.Text.Json;
 using Websocket.Client;
@@ -15,6 +16,7 @@ public class KrakenWebSocketV2Service : BackgroundService
     private readonly TradingStateService _state;
     private readonly KrakenRestService _kraken;
     private readonly DbMethods _db;
+    private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly IHubContext<TradingHub> _hub;
     private readonly NotificationService _notify;
     private readonly ILogger<KrakenWebSocketV2Service> _logger;
@@ -23,11 +25,12 @@ public class KrakenWebSocketV2Service : BackgroundService
     private string? _wsToken;
     private DateTime _lastTradeSync = DateTime.MinValue;
 
-    public KrakenWebSocketV2Service(TradingStateService state, KrakenRestService kraken, DbMethods db, IHubContext<TradingHub> hub, NotificationService notify, ILogger<KrakenWebSocketV2Service> logger)
+    public KrakenWebSocketV2Service(TradingStateService state, KrakenRestService kraken, DbMethods db, IDbContextFactory<KrakenDbContext> dbFactory, IHubContext<TradingHub> hub, NotificationService notify, ILogger<KrakenWebSocketV2Service> logger)
     {
         _state = state;
         _kraken = kraken;
         _db = db;
+        _dbFactory = dbFactory;
         _hub = hub;
         _notify = notify;
         _logger = logger;
@@ -178,6 +181,10 @@ public class KrakenWebSocketV2Service : BackgroundService
         await SubscribePublicTicker(stoppingToken);
     }
 
+    /// <summary>Re-sends the ticker subscription, picking up any newly added/activated micro trade
+    /// rule pair immediately instead of waiting for the next reconnect.</summary>
+    public Task ResubscribeTickerAsync(CancellationToken ct = default) => SubscribePublicTicker(ct);
+
     private async Task SubscribePublicTicker(CancellationToken ct = default)
     {
         static string ToV2Pair(string wsPair)
@@ -199,6 +206,28 @@ public class KrakenWebSocketV2Service : BackgroundService
             var v2 = ToV2Pair(dp);
             if (!pairs.Contains(v2, StringComparer.OrdinalIgnoreCase))
                 pairs.Add(v2);
+        }
+
+        // Micro trading needs the real Kraken change_pct for its buy trigger and never falls back
+        // to an approximation (a kline-derived guess once triggered a buy at an apparent -1% when
+        // the true 24h change was +2%). A rule's pair must therefore always get a live ticker
+        // subscription, even if its quote asset or spelling falls outside the BaseCurrencies/
+        // DefaultPairs filters above — otherwise the rule sits forever reporting "no data" for a
+        // pair that was never actually subscribed, which looks like the data went missing.
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var ruleSymbols = await db.MicroTradeRules.Where(r => r.Active).Select(r => r.Symbol).Distinct().ToListAsync(ct);
+            foreach (var rs in ruleSymbols)
+            {
+                var v2 = ToV2Pair(rs);
+                if (!pairs.Contains(v2, StringComparer.OrdinalIgnoreCase))
+                    pairs.Add(v2);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[WS V2 Public] Could not load micro trade pairs for ticker subscription");
         }
 
         foreach (var batch in pairs.Chunk(100))

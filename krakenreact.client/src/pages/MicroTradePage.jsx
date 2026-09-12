@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 
 const emptyRule = {
-  symbol: '', dropPct: 5, risePct: 10, buyOrderTotal: 25,
-  maxOrdersPerWindow: 2, windowHours: 2, cooldownHours: 1, active: true, dryRun: true,
+  symbol: '', dropPct: 5, risePct: 10, buyOrderTotal: 100,
+  maxOrdersPerWindow: 2, windowHours: 2, cooldownHours: 1,
+  stopLossEnabled: false, stopLossPct: 95,
+  active: true, dryRun: true,
 };
 
 const STATUS_COLORS = {
@@ -48,6 +50,7 @@ export default function MicroTradePage() {
     if (form.maxOrdersPerWindow < 1) return flash('Max orders per window must be at least 1');
     if (form.windowHours < 1) return flash('Window hours must be at least 1');
     if (form.cooldownHours < 0) return flash('Cooldown hours cannot be negative');
+    if (form.stopLossEnabled && (form.stopLossPct <= 0 || form.stopLossPct >= 100)) return flash('Stop loss % must be between 0 and 100');
     setSaving(true);
     try {
       if (form.id) {
@@ -135,6 +138,26 @@ export default function MicroTradePage() {
               <input type="number" min={0} step={1} value={form.cooldownHours} onChange={e => setForm(f => ({ ...f, cooldownHours: parseInt(e.target.value) || 0 }))} style={inputStyle} />
             </div>
           </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Stop Loss</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={!!form.stopLossEnabled} onChange={e => setForm(f => ({ ...f, stopLossEnabled: e.target.checked }))} />
+              Reprice the sell down if the price keeps falling
+            </label>
+            {form.stopLossEnabled && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 24 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Trigger at:</span>
+                <input type="number" min={1} max={99.9} step={0.1} value={form.stopLossPct}
+                  onChange={e => setForm(f => ({ ...f, stopLossPct: parseFloat(e.target.value) || 0 }))}
+                  style={{ ...inputStyle, width: 90 }} />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  % of buy price ({(100 - (form.stopLossPct || 0)).toFixed(1)}% drop from buy) — cancels the resting sell and re-places it near the current price
+                </span>
+              </div>
+            )}
+          </div>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer' }}>
               <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
@@ -197,6 +220,12 @@ export default function MicroTradePage() {
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Cooldown</div>
               <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{rule.cooldownHours}h between orders</div>
             </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Stop loss</div>
+              <div style={{ fontSize: 13, color: rule.stopLossEnabled ? 'var(--red, #ef4444)' : 'var(--text-muted)' }}>
+                {rule.stopLossEnabled ? `${rule.stopLossPct}% of buy` : 'Off'}
+              </div>
+            </div>
             {rule.lastCheckedAt && (
               <div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Last checked</div>
@@ -244,7 +273,10 @@ export default function MicroTradePage() {
                 {orders.map(o => (
                   <tr key={o.id} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={{ padding: '8px 12px', color: 'var(--text-primary)', fontWeight: 600 }}>{o.symbol}</td>
-                    <td style={{ padding: '8px 12px', color: STATUS_COLORS[o.status] || 'var(--text-muted)', fontWeight: 600 }}>{o.status}</td>
+                    <td style={{ padding: '8px 12px', color: STATUS_COLORS[o.status] || 'var(--text-muted)', fontWeight: 600 }}>
+                      {o.status}
+                      {o.stopLossTriggered && <span title="Stop loss repriced this sell" style={{ marginLeft: 6, fontSize: 10, color: 'var(--red, #ef4444)' }}>SL</span>}
+                    </td>
                     <td style={{ padding: '8px 12px', color: 'var(--text-primary)' }}>{o.quantity}</td>
                     <td style={{ padding: '8px 12px', color: 'var(--text-primary)' }}>{o.buyPrice}</td>
                     <td style={{ padding: '8px 12px', color: 'var(--text-primary)' }}>{o.sellPrice > 0 ? o.sellPrice : '—'}</td>
@@ -269,6 +301,7 @@ export default function MicroTradePage() {
         When that buy fills, a limit sell is automatically placed at the fill price plus the <strong>Rise %</strong>.
         The <strong>rate limit</strong> caps how many buy orders a rule can place within its rolling window, so a pair that keeps dropping doesn't get bought over and over.
         The <strong>cooldown</strong> is an additional guard: no order is placed on a pair — from any rule — within that many hours of the last order on the same pair.
+        <strong>Stop loss</strong> is optional and off by default: when on, if the price falls to or below the configured % of the buy price while the profit-target sell is still resting, that sell is cancelled and re-placed near the current (lower) price so it can actually fill and cut the loss, instead of sitting forever above a market that kept dropping.
         Turn on <strong>Dry run</strong> to see what a rule would do — via Pushover notifications and the order log — without placing real orders.
       </div>
     </div>

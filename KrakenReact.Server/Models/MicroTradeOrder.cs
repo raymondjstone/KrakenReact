@@ -13,6 +13,8 @@ public class MicroTradeOrder
     /// <summary>Buying|Selling|Sold|Cancelled|DryRun</summary>
     public string Status { get; set; } = "Buying";
     public bool DryRun { get; set; }
+    /// <summary>True once the resting sell has been repriced down by the stop-loss check (fires at most once per order)</summary>
+    public bool StopLossTriggered { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? BuyFilledAt { get; set; }
     public DateTime? SoldAt { get; set; }

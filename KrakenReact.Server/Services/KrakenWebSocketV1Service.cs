@@ -286,18 +286,23 @@ public class KrakenWebSocketV1Service : BackgroundService
             };
 
             priceItem.AddKline(kline);
-            priceItem.TickerData = new TickerDataItem
-            {
-                BestAskPrice = tickerData.a?.FirstOrDefault() ?? 0,
-                BestBidPrice = tickerData.b?.FirstOrDefault() ?? 0,
-                LastTradePrice = tickerData.c?.FirstOrDefault() ?? 0,
-                OpenPrice = tickerData.o?.FirstOrDefault() ?? 0,
-                HighPrice = tickerData.h?.FirstOrDefault() ?? 0,
-                LowPrice = tickerData.l?.FirstOrDefault() ?? 0,
-                Volume = tickerData.v?.FirstOrDefault() ?? 0,
-                VolumeWeightedAvgPrice = tickerData.p?.FirstOrDefault() ?? 0,
-                TradeCount = tickerData.t?.FirstOrDefault() ?? 0
-            };
+
+            // Mutate the existing TickerData in place rather than replacing it outright — this V1
+            // feed has no 24h-change fields of its own (Kraken's legacy ticker payload doesn't carry
+            // a rolling change_pct), so a full `= new TickerDataItem { ... }` here was silently
+            // wiping out Change24h/ChangePct24h the moment they'd been set by the V2 ticker feed.
+            // Both sockets run concurrently, and V1 ticks far more often, so the reset happened
+            // within minutes of the value appearing — which looked like the data "disappearing".
+            priceItem.TickerData ??= new TickerDataItem();
+            priceItem.TickerData.BestAskPrice = tickerData.a?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.BestBidPrice = tickerData.b?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.LastTradePrice = tickerData.c?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.OpenPrice = tickerData.o?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.HighPrice = tickerData.h?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.LowPrice = tickerData.l?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.Volume = tickerData.v?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.VolumeWeightedAvgPrice = tickerData.p?.FirstOrDefault() ?? 0;
+            priceItem.TickerData.TradeCount = tickerData.t?.FirstOrDefault() ?? 0;
 
             // Push to SignalR clients
             var latest = priceItem.LatestKline;

@@ -13,11 +13,26 @@ public class MicroTradeController : ControllerBase
 {
     private readonly KrakenDbContext _db;
     private readonly KrakenRestService _kraken;
+    private readonly KrakenWebSocketV2Service _wsV2;
+    private readonly ILogger<MicroTradeController> _logger;
 
-    public MicroTradeController(KrakenDbContext db, KrakenRestService kraken)
+    public MicroTradeController(KrakenDbContext db, KrakenRestService kraken, KrakenWebSocketV2Service wsV2, ILogger<MicroTradeController> logger)
     {
         _db = db;
         _kraken = kraken;
+        _wsV2 = wsV2;
+        _logger = logger;
+    }
+
+    /// <summary>Fire-and-forget resubscribe so a new/edited rule's pair gets a live ticker
+    /// immediately instead of waiting for the next websocket reconnect.</summary>
+    private void ResubscribeTicker()
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await _wsV2.ResubscribeTickerAsync(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "[MicroTrade] Ticker resubscribe failed"); }
+        });
     }
 
     [HttpGet]
@@ -34,6 +49,7 @@ public class MicroTradeController : ControllerBase
         if (rule.MaxOrdersPerWindow < 1) return BadRequest(new { message = "Max orders per window must be at least 1" });
         if (rule.WindowHours < 1) return BadRequest(new { message = "Window hours must be at least 1" });
         if (rule.CooldownHours < 0) return BadRequest(new { message = "Cooldown hours cannot be negative" });
+        if (rule.StopLossEnabled && rule.StopLossPct is <= 0 or >= 100) return BadRequest(new { message = "Stop loss % must be between 0 and 100" });
 
         rule.Id = 0;
         rule.CreatedAt = DateTime.UtcNow;
@@ -41,6 +57,7 @@ public class MicroTradeController : ControllerBase
         rule.LastResult = "";
         _db.MicroTradeRules.Add(rule);
         await _db.SaveChangesAsync();
+        ResubscribeTicker();
         return Ok(rule);
     }
 
@@ -54,6 +71,7 @@ public class MicroTradeController : ControllerBase
         if (updated.MaxOrdersPerWindow < 1) return BadRequest(new { message = "Max orders per window must be at least 1" });
         if (updated.WindowHours < 1) return BadRequest(new { message = "Window hours must be at least 1" });
         if (updated.CooldownHours < 0) return BadRequest(new { message = "Cooldown hours cannot be negative" });
+        if (updated.StopLossEnabled && updated.StopLossPct is <= 0 or >= 100) return BadRequest(new { message = "Stop loss % must be between 0 and 100" });
 
         var rule = await _db.MicroTradeRules.FindAsync(id);
         if (rule == null) return NotFound();
@@ -64,9 +82,12 @@ public class MicroTradeController : ControllerBase
         rule.MaxOrdersPerWindow = updated.MaxOrdersPerWindow;
         rule.WindowHours = updated.WindowHours;
         rule.CooldownHours = updated.CooldownHours;
+        rule.StopLossEnabled = updated.StopLossEnabled;
+        rule.StopLossPct = updated.StopLossPct;
         rule.Active = updated.Active;
         rule.DryRun = updated.DryRun;
         await _db.SaveChangesAsync();
+        ResubscribeTicker();
         return Ok(rule);
     }
 

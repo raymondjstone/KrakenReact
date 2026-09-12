@@ -67,25 +67,62 @@ public class MicroTradeJob
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>
+    /// Resolves a rule's symbol to the PriceDataItem holding live ticker data for it.
+    /// <para>
+    /// Different collectors key the same pair under different spellings — e.g. the V2 ticker feed
+    /// may create "BTC/USD" while the REST kline loader later creates a separate "XBT/USD" entry
+    /// for the same market. TradingStateService.ResolveSymbolKey short-circuits on an exact match,
+    /// so once a second entry spelled exactly like the rule's own Symbol exists, it wins even though
+    /// it has no TickerData — which looks like the 24h change "disappearing" after having worked.
+    /// If the directly-resolved entry has no ticker data, fall back to scanning for a sibling entry
+    /// with the same normalized base/quote that does.
+    /// </para>
+    /// </summary>
+    private PriceDataItem? ResolvePriceItem(string symbol)
+    {
+        var key = _state.ResolveSymbolKey(symbol);
+        _state.Prices.TryGetValue(key, out var priceItem);
+        if (priceItem?.TickerData?.ChangePct24h != null) return priceItem;
+
+        var parts = symbol.Split('/');
+        if (parts.Length == 2)
+        {
+            var normBase = TradingStateService.NormalizeAsset(parts[0]);
+            var normCcy = TradingStateService.NormalizeAsset(parts[1]);
+            var sibling = _state.Prices.Values.FirstOrDefault(p =>
+                p.TickerData?.ChangePct24h != null &&
+                TradingStateService.NormalizeAsset(p.Base) == normBase &&
+                TradingStateService.NormalizeAsset(p.CCY) == normCcy);
+            if (sibling != null) return sibling;
+        }
+
+        return priceItem;
+    }
+
     private async Task CheckRuleAsync(KrakenDbContext db, MicroTradeRule rule, CancellationToken ct)
     {
         rule.LastCheckedAt = DateTime.UtcNow;
 
-        var key = _state.ResolveSymbolKey(rule.Symbol);
-        if (!_state.Prices.TryGetValue(key, out var priceItem))
+        var priceItem = ResolvePriceItem(rule.Symbol);
+        if (priceItem == null)
         {
             rule.LastResult = "No price data available";
             return;
         }
 
-        // 24h change: prefer V2 WebSocket real-time data (change_pct from Kraken), fall back to kline
-        // history — mirrors PricesController.GetAll, whose fallback is why the dashboard shows a
-        // change % here even when the live ticker hasn't pushed an update yet.
-        decimal changePct;
-        if (priceItem.TickerData?.ChangePct24h.HasValue == true)
-            changePct = priceItem.TickerData.ChangePct24h.Value;
-        else
-            changePct = priceItem.CloseMovementDiff(1);
+        // 24h change: only trust the live V2 WebSocket ticker (Kraken's own change_pct) for the
+        // trade trigger. PricesController falls back to a kline-derived approximation for display,
+        // but that approximation compares whatever klines happen to be cached (often a daily candle
+        // open, not a true rolling 24h) and can be off by several percent from the real figure —
+        // it once triggered a buy at an apparent -1% when the true 24h change was +2%. A trading
+        // decision needs the real number or none at all, so no fallback here.
+        var changePct = priceItem.TickerData?.ChangePct24h;
+        if (changePct == null)
+        {
+            rule.LastResult = "No live 24h change data yet — waiting for ticker";
+            return;
+        }
 
         if (changePct > -rule.DropPct)
         {
@@ -146,7 +183,11 @@ public class MicroTradeJob
             return;
         }
 
-        var dryRun = rule.DryRun || _state.DryRunJobs;
+        // Deliberately not OR'd with the global DryRunJobs setting — this rule's own Dry run
+        // checkbox is the only control shown on this screen, so it must be the sole authority.
+        // Falling back to the global flag meant unchecking it here did nothing while the
+        // Settings-page toggle (used for DCA etc.) was still on, which looked like a bug.
+        var dryRun = rule.DryRun;
         var order = new MicroTradeOrder
         {
             RuleId = rule.Id,
@@ -196,6 +237,9 @@ public class MicroTradeJob
 
         if (pending.Count == 0) return;
 
+        var ruleIds = pending.Select(o => o.RuleId).Distinct().ToList();
+        var rules = await db.MicroTradeRules.Where(r => ruleIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, ct);
+
         foreach (var order in pending)
         {
             try
@@ -203,7 +247,10 @@ public class MicroTradeJob
                 if (order.Status == "Buying")
                     await HandleBuying(db, order, ct);
                 else
-                    await HandleSelling(order);
+                {
+                    rules.TryGetValue(order.RuleId, out var rule);
+                    await HandleSelling(order, rule);
+                }
             }
             catch (Exception ex)
             {
@@ -245,9 +292,49 @@ public class MicroTradeJob
         }
     }
 
-    private async Task HandleSelling(MicroTradeOrder order)
+    private async Task HandleSelling(MicroTradeOrder order, MicroTradeRule? rule)
     {
         if (string.IsNullOrEmpty(order.SellOrderId)) return;
+
+        // Stop loss — if enabled and not already triggered for this order, reprice the resting
+        // profit-target sell down to near the current (lower) price so it can actually fill,
+        // instead of sitting forever above a market that has since dropped further.
+        if (rule is { StopLossEnabled: true } && !order.StopLossTriggered && _state.Orders.ContainsKey(order.SellOrderId))
+        {
+            var stopPrice = order.BuyPrice * (rule.StopLossPct / 100m);
+            var priceItem = ResolvePriceItem(order.Symbol);
+            var currentPrice = priceItem?.BestKline?.Close ?? 0;
+
+            if (currentPrice > 0 && currentPrice <= stopPrice)
+            {
+                var cancelled = await _kraken.CancelOrderAsync(order.SellOrderId);
+                if (cancelled)
+                {
+                    var newSellPrice = Math.Round(currentPrice * 1.001m, 8);
+                    var clientId = $"micro-sl-{order.Id}-{DateTime.UtcNow:HHmmss}";
+                    var result = await _kraken.PlaceOrderAsync(order.Symbol, OrderSide.Sell, OrderType.Limit, order.Quantity, newSellPrice, clientId);
+                    order.StopLossTriggered = true;
+
+                    if (result.Success)
+                    {
+                        var oldSellPrice = order.SellPrice;
+                        order.SellOrderId = result.Data?.OrderIds?.FirstOrDefault();
+                        order.SellPrice = newSellPrice;
+                        order.Note = $"Stop-loss: price fell to {currentPrice:F4} (<= {stopPrice:F4}) — repriced sell {oldSellPrice:F4} -> {newSellPrice:F4}";
+                        _logger.LogInformation("[MicroTrade] Stop-loss repriced sell for order {Id}: {Note}", order.Id, order.Note);
+                        await _notify.Pushover($"Micro Trade Stop-Loss — {order.Symbol}", order.Note);
+                    }
+                    else
+                    {
+                        order.Note = $"Stop-loss: sell cancelled but reprice failed: {result.Error?.Message}";
+                        _logger.LogError("[MicroTrade] Stop-loss reprice failed for order {Id}: {Error}", order.Id, result.Error?.Message);
+                        await _notify.Pushover($"Micro Trade Stop-Loss Failed — {order.Symbol}", order.Note);
+                    }
+                }
+                return; // don't also check for a fill this same pass
+            }
+        }
+
         if (_state.Orders.ContainsKey(order.SellOrderId)) return; // still open
 
         order.Status = "Sold";

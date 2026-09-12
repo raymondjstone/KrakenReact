@@ -207,6 +207,7 @@ public class KrakenDbContext : DbContext
             entity.Property(e => e.DropPct).HasColumnType("decimal(38,9)");
             entity.Property(e => e.RisePct).HasColumnType("decimal(38,9)");
             entity.Property(e => e.BuyOrderTotal).HasColumnType("decimal(38,9)");
+            entity.Property(e => e.StopLossPct).HasColumnType("decimal(38,9)");
             entity.HasIndex(e => e.Active);
         });
         modelBuilder.Entity<MicroTradeOrder>(entity =>

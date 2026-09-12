@@ -96,7 +96,8 @@ builder.Services.Configure<HostOptions>(opts =>
 // Background services
 builder.Services.AddHostedService<BackgroundTaskService>();
 builder.Services.AddHostedService<KrakenWebSocketV1Service>();
-builder.Services.AddHostedService<KrakenWebSocketV2Service>();
+builder.Services.AddSingleton<KrakenWebSocketV2Service>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<KrakenWebSocketV2Service>());
 builder.Services.AddHostedService<PriceSnapshotService>();
 
 // Controllers + SignalR

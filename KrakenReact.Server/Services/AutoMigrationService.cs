@@ -574,6 +574,8 @@ public static class AutoMigrationService
                         [MaxOrdersPerWindow] int NOT NULL DEFAULT 2,
                         [WindowHours]        int NOT NULL DEFAULT 2,
                         [CooldownHours]      int NOT NULL DEFAULT 1,
+                        [StopLossEnabled]    bit NOT NULL DEFAULT 0,
+                        [StopLossPct]        decimal(38,9) NOT NULL DEFAULT 95,
                         [Active]             bit NOT NULL DEFAULT 1,
                         [DryRun]             bit NOT NULL DEFAULT 0,
                         [CreatedAt]          datetime2 NOT NULL,
@@ -597,6 +599,7 @@ public static class AutoMigrationService
                         [SellPrice]   decimal(38,9) NOT NULL DEFAULT 0,
                         [Status]      nvarchar(20) NOT NULL DEFAULT 'Buying',
                         [DryRun]      bit NOT NULL DEFAULT 0,
+                        [StopLossTriggered] bit NOT NULL DEFAULT 0,
                         [CreatedAt]   datetime2 NOT NULL,
                         [BuyFilledAt] datetime2 NULL,
                         [SoldAt]      datetime2 NULL,
@@ -651,6 +654,23 @@ public static class AutoMigrationService
         catch (Exception ex)
         {
             Log.Warning(ex, "[AutoMigration] Could not ensure MicroTradeRules.CooldownHours column");
+        }
+
+        try
+        {
+            // MicroTradeRules stop-loss columns (added after initial release)
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('MicroTradeRules', 'StopLossEnabled') IS NULL
+                    ALTER TABLE [MicroTradeRules] ADD [StopLossEnabled] bit NOT NULL CONSTRAINT [DF_MicroTradeRules_StopLossEnabled] DEFAULT 0;
+                IF COL_LENGTH('MicroTradeRules', 'StopLossPct') IS NULL
+                    ALTER TABLE [MicroTradeRules] ADD [StopLossPct] decimal(38,9) NOT NULL CONSTRAINT [DF_MicroTradeRules_StopLossPct] DEFAULT 95;
+                IF COL_LENGTH('MicroTradeOrders', 'StopLossTriggered') IS NULL
+                    ALTER TABLE [MicroTradeOrders] ADD [StopLossTriggered] bit NOT NULL CONSTRAINT [DF_MicroTradeOrders_StopLossTriggered] DEFAULT 0;
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure MicroTrade stop-loss columns");
         }
 
         try
