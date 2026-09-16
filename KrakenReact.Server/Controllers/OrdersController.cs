@@ -39,7 +39,7 @@ public class OrdersController : ControllerBase
     public async Task<ActionResult> Create([FromBody] CreateOrderRequest req)
     {
         var side = req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell;
-        var clientOrderId = $"UI{DateTime.Now:yyyyMMddHHmmss}";
+        var clientOrderId = KrakenReact.Server.Utils.ClientOrderId.GenerateWithPrefix("UI");
         var result = await _kraken.PlaceOrderAsync(req.Symbol.Replace("/", ""), side, OrderType.Limit, req.Quantity, req.Price, clientOrderId);
         if (!result.Success)
             return BadRequest(new { error = result.Error?.Message ?? "Failed to place order" });
@@ -189,7 +189,7 @@ public class OrdersController : ControllerBase
         for (int i = 0; i < req.Count; i++)
         {
             var price = Math.Round(req.StartPrice + priceStep * i, 2);
-            var clientId = $"ladder{DateTime.Now:yyyyMMddHHmmss}{i}";
+        var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"ladder{i}-");
             var result = await _kraken.PlaceOrderAsync(symbol, side, OrderType.Limit, qtyEach, price, clientId);
             if (result.Success)
                 placed.AddRange(result.Data.OrderIds ?? []);
@@ -222,7 +222,7 @@ public class OrdersController : ControllerBase
         if (sym == null)
             return BadRequest(new { error = $"Cannot find a USD trading pair for {asset}" });
 
-        var clientId = $"CL{DateTime.Now:yyyyMMddHHmmss}";
+        var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("CL");
         var result = await _kraken.PlaceOrderAsync(sym, Kraken.Net.Enums.OrderSide.Sell, Kraken.Net.Enums.OrderType.Market, bal.Available, 0, clientId);
 
         if (!result.Success)

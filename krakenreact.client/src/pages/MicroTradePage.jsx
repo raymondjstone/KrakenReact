@@ -2,11 +2,30 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 
 const emptyRule = {
-  symbol: '', dropPct: 5, risePct: 10, buyOrderTotal: 100,
+  symbol: '', dropPct: 5, dropIntervalHours: 24, risePct: 10, buyOrderTotal: 100,
   maxOrdersPerWindow: 2, windowHours: 2, cooldownHours: 1,
   stopLossEnabled: false, stopLossPct: 95,
   active: true, dryRun: true,
 };
+
+const DROP_INTERVALS = [1, 4, 6, 12, 24];
+const AMBER = '#f59e0b';
+
+// Non-selected columns are just informational: green if rising, red if falling.
+function signColor(changePct) {
+  if (changePct == null) return 'var(--text-muted)';
+  return changePct >= 0 ? 'var(--green)' : 'var(--red, #ef4444)';
+}
+
+// The selected column is the rule's actual trigger, so how close it is to firing matters more than
+// its raw sign: amber inside 2 points of the trigger line, red inside 0.5 (including past it).
+function proximityColor(changePct, dropPct) {
+  if (changePct == null) return 'var(--text-muted)';
+  const distanceToTrigger = changePct + dropPct; // <= 0 means already at/past the trigger
+  if (distanceToTrigger <= 0.5) return 'var(--red, #ef4444)';
+  if (distanceToTrigger <= 2) return AMBER;
+  return signColor(changePct);
+}
 
 const STATUS_COLORS = {
   Buying: 'var(--text-muted)',
@@ -19,22 +38,65 @@ const STATUS_COLORS = {
 export default function MicroTradePage() {
   const [rules, setRules] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [changes, setChanges] = useState({}); // { SYMBOL: { "1": pct, "4": pct, "6": pct, "12": pct, "24": pct } }
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const [emergencyStop, setEmergencyStop] = useState(false);
+  const [stopToggling, setStopToggling] = useState(false);
   const flashTimerRef = useRef(null);
 
-  const fetchAll = useCallback(() => {
-    api.get('/microtrade').then(r => { setRules(r.data || []); setLoading(false); }).catch(() => setLoading(false));
-    api.get('/microtrade/orders').then(r => setOrders(r.data || [])).catch(() => {});
+  const fetchEmergencyStop = useCallback(() => {
+    api.get('/microtrade/emergency-stop').then(r => setEmergencyStop(!!r.data?.enabled)).catch(() => {});
   }, []);
+
+  const toggleEmergencyStop = async () => {
+    const next = !emergencyStop;
+    if (next && !window.confirm('Activate emergency stop? No new Micro Trade buys will be placed until this is turned off. Existing open positions will still be monitored and sold as normal.')) return;
+    setStopToggling(true);
+    try {
+      const r = await api.post('/microtrade/emergency-stop', { enabled: next });
+      setEmergencyStop(!!r.data?.enabled);
+      flash(next ? 'Emergency stop ACTIVE — no new buys will be placed' : 'Emergency stop deactivated');
+    } catch {
+      flash('Failed to update emergency stop');
+    } finally {
+      setStopToggling(false);
+    }
+  };
+
+  // One call per unique symbol across all rules; the server caches the underlying kline fetch, so
+  // polling this every 15s doesn't multiply into a Kraken REST call per poll.
+  const fetchChanges = useCallback((ruleList) => {
+    const symbols = [...new Set(ruleList.map(r => r.symbol).filter(Boolean))];
+    Promise.all(symbols.map(sym =>
+      api.get(`/prices/${encodeURIComponent(sym)}/changes`).then(r => [sym.toUpperCase(), r.data]).catch(() => [sym.toUpperCase(), null])
+    )).then(pairs => {
+      setChanges(prev => {
+        const next = { ...prev };
+        pairs.forEach(([key, val]) => { if (val) next[key] = val; });
+        return next;
+      });
+    });
+  }, []);
+
+  const fetchAll = useCallback(() => {
+    api.get('/microtrade').then(r => {
+      const list = r.data || [];
+      setRules(list);
+      setLoading(false);
+      fetchChanges(list);
+    }).catch(() => setLoading(false));
+    api.get('/microtrade/orders').then(r => setOrders(r.data || [])).catch(() => {});
+  }, [fetchChanges]);
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 15000);
+    fetchEmergencyStop();
+    const interval = setInterval(() => { fetchAll(); fetchEmergencyStop(); }, 15000);
     return () => clearInterval(interval);
-  }, [fetchAll]);
+  }, [fetchAll, fetchEmergencyStop]);
 
   const flash = (msg) => {
     setStatusMsg(msg);
@@ -98,8 +160,30 @@ export default function MicroTradePage() {
         <button onClick={() => setForm({ ...emptyRule })} style={{ padding: '6px 16px', background: 'var(--green)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
           + New Rule
         </button>
+        <button
+          onClick={toggleEmergencyStop}
+          disabled={stopToggling}
+          title={emergencyStop ? 'Click to deactivate — buys will resume' : 'Click to stop all new Micro Trade buys immediately'}
+          style={{
+            padding: '6px 16px', borderRadius: 4, cursor: 'pointer', fontWeight: 700, fontSize: 13,
+            border: `1px solid ${emergencyStop ? 'var(--red, #ef4444)' : 'var(--border)'}`,
+            background: emergencyStop ? 'var(--red, #ef4444)' : 'var(--bg-primary)',
+            color: emergencyStop ? 'white' : 'var(--text-primary)',
+          }}
+        >
+          {emergencyStop ? '■ EMERGENCY STOP ACTIVE — click to resume' : 'Emergency Stop'}
+        </button>
         {statusMsg && <span style={{ fontSize: 13, color: statusMsg.includes('failed') || statusMsg.includes('required') || statusMsg.includes('must') || statusMsg.includes('positive') ? 'var(--red)' : 'var(--green)' }}>{statusMsg}</span>}
       </div>
+
+      {emergencyStop && (
+        <div style={{
+          background: 'var(--red, #ef4444)', color: 'white', borderRadius: 8, padding: '10px 16px',
+          marginBottom: 20, fontSize: 13, fontWeight: 600,
+        }}>
+          Emergency stop is active — no new Micro Trade buy orders will be placed on any rule. Existing open positions are still being monitored and sold as normal.
+        </div>
+      )}
 
       {/* Form */}
       {form && (
@@ -118,8 +202,13 @@ export default function MicroTradePage() {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
             <div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Buy when 24h drop &gt;</div>
-              <input type="number" min={0.1} step={0.1} value={form.dropPct} onChange={e => setForm(f => ({ ...f, dropPct: parseFloat(e.target.value) || 0 }))} style={inputStyle} />
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Buy when drop over &gt;</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input type="number" min={0.1} step={0.1} value={form.dropPct} onChange={e => setForm(f => ({ ...f, dropPct: parseFloat(e.target.value) || 0 }))} style={inputStyle} />
+                <select value={form.dropIntervalHours} onChange={e => setForm(f => ({ ...f, dropIntervalHours: parseInt(e.target.value) }))} style={{ ...inputStyle, width: 80, flexShrink: 0 }}>
+                  {DROP_INTERVALS.map(h => <option key={h} value={h}>{h}h</option>)}
+                </select>
+              </div>
             </div>
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Sell target above buy +</div>
@@ -185,7 +274,10 @@ export default function MicroTradePage() {
         </div>
       )}
 
-      {rules.map(rule => (
+      {rules.map(rule => {
+        const symbolChanges = changes[rule.symbol?.toUpperCase()];
+        const intervalHours = rule.dropIntervalHours || 24;
+        return (
         <div key={rule.id} style={{
           background: 'var(--bg-card)', border: '1px solid var(--border)',
           borderRadius: 8, padding: '14px 18px', marginBottom: 12,
@@ -201,8 +293,26 @@ export default function MicroTradePage() {
 
           <div style={{ flex: 1, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Buy trigger</div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--red, #ef4444)' }}>24h drop &gt; {rule.dropPct}%</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Price change</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {DROP_INTERVALS.map(h => {
+                  const val = symbolChanges?.[h];
+                  const isSelected = h === intervalHours;
+                  const color = isSelected ? proximityColor(val, rule.dropPct) : signColor(val);
+                  return (
+                    <div key={h} title={isSelected ? `Trigger: buy when the ${h}h change is <= -${rule.dropPct}%` : `${h}h change`} style={{
+                      padding: '2px 7px', borderRadius: 4, textAlign: 'center', minWidth: 52,
+                      border: isSelected ? `1px solid ${color}` : '1px solid transparent',
+                    }}>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{h}h</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color }}>
+                        {val == null ? '—' : `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`}
+                      </div>
+                      {isSelected && <div style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>&le; -{rule.dropPct}%</div>}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sell target</div>
@@ -248,7 +358,8 @@ export default function MicroTradePage() {
             <button onClick={() => handleDelete(rule.id)} style={{ padding: '4px 10px', fontSize: 12, border: '1px solid var(--red, #ef4444)', borderRadius: 4, cursor: 'pointer', background: 'transparent', color: 'var(--red, #ef4444)' }}>Delete</button>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {/* Order history */}
       <div style={{ marginTop: 28 }}>
@@ -296,13 +407,16 @@ export default function MicroTradePage() {
 
       <div style={{ marginTop: 24, padding: 16, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7 }}>
         <strong style={{ color: 'var(--text-primary)' }}>How Micro Trading Works</strong><br />
-        Every 15 minutes each active rule checks its pair's 24-hour price change. If the price has dropped more than the configured <strong>Drop %</strong>,
+Each rule shows the pair's price change over every window (1h/4h/6h/12h/24h) so you can see the trend at a glance; the 24h figure comes straight from Kraken's live ticker, the shorter windows are approximated from hourly candles. The boxed column is the one the rule actually triggers on — it turns <span style={{ color: AMBER }}>amber</span> within 2 points of the trigger and <span style={{ color: 'var(--red, #ef4444)' }}>red</span> within 0.5. Every 15 minutes each active rule checks that window; if the price has dropped more than the configured <strong>Drop %</strong>,
         a limit buy is placed for the <strong>Buy order total</strong> at 0.1% below the current price.
         When that buy fills, a limit sell is automatically placed at the fill price plus the <strong>Rise %</strong>.
         The <strong>rate limit</strong> caps how many buy orders a rule can place within its rolling window, so a pair that keeps dropping doesn't get bought over and over.
         The <strong>cooldown</strong> is an additional guard: no order is placed on a pair — from any rule — within that many hours of the last order on the same pair.
         <strong>Stop loss</strong> is optional and off by default: when on, if the price falls to or below the configured % of the buy price while the profit-target sell is still resting, that sell is cancelled and re-placed near the current (lower) price so it can actually fill and cut the loss, instead of sitting forever above a market that kept dropping.
         Turn on <strong>Dry run</strong> to see what a rule would do — via Pushover notifications and the order log — without placing real orders.
+        The <strong>Emergency Stop</strong> button blocks every rule from placing new buy orders immediately; existing open positions keep being monitored and sold as normal until you turn it off.
+        Before placing a real buy, the balance actually available in that pair's currency is checked so an order isn't placed against funds that are already tied up elsewhere.
+        When a buy fills, the automatic sell is placed for the exact quantity Kraken says was bought; if Kraken rejects that (a rounding mismatch) the quantity is trimmed slightly and retried a few times.
       </div>
     </div>
   );

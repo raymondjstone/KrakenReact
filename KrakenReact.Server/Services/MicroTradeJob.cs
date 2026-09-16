@@ -1,5 +1,7 @@
+using CryptoExchange.Net.Objects;
 using Hangfire;
 using Kraken.Net.Enums;
+using Kraken.Net.Objects.Models;
 using KrakenReact.Server.Data;
 using KrakenReact.Server.Models;
 using Microsoft.EntityFrameworkCore;
@@ -7,37 +9,67 @@ using Microsoft.EntityFrameworkCore;
 namespace KrakenReact.Server.Services;
 
 /// <summary>
-/// Micro trading: watches 24h price change on configured pairs and, on a large enough drop,
-/// places a small limit buy just under market. Once that buy fills, an automatic limit sell
-/// is placed above the fill price. A per-rule rolling window caps how many buys can fire in
-/// a given period to avoid over-trading a fast-dropping pair.
+/// Micro trading: watches the price change over each rule's configured interval (1h/4h/6h/12h/24h)
+/// on configured pairs and, on a large enough drop, places a small limit buy just under market.
+/// Once that buy fills, an automatic limit sell is placed above the fill price. A per-rule rolling
+/// window caps how many buys can fire in a given period to avoid over-trading a fast-dropping pair.
 /// </summary>
 public class MicroTradeJob
 {
+    /// <summary>AppSettings key for the Micro Trading emergency stop toggle — see MicroTradeController.</summary>
+    public const string EmergencyStopKey = "MicroTradeEmergencyStop";
+
+    /// <summary>Least-significant-digit shrink retries a sell goes through before giving up if Kraken
+    /// rejects it (typically a rounding mismatch between what we think we hold and Kraken's ledger).</summary>
+    private const int MaxSellAttempts = 5;
+
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly KrakenRestService _kraken;
     private readonly TradingStateService _state;
+    private readonly PriceChangeService _priceChange;
     private readonly NotificationService _notify;
     private readonly ILogger<MicroTradeJob> _logger;
+    private readonly SqlTimeoutDiagnostics _sqlDiag;
 
-    public MicroTradeJob(IDbContextFactory<KrakenDbContext> dbFactory, KrakenRestService kraken, TradingStateService state, NotificationService notify, ILogger<MicroTradeJob> logger)
+    public MicroTradeJob(IDbContextFactory<KrakenDbContext> dbFactory, KrakenRestService kraken, TradingStateService state, PriceChangeService priceChange, NotificationService notify, ILogger<MicroTradeJob> logger, SqlTimeoutDiagnostics sqlDiag)
     {
         _dbFactory = dbFactory;
         _kraken = kraken;
         _state = state;
+        _priceChange = priceChange;
         _notify = notify;
         _logger = logger;
+        _sqlDiag = sqlDiag;
     }
 
     [AutomaticRetry(Attempts = 0)]
+    [DisableConcurrentExecution(timeoutInSeconds: 10)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
+        if (_sqlDiag.RecentTimeout(SqlTimeoutDiagnostics.RecentTimeoutBackoff))
+        {
+            _logger.LogWarning("[MicroTrade] Skipping tick — recent SQL timeout elsewhere, backing off");
+            return;
+        }
+
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
-        var rules = await db.MicroTradeRules.Where(r => r.Active).ToListAsync(ct);
+        List<MicroTradeRule> rules;
+        try
+        {
+            rules = await db.MicroTradeRules.Where(r => r.Active).ToListAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _sqlDiag.CaptureIfTimeout("MicroTradeJob.LoadRules", ex);
+            throw;
+        }
+
+        var emergencyStop = await IsEmergencyStopActiveAsync(db, ct);
+
         foreach (var rule in rules)
         {
-            try { await CheckRuleAsync(db, rule, ct); }
+            try { await CheckRuleAsync(db, rule, emergencyStop, ct); }
             catch (Exception ex)
             {
                 rule.LastResult = $"Exception: {ex.Message}";
@@ -56,7 +88,9 @@ public class MicroTradeJob
         var rule = await db.MicroTradeRules.FindAsync([ruleId], ct);
         if (rule == null) return;
 
-        try { await CheckRuleAsync(db, rule, ct); }
+        var emergencyStop = await IsEmergencyStopActiveAsync(db, ct);
+
+        try { await CheckRuleAsync(db, rule, emergencyStop, ct); }
         catch (Exception ex)
         {
             rule.LastResult = $"Exception: {ex.Message}";
@@ -65,6 +99,12 @@ public class MicroTradeJob
 
         await MonitorFillsAsync(db, ct);
         await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task<bool> IsEmergencyStopActiveAsync(KrakenDbContext db, CancellationToken ct)
+    {
+        var setting = await db.AppSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == EmergencyStopKey, ct);
+        return setting != null && string.Equals(setting.Value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -100,7 +140,7 @@ public class MicroTradeJob
         return priceItem;
     }
 
-    private async Task CheckRuleAsync(KrakenDbContext db, MicroTradeRule rule, CancellationToken ct)
+    private async Task CheckRuleAsync(KrakenDbContext db, MicroTradeRule rule, bool emergencyStopActive, CancellationToken ct)
     {
         rule.LastCheckedAt = DateTime.UtcNow;
 
@@ -111,22 +151,19 @@ public class MicroTradeJob
             return;
         }
 
-        // 24h change: only trust the live V2 WebSocket ticker (Kraken's own change_pct) for the
-        // trade trigger. PricesController falls back to a kline-derived approximation for display,
-        // but that approximation compares whatever klines happen to be cached (often a daily candle
-        // open, not a true rolling 24h) and can be off by several percent from the real figure —
-        // it once triggered a buy at an apparent -1% when the true 24h change was +2%. A trading
-        // decision needs the real number or none at all, so no fallback here.
-        var changePct = priceItem.TickerData?.ChangePct24h;
+        var intervalHours = rule.DropIntervalHours <= 0 ? 24 : rule.DropIntervalHours;
+        var changePct = await _priceChange.GetChangeAsync(rule.Symbol, intervalHours, priceItem);
         if (changePct == null)
         {
-            rule.LastResult = "No live 24h change data yet — waiting for ticker";
+            rule.LastResult = intervalHours == 24
+                ? "No live 24h change data yet — waiting for ticker"
+                : $"No {intervalHours}h change data yet — insufficient kline history";
             return;
         }
 
         if (changePct > -rule.DropPct)
         {
-            rule.LastResult = $"No trigger — 24h change {changePct:F2}% (need <= -{rule.DropPct}%)";
+            rule.LastResult = $"No trigger — {intervalHours}h change {changePct:F2}% (need <= -{rule.DropPct}%)";
             return;
         }
 
@@ -183,11 +220,39 @@ public class MicroTradeJob
             return;
         }
 
+        // Emergency stop — blocks all new buy creation (including dry-run simulated ones) until
+        // switched off from the screen. Existing open positions are still monitored/sold as normal;
+        // this only stops new buys from being created.
+        if (emergencyStopActive)
+        {
+            rule.LastResult = $"Skip — EMERGENCY STOP active (would buy {qty} @ {buyPrice})";
+            return;
+        }
+
         // Deliberately not OR'd with the global DryRunJobs setting — this rule's own Dry run
         // checkbox is the only control shown on this screen, so it must be the sole authority.
         // Falling back to the global flag meant unchecking it here did nothing while the
         // Settings-page toggle (used for DCA etc.) was still on, which looked like a bug.
         var dryRun = rule.DryRun;
+
+        // Confirm the quote currency actually has enough available balance right now before
+        // placing a real order — a rule can trigger off a price move faster than the balance
+        // cache updates, or funds can already be tied up in other open orders.
+        if (!dryRun)
+        {
+            var quoteCcy = _state.NormalizeOrderSymbolQuote(rule.Symbol);
+            var orderCost = qty * buyPrice;
+            _state.Balances.TryGetValue(quoteCcy, out var quoteBalance);
+            var available = quoteBalance?.Available ?? 0m;
+            if (quoteBalance == null || available < orderCost)
+            {
+                rule.LastResult = $"Skip — insufficient {quoteCcy} balance ({available:F2} available, need {orderCost:F2})";
+                _logger.LogWarning("[MicroTrade] Skip buy for rule {Id} — insufficient {Ccy} balance ({Available} < {Cost})",
+                    rule.Id, quoteCcy, available, orderCost);
+                return;
+            }
+        }
+
         var order = new MicroTradeOrder
         {
             RuleId = rule.Id,
@@ -206,12 +271,12 @@ public class MicroTradeJob
             rule.LastResult = order.Note;
             _logger.LogInformation("[MicroTrade] DRY RUN — would place buy: {Symbol} {Qty} @ {Price}", rule.Symbol, qty, buyPrice);
             await _notify.Pushover($"DRY RUN — Micro Trade {rule.Symbol}",
-                $"24h {changePct:F2}% — would buy {qty} @ {buyPrice:F4} (${rule.BuyOrderTotal})");
+                $"{intervalHours}h {changePct:F2}% — would buy {qty} @ {buyPrice:F4} (${rule.BuyOrderTotal})");
             return;
         }
 
-        var clientId = $"micro-{rule.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
-        var result = await _kraken.PlaceOrderAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, buyPrice, clientId);
+        // For micro trading, do not set clientOrderId so Kraken assigns one — avoids cl_ord_id validation errors
+        var result = await _kraken.PlaceOrderAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, buyPrice, null);
 
         if (result.Success)
         {
@@ -220,7 +285,7 @@ public class MicroTradeJob
             db.MicroTradeOrders.Add(order);
             rule.LastResult = $"OK — buy {qty} @ {buyPrice} (orderId={order.BuyOrderId})";
             await _notify.Pushover($"Micro Trade Buy — {rule.Symbol}",
-                $"24h {changePct:F2}% drop — bought {qty} @ {buyPrice:F4} (${rule.BuyOrderTotal})");
+                $"{intervalHours}h {changePct:F2}% drop — bought {qty} @ {buyPrice:F4} (${rule.BuyOrderTotal})");
         }
         else
         {
@@ -259,12 +324,21 @@ public class MicroTradeJob
         }
     }
 
+    /// <summary>
+    /// True if the order is still resting on the book. The websocket execution feed updates an
+    /// order's Status in place as it fills/closes but never removes it from _state.Orders (that
+    /// only happens ~30 days later via the REST reconciliation in BackgroundTaskService), so a
+    /// plain ContainsKey check would treat a filled/closed order as still open forever.
+    /// </summary>
+    private bool IsOrderStillOpen(string orderId) =>
+        _state.Orders.TryGetValue(orderId, out var o) && TradingStateService.IsOpenOrderStatus(o.Status);
+
     private async Task HandleBuying(KrakenDbContext db, MicroTradeOrder order, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(order.BuyOrderId)) return;
         // Give the websocket order feed time to catch up before assuming a fill
         if ((DateTime.UtcNow - order.CreatedAt).TotalSeconds < 60) return;
-        if (_state.Orders.ContainsKey(order.BuyOrderId)) return; // still open
+        if (IsOrderStillOpen(order.BuyOrderId)) return; // still open
 
         order.BuyFilledAt = DateTime.UtcNow;
 
@@ -272,24 +346,76 @@ public class MicroTradeJob
         var risePct = rule?.RisePct ?? 10m;
         var sellPrice = Math.Round(order.BuyPrice * (1 + risePct / 100m), 8);
 
-        var clientId = $"micro-sell-{order.Id}-{DateTime.UtcNow:HHmmss}";
-        var sellResult = await _kraken.PlaceOrderAsync(order.Symbol, OrderSide.Sell, OrderType.Limit, order.Quantity, sellPrice, clientId);
+        // Sell exactly what the buy actually filled, not what we expected to get — Kraken's own
+        // fill quantity (vol_exec) is authoritative; the websocket order feed never populates this,
+        // so we look it up directly. Fall back to the originally requested quantity only if that
+        // lookup fails outright.
+        var filledOrder = await _kraken.GetOrderInfoAsync(order.BuyOrderId!);
+        var actualQty = filledOrder is { QuantityFilled: > 0 } ? filledOrder.QuantityFilled : order.Quantity;
+        order.Quantity = actualQty;
+
+        var (sellResult, soldQty) = await PlaceSellWithRetryAsync(order.Symbol, actualQty, sellPrice);
 
         if (sellResult.Success)
         {
+            order.Quantity = soldQty;
             order.SellOrderId = sellResult.Data?.OrderIds?.FirstOrDefault();
             order.SellPrice = sellPrice;
             order.Status = "Selling";
-            _logger.LogInformation("[MicroTrade] Buy filled for order {Id} — placed sell @ {Price}", order.Id, sellPrice);
+            if (soldQty != actualQty)
+                order.Note = $"Sell quantity reduced {actualQty} -> {soldQty} after Kraken rejected the exact fill quantity";
+            _logger.LogInformation("[MicroTrade] Buy filled for order {Id} — placed sell of {Qty} @ {Price}", order.Id, soldQty, sellPrice);
             await _notify.Pushover($"Micro Trade Filled — {order.Symbol}",
-                $"Buy filled @ {order.BuyPrice:F4}. Sell placed @ {sellPrice:F4}");
+                $"Buy filled @ {order.BuyPrice:F4}. Sell of {soldQty} placed @ {sellPrice:F4}");
         }
         else
         {
-            order.Note = $"Sell placement failed: {sellResult.Error?.Message}";
+            order.Note = $"Sell placement failed after {MaxSellAttempts} attempts (last tried qty {soldQty}): {sellResult.Error?.Message}";
             _logger.LogError("[MicroTrade] Failed to place sell for order {Id}: {Error}", order.Id, sellResult.Error?.Message);
             await _notify.Pushover($"Micro Trade Sell Failed — {order.Symbol}", order.Note);
         }
+    }
+
+    /// <summary>
+    /// Places a sell for exactly <paramref name="quantity"/>. If Kraken rejects it — typically a
+    /// rounding/precision mismatch between what we believe we hold and Kraken's own ledger — the
+    /// quantity is shrunk slightly and the placement retried. Removing the least significant decimal
+    /// digit normally clears it; if the digit is already zero (so truncating doesn't change the
+    /// value), that digit is reduced by one unit instead.
+    /// </summary>
+    private async Task<(WebCallResult<KrakenPlacedOrder> Result, decimal Quantity)> PlaceSellWithRetryAsync(string symbol, decimal quantity, decimal price)
+    {
+        var qty = quantity;
+        WebCallResult<KrakenPlacedOrder> result;
+        for (var attempt = 1; ; attempt++)
+        {
+            // Let Kraken assign clientOrderId for auto-sells to avoid id format issues
+            result = await _kraken.PlaceOrderAsync(symbol, OrderSide.Sell, OrderType.Limit, qty, price, null);
+            if (result.Success || attempt >= MaxSellAttempts) return (result, qty);
+
+            var shrunk = ShrinkQuantitySlightly(qty);
+            _logger.LogWarning("[MicroTrade] Sell of {Qty} {Symbol} failed ({Error}) — retrying with {Shrunk}",
+                qty, symbol, result.Error?.Message, shrunk);
+            qty = shrunk;
+        }
+    }
+
+    /// <summary>Trims the smallest unit off a quantity: drops the least significant decimal digit,
+    /// or if that digit is already 0 (so dropping it wouldn't change the value), subtracts one unit
+    /// at the current precision instead.</summary>
+    private static decimal ShrinkQuantitySlightly(decimal qty)
+    {
+        var str = qty.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var dotIdx = str.IndexOf('.');
+        if (dotIdx < 0) return qty - 1;
+
+        var decimals = str.Length - dotIdx - 1;
+        var factor = (decimal)Math.Pow(10, decimals - 1);
+        var truncated = Math.Floor(qty * factor) / factor;
+        if (truncated < qty) return truncated;
+
+        var step = 1m / (decimal)Math.Pow(10, decimals);
+        return qty - step;
     }
 
     private async Task HandleSelling(MicroTradeOrder order, MicroTradeRule? rule)
@@ -299,7 +425,7 @@ public class MicroTradeJob
         // Stop loss — if enabled and not already triggered for this order, reprice the resting
         // profit-target sell down to near the current (lower) price so it can actually fill,
         // instead of sitting forever above a market that has since dropped further.
-        if (rule is { StopLossEnabled: true } && !order.StopLossTriggered && _state.Orders.ContainsKey(order.SellOrderId))
+        if (rule is { StopLossEnabled: true } && !order.StopLossTriggered && IsOrderStillOpen(order.SellOrderId))
         {
             var stopPrice = order.BuyPrice * (rule.StopLossPct / 100m);
             var priceItem = ResolvePriceItem(order.Symbol);
@@ -311,16 +437,18 @@ public class MicroTradeJob
                 if (cancelled)
                 {
                     var newSellPrice = Math.Round(currentPrice * 1.001m, 8);
-                    var clientId = $"micro-sl-{order.Id}-{DateTime.UtcNow:HHmmss}";
-                    var result = await _kraken.PlaceOrderAsync(order.Symbol, OrderSide.Sell, OrderType.Limit, order.Quantity, newSellPrice, clientId);
+                    var (result, soldQty) = await PlaceSellWithRetryAsync(order.Symbol, order.Quantity, newSellPrice);
                     order.StopLossTriggered = true;
 
                     if (result.Success)
                     {
                         var oldSellPrice = order.SellPrice;
+                        var oldQty = order.Quantity;
+                        order.Quantity = soldQty;
                         order.SellOrderId = result.Data?.OrderIds?.FirstOrDefault();
                         order.SellPrice = newSellPrice;
-                        order.Note = $"Stop-loss: price fell to {currentPrice:F4} (<= {stopPrice:F4}) — repriced sell {oldSellPrice:F4} -> {newSellPrice:F4}";
+                        order.Note = $"Stop-loss: price fell to {currentPrice:F4} (<= {stopPrice:F4}) — repriced sell {oldSellPrice:F4} -> {newSellPrice:F4}"
+                            + (soldQty != oldQty ? $" (qty reduced {oldQty} -> {soldQty} after rejection)" : "");
                         _logger.LogInformation("[MicroTrade] Stop-loss repriced sell for order {Id}: {Note}", order.Id, order.Note);
                         await _notify.Pushover($"Micro Trade Stop-Loss — {order.Symbol}", order.Note);
                     }
@@ -335,7 +463,7 @@ public class MicroTradeJob
             }
         }
 
-        if (_state.Orders.ContainsKey(order.SellOrderId)) return; // still open
+        if (IsOrderStillOpen(order.SellOrderId)) return; // still open
 
         order.Status = "Sold";
         order.SoldAt = DateTime.UtcNow;

@@ -16,6 +16,8 @@ public class MicroTradeController : ControllerBase
     private readonly KrakenWebSocketV2Service _wsV2;
     private readonly ILogger<MicroTradeController> _logger;
 
+    private static readonly HashSet<int> ValidDropIntervals = new() { 1, 4, 6, 12, 24 };
+
     public MicroTradeController(KrakenDbContext db, KrakenRestService kraken, KrakenWebSocketV2Service wsV2, ILogger<MicroTradeController> logger)
     {
         _db = db;
@@ -39,10 +41,42 @@ public class MicroTradeController : ControllerBase
     public async Task<IActionResult> GetAll() =>
         Ok(await _db.MicroTradeRules.AsNoTracking().OrderBy(r => r.Id).ToListAsync());
 
+    [HttpGet("emergency-stop")]
+    public async Task<IActionResult> GetEmergencyStop()
+    {
+        var setting = await _db.AppSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == MicroTradeJob.EmergencyStopKey);
+        var enabled = setting != null && string.Equals(setting.Value, "true", StringComparison.OrdinalIgnoreCase);
+        return Ok(new { enabled });
+    }
+
+    [HttpPost("emergency-stop")]
+    public async Task<IActionResult> SetEmergencyStop([FromBody] EmergencyStopRequest request)
+    {
+        var setting = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == MicroTradeJob.EmergencyStopKey);
+        var value = request.Enabled.ToString().ToLowerInvariant();
+        if (setting == null)
+        {
+            _db.AppSettings.Add(new AppSettings
+            {
+                Key = MicroTradeJob.EmergencyStopKey,
+                Value = value,
+                Description = "Blocks all new Micro Trade buy orders when enabled; existing open positions are still monitored and sold as normal",
+            });
+        }
+        else
+        {
+            setting.Value = value;
+        }
+        await _db.SaveChangesAsync();
+        _logger.LogWarning("[MicroTrade] Emergency stop {State}", request.Enabled ? "ENABLED" : "disabled");
+        return Ok(new { enabled = request.Enabled });
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] MicroTradeRule rule)
     {
         if (string.IsNullOrWhiteSpace(rule.Symbol)) return BadRequest(new { message = "Symbol is required" });
+        if (!ValidDropIntervals.Contains(rule.DropIntervalHours)) return BadRequest(new { message = "Drop interval must be one of 1, 4, 6, 12, 24 hours" });
         if (rule.DropPct <= 0) return BadRequest(new { message = "Drop % must be positive" });
         if (rule.RisePct <= 0) return BadRequest(new { message = "Rise % must be positive" });
         if (rule.BuyOrderTotal <= 0) return BadRequest(new { message = "Buy order total must be positive" });
@@ -65,6 +99,7 @@ public class MicroTradeController : ControllerBase
     public async Task<IActionResult> Update(int id, [FromBody] MicroTradeRule updated)
     {
         if (string.IsNullOrWhiteSpace(updated.Symbol)) return BadRequest(new { message = "Symbol is required" });
+        if (!ValidDropIntervals.Contains(updated.DropIntervalHours)) return BadRequest(new { message = "Drop interval must be one of 1, 4, 6, 12, 24 hours" });
         if (updated.DropPct <= 0) return BadRequest(new { message = "Drop % must be positive" });
         if (updated.RisePct <= 0) return BadRequest(new { message = "Rise % must be positive" });
         if (updated.BuyOrderTotal <= 0) return BadRequest(new { message = "Buy order total must be positive" });
@@ -77,6 +112,7 @@ public class MicroTradeController : ControllerBase
         if (rule == null) return NotFound();
         rule.Symbol = updated.Symbol;
         rule.DropPct = updated.DropPct;
+        rule.DropIntervalHours = updated.DropIntervalHours;
         rule.RisePct = updated.RisePct;
         rule.BuyOrderTotal = updated.BuyOrderTotal;
         rule.MaxOrdersPerWindow = updated.MaxOrdersPerWindow;
@@ -133,4 +169,9 @@ public class MicroTradeController : ControllerBase
         await _db.SaveChangesAsync();
         return Ok(order);
     }
+}
+
+public class EmergencyStopRequest
+{
+    public bool Enabled { get; set; }
 }

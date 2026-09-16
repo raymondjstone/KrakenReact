@@ -194,7 +194,7 @@ public class DcaJob
                 return;
             }
 
-            var clientId = $"dca-{ruleId}-{DateTime.UtcNow:yyyyMMddHHmm}";
+            var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"dca-{ruleId}-");
             var result = await _kraken.PlaceOrderAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, price, clientId);
 
             if (result.Success)

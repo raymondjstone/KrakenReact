@@ -17,6 +17,7 @@ public class SmartRepriceJob
     private readonly NotificationService _notify;
     private readonly IHubContext<TradingHub> _hub;
     private readonly ILogger<SmartRepriceJob> _logger;
+    private readonly SqlTimeoutDiagnostics _sqlDiag;
 
     public SmartRepriceJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
@@ -24,7 +25,8 @@ public class SmartRepriceJob
         TradingStateService state,
         NotificationService notify,
         IHubContext<TradingHub> hub,
-        ILogger<SmartRepriceJob> logger)
+        ILogger<SmartRepriceJob> logger,
+        SqlTimeoutDiagnostics sqlDiag)
     {
         _dbFactory = dbFactory;
         _kraken = kraken;
@@ -32,13 +34,30 @@ public class SmartRepriceJob
         _notify = notify;
         _hub = hub;
         _logger = logger;
+        _sqlDiag = sqlDiag;
     }
 
     [AutomaticRetry(Attempts = 0)]
+    [DisableConcurrentExecution(timeoutInSeconds: 10)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
+        if (_sqlDiag.RecentTimeout(SqlTimeoutDiagnostics.RecentTimeoutBackoff))
+        {
+            _logger.LogWarning("[SmartReprice] Skipping tick — recent SQL timeout elsewhere, backing off");
+            return;
+        }
+
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
-        var rules = await db.AutoRepriceRules.Where(r => r.Active).ToListAsync(ct);
+        List<AutoRepriceRule> rules;
+        try
+        {
+            rules = await db.AutoRepriceRules.Where(r => r.Active).ToListAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _sqlDiag.CaptureIfTimeout("SmartRepriceJob.LoadRules", ex);
+            throw;
+        }
         if (rules.Count == 0) return;
 
         foreach (var rule in rules)

@@ -21,8 +21,8 @@ public class PricesControllerTests
         var state = new TradingStateService(delisted);
         var logger = new Mock<ILogger<PricesController>>();
 
-        // PricesController.GetAll() only uses _state — pass nulls for kraken/db since they're only used by klines endpoint
-        var controller = new PricesController(state, null!, null!, logger.Object);
+        // PricesController.GetAll() only uses _state — pass nulls for kraken/priceChange/db since they're only used by klines endpoint
+        var controller = new PricesController(state, null!, null!, null!, logger.Object);
         return (controller, state);
     }
 

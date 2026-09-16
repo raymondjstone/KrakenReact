@@ -4,8 +4,10 @@ public class MicroTradeRule
 {
     public int Id { get; set; }
     public string Symbol { get; set; } = "";
-    /// <summary>Trigger a buy when the 24h change is at or below -DropPct (e.g. 5 = trigger at -5%)</summary>
+    /// <summary>Trigger a buy when the change over DropIntervalHours is at or below -DropPct (e.g. 5 = trigger at -5%)</summary>
     public decimal DropPct { get; set; }
+    /// <summary>Window the drop is measured over, in hours. 24 uses Kraken's own live 24h change_pct (precise); 1/4/6/12 are approximated from hourly klines.</summary>
+    public int DropIntervalHours { get; set; } = 24;
     /// <summary>% above the buy fill price at which the automatic sell is placed</summary>
     public decimal RisePct { get; set; }
     /// <summary>Quote-currency amount to spend per buy order</summary>

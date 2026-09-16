@@ -75,7 +75,7 @@ public class RebalanceJob
                 var price = row.CurrentPrice;
                 if (price <= 0) continue;
 
-                var clientId = $"REB{scheduleId}_{row.Asset}_{DateTime.Now:yyyyMMddHHmm}";
+                var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"REB{scheduleId}_{row.Asset}_");
                 var result = await _kraken.PlaceOrderAsync(sym, side, OrderType.Limit, qty, price, clientId);
                 if (!result.Success)
                     errors.Add($"{row.Asset}: {result.Error?.Message}");

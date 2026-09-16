@@ -76,6 +76,7 @@ builder.Services.AddSingleton<DbMethods>();
 // Services
 builder.Services.AddSingleton<TradingStateService>();
 builder.Services.AddSingleton<KrakenRestService>();
+builder.Services.AddSingleton<PriceChangeService>();
 builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<AutoOrderService>();
 builder.Services.AddSingleton<DelistedPriceService>();
@@ -261,13 +262,16 @@ app.Lifetime.ApplicationStarted.Register(() =>
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
         Log.Information("[Hangfire] Stale prediction refresh scheduled every {Mins} min (cron: {Cron})", autoRefreshMins, autoRefreshCron);
 
-        // Schedule stop-loss/take-profit check every 5 minutes
+        // Schedule stop-loss/take-profit check every 5 minutes.
+        // Offset to :02/:07/:12... — ScheduledOrderJob and BracketMonitorJob already claim every
+        // :00, so landing here instead of "*/5" spreads the DB load across the minute rather than
+        // stacking four jobs onto the same tick.
         manager.AddOrUpdate<StopLossTakeProfitJob>(
             "stop-loss-take-profit",
             job => job.ExecuteAsync(CancellationToken.None),
-            "*/5 * * * *",
+            "2-59/5 * * * *",
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
-        Log.Information("[Hangfire] Stop-loss/take-profit check scheduled every 5 minutes");
+        Log.Information("[Hangfire] Stop-loss/take-profit check scheduled every 5 minutes (offset :02)");
 
         // Schedule daily drawdown alert at 08:00 local time
         manager.AddOrUpdate<DrawdownAlertJob>(
@@ -301,21 +305,23 @@ app.Lifetime.ApplicationStarted.Register(() =>
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
         Log.Information("[Hangfire] Bracket monitor job registered (every minute)");
 
-        // Smart limit order repricing — check every 5 minutes
+        // Smart limit order repricing — check every 5 minutes, offset to :03/:08/:13... (see
+        // stop-loss-take-profit above for why these no longer sit on "*/5")
         manager.AddOrUpdate<SmartRepriceJob>(
             "smart-reprice",
             job => job.ExecuteAsync(CancellationToken.None),
-            "*/5 * * * *",
+            "3-59/5 * * * *",
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
-        Log.Information("[Hangfire] Smart reprice job registered (every 5 minutes)");
+        Log.Information("[Hangfire] Smart reprice job registered (every 5 minutes, offset :03)");
 
-        // Micro trading — 24h-drop entry detector and buy/sell fill monitor, every 15 minutes
+        // Micro trading — 24h-drop entry detector and buy/sell fill monitor, every 15 minutes,
+        // offset to :07/:22/:37/:52 so it never lands on the same tick as the 5-minute jobs above
         manager.AddOrUpdate<MicroTradeJob>(
             "micro-trade",
             job => job.ExecuteAsync(CancellationToken.None),
-            "*/15 * * * *",
+            "7-59/15 * * * *",
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
-        Log.Information("[Hangfire] Micro trade job registered (every 15 minutes)");
+        Log.Information("[Hangfire] Micro trade job registered (every 15 minutes, offset :07)");
 
         // Restore rebalance schedule jobs from DB
         var rebalSchedules = db.RebalanceSchedules.Where(s => s.Active).ToList();

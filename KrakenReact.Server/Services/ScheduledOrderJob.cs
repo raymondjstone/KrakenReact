@@ -32,8 +32,15 @@ public class ScheduledOrderJob
     }
 
     [AutomaticRetry(Attempts = 0)]
+    [DisableConcurrentExecution(timeoutInSeconds: 10)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
+        if (_sqlDiag.RecentTimeout(SqlTimeoutDiagnostics.RecentTimeoutBackoff))
+        {
+            _logger.LogWarning("[ScheduledOrders] Skipping tick — recent SQL timeout elsewhere, backing off");
+            return;
+        }
+
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         // Short timeout for the polling read — every-minute job; if it can't get in fast,
         // fail fast and free the pool slot rather than holding it for 120s.
@@ -76,7 +83,7 @@ public class ScheduledOrderJob
                     ? OrderSide.Sell
                     : OrderSide.Buy;
 
-                var clientId = $"sched-{order.Id}-{DateTime.UtcNow:yyyyMMddHHmm}";
+                var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"sched-{order.Id}-");
                 var result = await _kraken.PlaceOrderAsync(
                     order.Symbol, side, OrderType.Limit,
                     order.Quantity, order.Price, clientId);

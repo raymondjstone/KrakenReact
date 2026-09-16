@@ -258,7 +258,8 @@ public class BackgroundTaskService : BackgroundService
                 Quantity = order.Quantity, QuantityFilled = order.QuantityFilled, Fee = order.Fee,
                 AveragePrice = order.AveragePrice,
                 CreateTime = order.CreateTime, CloseTime = order.CloseTime, Reason = order.Reason ?? "",
-                ClientOrderId = order.ClientOrderId, SecondaryPrice = order.SecondaryPrice,
+                ClientOrderId = KrakenReact.Server.Utils.ClientOrderId.Normalize(order.ClientOrderId),
+                SecondaryPrice = order.SecondaryPrice,
                 StopPrice = order.StopPrice, Leverage = order.Leverage ?? "",
                 LatestPrice = existingOrder?.LatestPrice ?? 0
             };
@@ -616,7 +617,7 @@ public class BackgroundTaskService : BackgroundService
                 return;
             }
 
-            var clientId = $"alert-{alert.Id}-{DateTime.UtcNow:yyyyMMddHHmm}";
+            var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"alert-{alert.Id}-");
             var result = await _kraken.PlaceOrderAsync(alert.Symbol, side, OrderType.Limit, qty, limitPrice, clientId);
             if (result.Success)
             {

@@ -13,7 +13,16 @@ public sealed class SqlTimeoutDiagnostics
     private readonly string _connStr;
     private readonly ILogger<SqlTimeoutDiagnostics> _logger;
     private static long _lastReportTicks;
+    private static long _lastTimeoutTicks;
     private static readonly TimeSpan MinInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How long the per-minute/few-minute jobs back off after any of them sees a SQL timeout.
+    /// During a resource-exhaustion cascade (see RESERVED_MEMORY_ALLOCATION_EXT incidents), every
+    /// job retrying on its own schedule just adds more queued queries to a server that's already
+    /// starved — skipping a tick or two lets it drain instead of compounding the problem.
+    /// </summary>
+    public static readonly TimeSpan RecentTimeoutBackoff = TimeSpan.FromSeconds(90);
 
     public SqlTimeoutDiagnostics(IConfiguration cfg, ILogger<SqlTimeoutDiagnostics> logger)
     {
@@ -37,11 +46,20 @@ public sealed class SqlTimeoutDiagnostics
         if (!IsSqlTimeout(triggeringEx)) return;
 
         var nowTicks = DateTime.UtcNow.Ticks;
+        Interlocked.Exchange(ref _lastTimeoutTicks, nowTicks);
+
         var lastTicks = Interlocked.Read(ref _lastReportTicks);
         if (lastTicks != 0 && new TimeSpan(nowTicks - lastTicks) < MinInterval) return;
         Interlocked.Exchange(ref _lastReportTicks, nowTicks);
 
         _ = Task.Run(() => CaptureInternalAsync(context));
+    }
+
+    /// <summary>True if any job anywhere in the app observed a SQL command timeout within <paramref name="window"/>.</summary>
+    public bool RecentTimeout(TimeSpan window)
+    {
+        var lastTicks = Interlocked.Read(ref _lastTimeoutTicks);
+        return lastTicks != 0 && DateTime.UtcNow - new DateTime(lastTicks, DateTimeKind.Utc) < window;
     }
 
     private async Task CaptureInternalAsync(string context)

@@ -315,7 +315,7 @@ public class KrakenRestService
         return data.Values.Select(rec => new CombinedOrder(rec)).ToList();
     }
 
-    public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string clientOrderId)
+    public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string? clientOrderId = null)
     {
         // Round price to the symbol's required decimal precision
         if (price > 0)
@@ -327,12 +327,31 @@ public class KrakenRestService
                 price = Math.Round(price, sym.PriceDecimals);
         }
 
+        // If clientOrderId is provided, normalize to expected safe format; otherwise allow exchange to assign one by passing null
+        string? safeClientOrderId = null;
+        if (!string.IsNullOrWhiteSpace(clientOrderId))
+            safeClientOrderId = KrakenReact.Server.Utils.ClientOrderId.Normalize(clientOrderId);
         var krakenClient = await AuthenticatedClient();
-        return await krakenClient.SpotApi.Trading.PlaceOrderAsync(
+
+        _logger.LogInformation("Placing order to Kraken: symbol={Symbol}, side={Side}, type={Type}, qty={Qty}, price={Price}, cl_ord_id={Cl}",
+            symbol, side, orderType, qty, price, safeClientOrderId ?? "<null>");
+
+        var result = await krakenClient.SpotApi.Trading.PlaceOrderAsync(
             symbol, side, orderType, qty, price,
-            null, null, null, null, false, null, clientOrderId,
+            null, null, null, null, false, null, safeClientOrderId,
             new List<OrderFlags> { OrderFlags.PostOnly },
             null, TimeInForce.GTC);
+
+        if (!result.Success)
+        {
+            try
+            {
+                _logger.LogError("Kraken PlaceOrder failed: Message={Message}, Error={Error}", result.Error?.Message, result.Error);
+            }
+            catch { /* ignore logging errors */ }
+        }
+
+        return result;
     }
 
     public async Task<List<KrakenUserTrade>> GetTradesAsync(bool initialLoad)
@@ -422,5 +441,28 @@ public class KrakenRestService
         var krakenClient = await AuthenticatedClient();
         var result = await krakenClient.SpotApi.Trading.CancelOrderAsync(orderId);
         return result.Success;
+    }
+
+    /// <summary>
+    /// Looks up a single order directly from Kraken (not the cached websocket order feed, which
+    /// never populates QuantityFilled). Used to find the exact quantity a fill actually bought
+    /// rather than the quantity we originally requested.
+    /// </summary>
+    public async Task<CombinedOrder?> GetOrderInfoAsync(string orderId)
+    {
+        try
+        {
+            var krakenClient = await AuthenticatedClient();
+            var result = await krakenClient.SpotApi.Trading.GetOrderAsync(orderId);
+            if (!result.Success || result.Data == null) return null;
+            if (result.Data.TryGetValue(orderId, out var order)) return new CombinedOrder(order);
+            var fallback = result.Data.Values.FirstOrDefault();
+            return fallback != null ? new CombinedOrder(fallback) : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching order info for {OrderId}", orderId);
+            return null;
+        }
     }
 }

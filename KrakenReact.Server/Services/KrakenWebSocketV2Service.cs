@@ -382,7 +382,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                                                     $"Would sell {qty} @ {sellPrice:F4} (+{_state.AutoSellPercentage}% from buy {buyPrice:F4})");
                                                 return;
                                             }
-                                            var clientOrderId = $"AS{DateTime.Now:yyyyMMddHHmmss}";
+                                            var clientOrderId = KrakenReact.Server.Utils.ClientOrderId.GenerateWithPrefix("AS");
                                             var result = await _kraken.PlaceOrderAsync(
                                                 exec.Symbol, Kraken.Net.Enums.OrderSide.Sell, Kraken.Net.Enums.OrderType.Limit,
                                                 qty, sellPrice, clientOrderId);

@@ -569,6 +569,7 @@ public static class AutoMigrationService
                         [Id]                 int IDENTITY(1,1) NOT NULL,
                         [Symbol]             nvarchar(100) NOT NULL DEFAULT '',
                         [DropPct]            decimal(38,9) NOT NULL DEFAULT 0,
+                        [DropIntervalHours]  int NOT NULL DEFAULT 24,
                         [RisePct]            decimal(38,9) NOT NULL DEFAULT 0,
                         [BuyOrderTotal]      decimal(38,9) NOT NULL DEFAULT 0,
                         [MaxOrdersPerWindow] int NOT NULL DEFAULT 2,
@@ -654,6 +655,19 @@ public static class AutoMigrationService
         catch (Exception ex)
         {
             Log.Warning(ex, "[AutoMigration] Could not ensure MicroTradeRules.CooldownHours column");
+        }
+
+        try
+        {
+            // MicroTradeRules.DropIntervalHours — configurable drop-check window (added after initial release, was hardcoded to 24h)
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('MicroTradeRules', 'DropIntervalHours') IS NULL
+                    ALTER TABLE [MicroTradeRules] ADD [DropIntervalHours] int NOT NULL CONSTRAINT [DF_MicroTradeRules_DropIntervalHours] DEFAULT 24;
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure MicroTradeRules.DropIntervalHours column");
         }
 
         try

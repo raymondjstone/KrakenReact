@@ -1,3 +1,4 @@
+using Hangfire;
 using Kraken.Net.Enums;
 using KrakenReact.Server.Data;
 using Microsoft.EntityFrameworkCore;
@@ -27,8 +28,15 @@ public class StopLossTakeProfitJob
         _sqlDiag = sqlDiag;
     }
 
+    [DisableConcurrentExecution(timeoutInSeconds: 10)]
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
+        if (_sqlDiag.RecentTimeout(SqlTimeoutDiagnostics.RecentTimeoutBackoff))
+        {
+            _logger.LogWarning("[StopLoss] Skipping tick — recent SQL timeout elsewhere, backing off");
+            return;
+        }
+
         try { await CheckStopLossTakeProfitAsync(ct); }
         catch (Exception ex) { _sqlDiag.CaptureIfTimeout("StopLossTakeProfitJob.StopLoss", ex); throw; }
 
@@ -71,7 +79,7 @@ public class StopLossTakeProfitJob
                     continue;
                 }
 
-                var clientId = $"SL{DateTime.Now:yyyyMMddHHmmss}";
+                var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("SL");
                 var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
                 if (result.Success)
                 {
@@ -100,7 +108,7 @@ public class StopLossTakeProfitJob
                     continue;
                 }
 
-                var clientId = $"TP{DateTime.Now:yyyyMMddHHmmss}";
+                var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("TP");
                 var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, bal.Available, currentPrice, clientId);
                 if (result.Success)
                 {
@@ -149,7 +157,7 @@ public class StopLossTakeProfitJob
                 continue;
             }
 
-            var clientId = $"TS{DateTime.Now:yyyyMMddHHmmss}";
+            var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("TS");
             var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
             if (result.Success)
             {
@@ -213,7 +221,7 @@ public class StopLossTakeProfitJob
                 continue;
             }
 
-            var clientId = $"PL{rule.Id}_{DateTime.Now:yyyyMMddHHmmss}";
+            var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"PL{rule.Id}_");
             var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, sellQty, bal.LatestPrice, clientId);
 
             rule.LastTriggeredAt = DateTime.UtcNow;

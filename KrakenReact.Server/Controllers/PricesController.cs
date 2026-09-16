@@ -13,15 +13,26 @@ public class PricesController : ControllerBase
 {
     private readonly TradingStateService _state;
     private readonly KrakenRestService _kraken;
+    private readonly PriceChangeService _priceChange;
     private readonly DbMethods _db;
     private readonly ILogger<PricesController> _logger;
 
-    public PricesController(TradingStateService state, KrakenRestService kraken, DbMethods db, ILogger<PricesController> logger)
+    public PricesController(TradingStateService state, KrakenRestService kraken, PriceChangeService priceChange, DbMethods db, ILogger<PricesController>? logger = null)
     {
         _state = state;
         _kraken = kraken;
+        _priceChange = priceChange;
         _db = db;
-        _logger = logger;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PricesController>.Instance;
+    }
+
+    /// <summary>% price change over every supported window (1h/4h/6h/12h/24h) for one pair, keyed by hours.</summary>
+    [HttpGet("{symbol}/changes")]
+    public async Task<ActionResult<Dictionary<int, decimal?>>> GetChanges(string symbol)
+    {
+        symbol = Uri.UnescapeDataString(symbol);
+        var changes = await _priceChange.GetChangesAsync(symbol);
+        return Ok(changes);
     }
 
     [HttpGet("quote/{pair}")]

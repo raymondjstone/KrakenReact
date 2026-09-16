@@ -13,29 +13,48 @@ public class BracketMonitorJob
     private readonly TradingStateService _state;
     private readonly NotificationService _notify;
     private readonly ILogger<BracketMonitorJob> _logger;
+    private readonly SqlTimeoutDiagnostics _sqlDiag;
 
     public BracketMonitorJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
         KrakenRestService kraken,
         TradingStateService state,
         NotificationService notify,
-        ILogger<BracketMonitorJob> logger)
+        ILogger<BracketMonitorJob> logger,
+        SqlTimeoutDiagnostics sqlDiag)
     {
         _dbFactory = dbFactory;
         _kraken = kraken;
         _state = state;
         _notify = notify;
         _logger = logger;
+        _sqlDiag = sqlDiag;
     }
 
     [AutomaticRetry(Attempts = 0)]
+    [DisableConcurrentExecution(timeoutInSeconds: 10)]
     public async Task ExecuteAsync(CancellationToken ct)
     {
+        if (_sqlDiag.RecentTimeout(SqlTimeoutDiagnostics.RecentTimeoutBackoff))
+        {
+            _logger.LogWarning("[Bracket] Skipping tick — recent SQL timeout elsewhere, backing off");
+            return;
+        }
+
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
-        var active = await db.BracketOrders
-            .Where(b => b.Status == "Watching" || b.Status == "Active")
-            .ToListAsync(ct);
+        List<BracketOrder> active;
+        try
+        {
+            active = await db.BracketOrders
+                .Where(b => b.Status == "Watching" || b.Status == "Active")
+                .ToListAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _sqlDiag.CaptureIfTimeout("BracketMonitorJob.LoadActive", ex);
+            throw;
+        }
 
         if (active.Count == 0) return;
 
