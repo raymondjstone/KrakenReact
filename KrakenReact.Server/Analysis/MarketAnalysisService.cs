@@ -37,6 +37,16 @@ public class MarketAnalysisService
         return AnalysisCandle.FromKlines(klines);
     }
 
+    /// <summary>
+    /// The support and resistance levels to draw on a chart of the symbol. Levels come from the stored
+    /// candles of <paramref name="interval"/>, which is a stored interval name such as "OneHour".
+    /// </summary>
+    public async Task<List<ChartLevel>> GetChartLevelsAsync(string symbol, string interval, int minimumTouches, CancellationToken ct)
+    {
+        var candles = await LoadCandlesAsync(symbol, interval, ct);
+        return ChartLevels.Build(candles, Indicators.InferIntervalMinutes(candles), DateTime.UtcNow, null, minimumTouches);
+    }
+
     /// <summary>The symbols and intervals that have enough stored candles to analyse.</summary>
     public async Task<List<AnalysisSymbolOption>> ListAnalysableAsync(int minimumCandles, CancellationToken ct)
     {

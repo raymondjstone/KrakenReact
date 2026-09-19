@@ -30,6 +30,48 @@ const INTERVALS = [
 // Intervals where candles represent less than a day — show time on the axis
 const INTRADAY = new Set(['1', '5', '15', '30', '60', '240']);
 
+// Support/resistance levels come from the server (swing pivots clustered by ATR). The nearest
+// confirmed support and resistance are drawn as dashed labelled lines, every other major level as a
+// faint solid line, and the range the turns actually landed in as a shaded band.
+const SR_STORAGE_KEY = 'kraken_chart_show_sr';
+
+function withAlpha(hex, alpha) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+// Series primitive that fills the price range of each level across the whole pane, behind the candles.
+class LevelBandsPrimitive {
+  constructor() {
+    this._bands = [];
+    this._series = null;
+    this._requestUpdate = null;
+    this._view = {
+      zOrder: () => 'bottom',
+      renderer: () => ({
+        draw: (target) => {
+          const series = this._series;
+          if (!series) return;
+          target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+            for (const band of this._bands) {
+              const top = series.priceToCoordinate(band.high);
+              const bottom = series.priceToCoordinate(band.low);
+              if (top === null || bottom === null) continue;
+              context.fillStyle = band.color;
+              context.fillRect(0, Math.min(top, bottom), mediaSize.width, Math.max(2, Math.abs(bottom - top)));
+            }
+          });
+        },
+      }),
+    };
+  }
+  attached({ series, requestUpdate }) { this._series = series; this._requestUpdate = requestUpdate; }
+  detached() { this._series = null; this._requestUpdate = null; }
+  paneViews() { return [this._view]; }
+  setBands(bands) { this._bands = bands; if (this._requestUpdate) this._requestUpdate(); }
+}
+
 // Snap a trade timestamp (seconds) to the candle bucket for the given interval key
 function snapToInterval(timeSec, intervalKey) {
   if (intervalKey === '1W') {
@@ -53,6 +95,10 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const orderLinesRef = useRef([]);
+  const levelLinesRef = useRef([]);
+  const levelBandsRef = useRef(null);
+  const levelsRedrawRef = useRef(null);
+  const showSrRef = useRef(true);
   const markersPluginRef = useRef(null);
   const dataRangeRef = useRef({ from: 0, to: 0 });
   const resizeHandlerRef = useRef(null);
@@ -65,6 +111,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
   const [loading, setLoading] = useState(true);
   const [noData, setNoData] = useState(false);
   const [orderSummary, setOrderSummary] = useState({ buys: [], sells: [] });
+  const [showSr, setShowSr] = useState(() => localStorage.getItem(SR_STORAGE_KEY) !== '0');
 
   const changeInterval = (iv) => {
     setInterval_(iv);
@@ -77,6 +124,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
 
     let handler = null;
     let orderHandler = null;
+    let levelsTimer = null;
     let disposed = false;
     const conn = getConnection();
     const colors = CHART_THEMES[theme] || CHART_THEMES.light;
@@ -88,6 +136,8 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       seriesRef.current = null;
       markersPluginRef.current = null;
       orderLinesRef.current = [];
+      levelLinesRef.current = [];
+      levelBandsRef.current = null;
       dataRangeRef.current = { from: 0, to: 0 };
     }
 
@@ -126,6 +176,50 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
         }
       }).catch(() => {});
     }
+
+    let cachedLevels = [];
+
+    function drawLevels() {
+      const series = seriesRef.current;
+      if (disposed || !series) return;
+      levelLinesRef.current.forEach(line => {
+        try { series.removePriceLine(line); } catch { /* line already removed */ }
+      });
+      levelLinesRef.current = [];
+      const visible = showSrRef.current ? cachedLevels : [];
+      if (levelBandsRef.current) {
+        levelBandsRef.current.setBands(visible.map(l => ({
+          low: Number(l.lowPrice),
+          high: Number(l.highPrice),
+          color: withAlpha(l.side === 'Support' ? colors.up : colors.down, l.isNearest ? 0.16 : 0.08),
+        })));
+      }
+      visible.forEach(l => {
+        try {
+          const base = l.side === 'Support' ? colors.up : colors.down;
+          levelLinesRef.current.push(series.createPriceLine({
+            price: Number(l.price),
+            color: l.isNearest ? base : withAlpha(base, 0.35),
+            lineWidth: l.isNearest && l.touchCount >= 4 ? 2 : 1,
+            lineStyle: l.isNearest ? 3 : 0,
+            axisLabelVisible: l.isNearest,
+            title: l.isNearest ? `${l.side} ${l.touchCount}x` : '',
+          }));
+        } catch { /* ignore draw error */ }
+      });
+    }
+
+    function updateLevels() {
+      if (disposed || !seriesRef.current) return;
+      api.get(`/analysis/chart-levels?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`)
+        .then(r => {
+          if (disposed) return;
+          cachedLevels = r.data?.levels || [];
+          drawLevels();
+        })
+        .catch(() => {});
+    }
+    levelsRedrawRef.current = drawLevels;
 
     let cachedTrades = null;
 
@@ -200,6 +294,8 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       });
       seriesRef.current = candleSeries;
       markersPluginRef.current = createSeriesMarkers(candleSeries);
+      levelBandsRef.current = new LevelBandsPrimitive();
+      candleSeries.attachPrimitive(levelBandsRef.current);
 
       // Fetch grouped trades (one per order, weighted avg price) in parallel with klines.
       // Server filters by symbol using Kraken-aware normalization (handles XETHZUSD etc.)
@@ -251,6 +347,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
         });
 
         updateOrderLines();
+        updateLevels();
       }).catch((err) => {
         console.error(err);
         if (!disposed) { setLoading(false); setNoData(true); }
@@ -304,6 +401,9 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       conn.on('OrderUpdate', orderHandler);
       conn.on('ExecutionUpdate', orderHandler);
       conn.on('TradesUpdated', updateTradeMarkers);
+
+      // Levels only change when a bar closes, so an occasional refresh is all they need.
+      levelsTimer = window.setInterval(updateLevels, 10 * 60 * 1000);
     }
 
     // Remove previous resize handler if any (from prior effect run)
@@ -356,6 +456,8 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
         resizeObserverRef.current.disconnect();
         resizeObserverRef.current = null;
       }
+      if (levelsTimer) window.clearInterval(levelsTimer);
+      levelsRedrawRef.current = null;
       if (handler) conn.off('TickerUpdate', handler);
       if (orderHandler) {
         conn.off('OrderUpdate', orderHandler);
@@ -368,9 +470,18 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
         seriesRef.current = null;
         markersPluginRef.current = null;
         orderLinesRef.current = [];
+        levelLinesRef.current = [];
+        levelBandsRef.current = null;
       }
     };
   }, [symbol, theme, interval]);
+
+  // Toggling the overlay redraws from the levels already fetched; it never refetches or rebuilds the chart.
+  useEffect(() => {
+    showSrRef.current = showSr;
+    localStorage.setItem(SR_STORAGE_KEY, showSr ? '1' : '0');
+    if (levelsRedrawRef.current) levelsRedrawRef.current();
+  }, [showSr]);
 
   const btnBase = {
     border: 'none', cursor: 'pointer', padding: '3px 8px', borderRadius: 3,
@@ -398,6 +509,17 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => setShowSr(v => !v)}
+          title="Support / resistance levels: nearest confirmed levels dashed, other major levels faint, shaded where price has turned"
+          style={{
+            ...btnBase,
+            background: showSr ? 'var(--yellow)' : 'var(--bg-input)',
+            color: showSr ? '#0b0e11' : 'var(--text-secondary)',
+          }}
+        >
+          S/R
+        </button>
         {(orderSummary.buys.length > 0 || orderSummary.sells.length > 0) && (
           <div style={{ display: 'flex', gap: 6, marginLeft: 8, alignItems: 'center' }}>
             <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Orders:</span>

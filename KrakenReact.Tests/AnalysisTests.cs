@@ -312,6 +312,92 @@ public class AnalysisTests
         Assert.Equal(encounters.Count, summaries.Sum(s => s.Total));
     }
 
+    private static List<decimal> TwoPriceRoundTrips(int cycles)
+    {
+        var closes = new List<decimal>();
+        for (int cycle = 0; cycle < cycles; cycle++)
+        {
+            closes.AddRange(Ramp(100m, 160m, 40));
+            closes.AddRange(Ramp(160m, 100m, 40));
+        }
+        return closes;
+    }
+
+    [Fact]
+    public void ChartLevels_MarksNearestSupportAndResistanceAroundPrice()
+    {
+        // Price ends mid-range after repeated turns at 100 and 160.
+        var closes = TwoPriceRoundTrips(6);
+        closes.AddRange(Ramp(100m, 130m, 20));
+        var candles = Series(closes);
+        var afterLast = candles[^1].OpenTime.AddMinutes(IntervalMinutes * 2);
+
+        var levels = ChartLevels.Build(candles, IntervalMinutes, afterLast, majorMinimumTouches: 100);
+
+        var support = Assert.Single(levels, l => l.Side == "Support");
+        var resistance = Assert.Single(levels, l => l.Side == "Resistance");
+        Assert.True(support.IsNearest && resistance.IsNearest);
+        Assert.True(support.Price < 130m && resistance.Price > 130m);
+        Assert.InRange(support.Price, 95m, 105m);
+        Assert.InRange(resistance.Price, 155m, 165m);
+        Assert.All(levels, l => Assert.True(l.LowPrice <= l.Price && l.Price <= l.HighPrice));
+    }
+
+    [Fact]
+    public void ChartLevels_KeepsFarLevelsOnlyWhenTouchedOftenEnough()
+    {
+        var closes = TwoPriceRoundTrips(6);
+        // Price ends above every turn, so only the level nearest below it is "nearest"; the other
+        // is drawn only if it has the touches to be major.
+        closes.AddRange(Ramp(100m, 200m, 60));
+        var candles = Series(closes);
+        var afterLast = candles[^1].OpenTime.AddMinutes(IntervalMinutes * 2);
+
+        var strict = ChartLevels.Build(candles, IntervalMinutes, afterLast, majorMinimumTouches: 100);
+        var lenient = ChartLevels.Build(candles, IntervalMinutes, afterLast, majorMinimumTouches: 2);
+
+        Assert.All(strict, l => Assert.True(l.IsNearest));
+        Assert.True(lenient.Count > strict.Count);
+    }
+
+    [Fact]
+    public void ChartLevels_IgnoresTheCandleStillForming()
+    {
+        var closes = TwoPriceRoundTrips(6);
+        var candles = Series(closes);
+        var lastOpen = candles[^1].OpenTime;
+
+        // "Now" is inside the last candle, so it is still forming and must not move the answer.
+        var whileForming = ChartLevels.Build(candles, IntervalMinutes, lastOpen.AddMinutes(10));
+        var withoutLast = ChartLevels.Build(candles.Take(candles.Count - 1).ToList(), IntervalMinutes, lastOpen.AddMinutes(IntervalMinutes * 5));
+
+        Assert.Equal(withoutLast, whileForming);
+    }
+
+    [Fact]
+    public void ChartLevels_DoesNotTreatALonePivotAsNearestSupport()
+    {
+        // The ZigZag emits a pivot at the bar the series starts on (a lone 1-touch level near 120
+        // here). It sits nearer to price than the real floor at 100, but it is not one.
+        var closes = TwoPriceRoundTrips(6);
+        closes.AddRange(Ramp(100m, 130m, 20));
+        var candles = Series(closes);
+        var afterLast = candles[^1].OpenTime.AddMinutes(IntervalMinutes * 2);
+
+        var levels = ChartLevels.Build(candles, IntervalMinutes, afterLast, majorMinimumTouches: 2);
+
+        Assert.All(levels, l => Assert.True(l.TouchCount >= 2));
+        Assert.DoesNotContain(levels, l => l.Price > 110m && l.Price < 130m);
+    }
+
+    [Fact]
+    public void ChartLevels_IsEmptyWithoutEnoughCandles()
+    {
+        var candles = Series(Flat(100m, 5));
+        Assert.Empty(ChartLevels.Build(candles, IntervalMinutes, candles[^1].OpenTime.AddDays(1)));
+        Assert.Empty(ChartLevels.Build([], IntervalMinutes, DateTime.UtcNow));
+    }
+
     [Fact]
     public void GetTouchTier_CollapsesTheThinTail()
     {

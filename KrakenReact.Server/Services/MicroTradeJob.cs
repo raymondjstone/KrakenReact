@@ -200,11 +200,16 @@ public class MicroTradeJob
             return;
         }
 
-        var buyPrice = Math.Round(currentPrice * 0.999m, 8);
-        var qty = Math.Round(rule.BuyOrderTotal / buyPrice, 8);
-
         var sym = _state.Symbols.Values.FirstOrDefault(s =>
             s.WebsocketName.Equals(rule.Symbol, StringComparison.OrdinalIgnoreCase));
+        var priceDecimals = sym?.PriceDecimals > 0 ? sym.PriceDecimals : 8;
+        var lotDecimals = sym?.LotDecimals > 0 ? sym.LotDecimals : 8;
+
+        var buyPrice = Math.Round(currentPrice * 0.999m, priceDecimals);
+        // Floor (never round up) to the pair's real lot precision — Kraken rejects a quantity with
+        // more decimal places than the pair allows outright, which was the root cause behind most
+        // rounding failures, and flooring also guarantees we never spend more than BuyOrderTotal.
+        var qty = FloorToDecimals(rule.BuyOrderTotal / buyPrice, lotDecimals);
 
         var minQty = sym?.OrderMin ?? 0.0001m;
         if (qty < minQty)
@@ -344,7 +349,7 @@ public class MicroTradeJob
 
         var rule = await db.MicroTradeRules.FindAsync([order.RuleId], ct);
         var risePct = rule?.RisePct ?? 10m;
-        var sellPrice = Math.Round(order.BuyPrice * (1 + risePct / 100m), 8);
+        var sellPrice = Math.Round(order.BuyPrice * (1 + risePct / 100m), GetPriceDecimals(order.Symbol));
 
         // Sell exactly what the buy actually filled, not what we expected to get — Kraken's own
         // fill quantity (vol_exec) is authoritative; the websocket order feed never populates this,
@@ -377,15 +382,18 @@ public class MicroTradeJob
     }
 
     /// <summary>
-    /// Places a sell for exactly <paramref name="quantity"/>. If Kraken rejects it — typically a
-    /// rounding/precision mismatch between what we believe we hold and Kraken's own ledger — the
-    /// quantity is shrunk slightly and the placement retried. Removing the least significant decimal
-    /// digit normally clears it; if the digit is already zero (so truncating doesn't change the
-    /// value), that digit is reduced by one unit instead.
+    /// Places a sell for <paramref name="quantity"/>, first floored to the pair's actual lot
+    /// precision — Kraken's own fill quantities and our own budget-derived quantities can both carry
+    /// more decimal places than the pair allows, and that's rejected outright rather than rounded on
+    /// Kraken's side. If it's still rejected — typically a small balance/ledger mismatch — the
+    /// quantity is shrunk slightly and the placement retried.
     /// </summary>
     private async Task<(WebCallResult<KrakenPlacedOrder> Result, decimal Quantity)> PlaceSellWithRetryAsync(string symbol, decimal quantity, decimal price)
     {
-        var qty = quantity;
+        var lotDecimals = GetLotDecimals(symbol);
+        var qty = FloorToDecimals(quantity, lotDecimals);
+        if (qty <= 0) qty = quantity; // flooring collapsed it to zero (quantity smaller than the pair's lot step) — fall back and let Kraken's own error surface
+
         WebCallResult<KrakenPlacedOrder> result;
         for (var attempt = 1; ; attempt++)
         {
@@ -393,29 +401,51 @@ public class MicroTradeJob
             result = await _kraken.PlaceOrderAsync(symbol, OrderSide.Sell, OrderType.Limit, qty, price, null);
             if (result.Success || attempt >= MaxSellAttempts) return (result, qty);
 
-            var shrunk = ShrinkQuantitySlightly(qty);
+            var shrunk = ShrinkQuantitySlightly(qty, lotDecimals);
             _logger.LogWarning("[MicroTrade] Sell of {Qty} {Symbol} failed ({Error}) — retrying with {Shrunk}",
                 qty, symbol, result.Error?.Message, shrunk);
             qty = shrunk;
         }
     }
 
-    /// <summary>Trims the smallest unit off a quantity: drops the least significant decimal digit,
-    /// or if that digit is already 0 (so dropping it wouldn't change the value), subtracts one unit
-    /// at the current precision instead.</summary>
-    private static decimal ShrinkQuantitySlightly(decimal qty)
+    /// <summary>Trims a rejected sell quantity so the next retry has a real chance of succeeding.
+    /// If the value still carries more decimal places than the pair's lot precision allows, it's
+    /// floored straight down to that precision (the usual cause of a rejection — trimming just the
+    /// least-significant digit of an over-precise value can land back on a numerically identical
+    /// value when trailing digits are zero, which never actually reduces precision and just burns
+    /// retries). Once it's already at the pair's precision, one unit at that precision is subtracted
+    /// instead, which is the right move for a small balance/ledger mismatch.</summary>
+    private static decimal ShrinkQuantitySlightly(decimal qty, int lotDecimals)
     {
         var str = qty.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var dotIdx = str.IndexOf('.');
-        if (dotIdx < 0) return qty - 1;
+        var currentDecimals = dotIdx < 0 ? 0 : str.Length - dotIdx - 1;
 
-        var decimals = str.Length - dotIdx - 1;
-        var factor = (decimal)Math.Pow(10, decimals - 1);
-        var truncated = Math.Floor(qty * factor) / factor;
-        if (truncated < qty) return truncated;
+        if (currentDecimals > lotDecimals)
+            return FloorToDecimals(qty, lotDecimals);
 
-        var step = 1m / (decimal)Math.Pow(10, decimals);
-        return qty - step;
+        var step = 1m / (decimal)Math.Pow(10, Math.Max(lotDecimals, 0));
+        var shrunk = qty - step;
+        return shrunk > 0 ? shrunk : 0;
+    }
+
+    private int GetLotDecimals(string symbol)
+    {
+        var sym = _state.Symbols.Values.FirstOrDefault(s => s.WebsocketName.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return sym?.LotDecimals > 0 ? sym.LotDecimals : 8;
+    }
+
+    private int GetPriceDecimals(string symbol)
+    {
+        var sym = _state.Symbols.Values.FirstOrDefault(s => s.WebsocketName.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        return sym?.PriceDecimals > 0 ? sym.PriceDecimals : 8;
+    }
+
+    private static decimal FloorToDecimals(decimal value, int decimals)
+    {
+        if (decimals < 0) return value;
+        var factor = (decimal)Math.Pow(10, decimals);
+        return Math.Floor(value * factor) / factor;
     }
 
     private async Task HandleSelling(MicroTradeOrder order, MicroTradeRule? rule)
@@ -436,7 +466,7 @@ public class MicroTradeJob
                 var cancelled = await _kraken.CancelOrderAsync(order.SellOrderId);
                 if (cancelled)
                 {
-                    var newSellPrice = Math.Round(currentPrice * 1.001m, 8);
+                    var newSellPrice = Math.Round(currentPrice * 1.001m, GetPriceDecimals(order.Symbol));
                     var (result, soldQty) = await PlaceSellWithRetryAsync(order.Symbol, order.Quantity, newSellPrice);
                     order.StopLossTriggered = true;
 

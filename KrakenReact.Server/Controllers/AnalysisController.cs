@@ -10,6 +10,7 @@ public class AnalysisController : ControllerBase
 {
     private readonly MarketAnalysisService _analysis;
     private readonly MinuteCandleJob _minuteCandles;
+    private readonly TradingStateService _state;
 
     /// <summary>The fewest stored candles a market needs before it is offered for analysis.</summary>
     private const int MinimumCandles = 200;
@@ -20,10 +21,46 @@ public class AnalysisController : ControllerBase
     /// </summary>
     private const int MinuteBarsForGrading = 43_200;
 
-    public AnalysisController(MarketAnalysisService analysis, MinuteCandleJob minuteCandles)
+    public AnalysisController(MarketAnalysisService analysis, MinuteCandleJob minuteCandles, TradingStateService state)
     {
         _analysis = analysis;
         _minuteCandles = minuteCandles;
+        _state = state;
+    }
+
+    /// <summary>
+    /// GET /api/analysis/chart-levels?symbol=XBT/USD&amp;interval=60 — the support and resistance levels to
+    /// draw on a chart. The interval is the chart's own key (1, 5, 15, 30, 60, 240, 1D, 1W). Levels are
+    /// never built from anything finer than hourly bars, because a three-range swing on minute bars is
+    /// noise rather than a level: intraday charts share the hourly levels, 4H uses four-hour bars, and
+    /// 1D and 1W use daily bars.
+    /// </summary>
+    [HttpGet("chart-levels")]
+    public async Task<IActionResult> GetChartLevels(
+        [FromQuery] string symbol,
+        [FromQuery] string? interval = null,
+        [FromQuery] int minimumTouches = ChartLevels.MajorLevelMinimumTouches,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+            return BadRequest(new { message = "symbol is required" });
+
+        try
+        {
+            var storedInterval = interval switch
+            {
+                "240" => "FourHour",
+                "1D" or "1W" => "OneDay",
+                _ => "OneHour",
+            };
+            var levels = await _analysis.GetChartLevelsAsync(
+                _state.ResolveSymbolKey(symbol), storedInterval, Math.Clamp(minimumTouches, 2, 100), ct);
+            return Ok(new { interval = storedInterval, levels });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>
