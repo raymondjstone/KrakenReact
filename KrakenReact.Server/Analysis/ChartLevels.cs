@@ -20,8 +20,8 @@ public static class ChartLevels
 
     /// <summary>
     /// The touches a level needs to be chosen as the nearest support or resistance. A single pivot is a
-    /// swing point, not yet a level, and the ZigZag also emits one at the arbitrary bar the series
-    /// happens to start on, so a lone pivot would otherwise be labelled as support next to real ones.
+    /// swing point, not yet a level: price has turned there once, which says nothing yet about whether
+    /// it will turn there again.
     /// </summary>
     public const int NearestLevelMinimumTouches = 2;
 

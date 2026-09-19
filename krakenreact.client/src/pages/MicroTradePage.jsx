@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
+import { getConnection } from '../api/signalRService';
 
 const emptyRule = {
   symbol: '', dropPct: 5, dropIntervalHours: 24, risePct: 10, buyOrderTotal: 100,
@@ -27,6 +28,11 @@ function proximityColor(changePct, dropPct) {
   return signColor(changePct);
 }
 
+const stepBtnStyle = {
+  width: 22, height: 22, padding: 0, lineHeight: 1, fontSize: 14, fontWeight: 700, cursor: 'pointer',
+  border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)',
+};
+
 const STATUS_COLORS = {
   Buying: 'var(--text-muted)',
   Selling: 'var(--green)',
@@ -38,6 +44,8 @@ const STATUS_COLORS = {
 export default function MicroTradePage() {
   const [rules, setRules] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [prices, setPrices] = useState({}); // { SYMBOL: current price }
+  const [references, setReferences] = useState({}); // { SYMBOL: { "1": price N hours ago, ... } }
   const [changes, setChanges] = useState({}); // { SYMBOL: { "1": pct, "4": pct, "6": pct, "12": pct, "24": pct } }
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(null);
@@ -71,9 +79,27 @@ export default function MicroTradePage() {
   const fetchChanges = useCallback((ruleList) => {
     const symbols = [...new Set(ruleList.map(r => r.symbol).filter(Boolean))];
     Promise.all(symbols.map(sym =>
+      api.get(`/prices/quote/${encodeURIComponent(sym.replace('/', '-'))}`).then(r => [sym.toUpperCase(), r.data.price]).catch(() => [sym.toUpperCase(), null])
+    )).then(pairs => {
+      setPrices(prev => {
+        const next = { ...prev };
+        pairs.forEach(([key, val]) => { if (val) next[key] = val; });
+        return next;
+      });
+    });
+    Promise.all(symbols.map(sym =>
       api.get(`/prices/${encodeURIComponent(sym)}/changes`).then(r => [sym.toUpperCase(), r.data]).catch(() => [sym.toUpperCase(), null])
     )).then(pairs => {
       setChanges(prev => {
+        const next = { ...prev };
+        pairs.forEach(([key, val]) => { if (val) next[key] = val; });
+        return next;
+      });
+    });
+    Promise.all(symbols.map(sym =>
+      api.get(`/prices/${encodeURIComponent(sym)}/references`).then(r => [sym.toUpperCase(), r.data]).catch(() => [sym.toUpperCase(), null])
+    )).then(pairs => {
+      setReferences(prev => {
         const next = { ...prev };
         pairs.forEach(([key, val]) => { if (val) next[key] = val; });
         return next;
@@ -90,6 +116,29 @@ export default function MicroTradePage() {
     }).catch(() => setLoading(false));
     api.get('/microtrade/orders').then(r => setOrders(r.data || [])).catch(() => {});
   }, [fetchChanges]);
+
+  // Live price: the server pushes a TickerUpdate on every tick, so the current price moves with the
+  // market between the 15s polls above instead of only changing on refresh.
+  useEffect(() => {
+    const conn = getConnection();
+    const norm = s => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^XBT/, 'BTC');
+    const handler = (data) => {
+      if (!data?.closePrice || !data.symbol) return;
+      const incoming = norm(data.symbol);
+      setPrices(prev => {
+        let next = null;
+        for (const key of Object.keys(prev)) {
+          if (norm(key) === incoming && prev[key] !== data.closePrice) {
+            next = next || { ...prev };
+            next[key] = data.closePrice;
+          }
+        }
+        return next || prev;
+      });
+    };
+    conn.on('TickerUpdate', handler);
+    return () => conn.off('TickerUpdate', handler);
+  }, []);
 
   useEffect(() => {
     fetchAll();
@@ -127,6 +176,29 @@ export default function MicroTradePage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Nudge a rule's buy margin (dropPct) or sell target (risePct) by +/-1 point straight from its card.
+  // Optimistic local update so repeated clicks feel instant; the server value replaces it on the next fetch.
+  const handleAdjust = async (rule, field, delta) => {
+    const next = Math.round((rule[field] + delta) * 100) / 100;
+    if (next <= 0) return flash(`${field === 'dropPct' ? 'Buy margin' : 'Sell target'} must stay above 0%`);
+    const updated = { ...rule, [field]: next };
+    setRules(prev => prev.map(r => r.id === rule.id ? updated : r));
+    try { await api.put(`/microtrade/${rule.id}`, updated); }
+    catch (err) { flash(err.response?.data?.message || 'Update failed'); fetchAll(); }
+  };
+
+  // Step the rule's drop interval to the previous/next supported window (1/4/6/12/24h); stops at the ends.
+  const handleInterval = async (rule, direction) => {
+    const current = rule.dropIntervalHours || 24;
+    const idx = DROP_INTERVALS.indexOf(current);
+    const next = DROP_INTERVALS[idx + direction];
+    if (next == null) return;
+    const updated = { ...rule, dropIntervalHours: next };
+    setRules(prev => prev.map(r => r.id === rule.id ? updated : r));
+    try { await api.put(`/microtrade/${rule.id}`, updated); }
+    catch (err) { flash(err.response?.data?.message || 'Update failed'); fetchAll(); }
   };
 
   const handleDelete = async (id) => {
@@ -276,6 +348,11 @@ export default function MicroTradePage() {
 
       {rules.map(rule => {
         const symbolChanges = changes[rule.symbol?.toUpperCase()];
+        const currentPrice = prices[rule.symbol?.toUpperCase()];
+        const symbolRefs = references[rule.symbol?.toUpperCase()];
+        // Buy fires when price <= reference * (1 - drop%), the same test the % change uses.
+        const refPrice = symbolRefs?.[rule.dropIntervalHours || 24];
+        const triggerPrice = refPrice ? refPrice * (1 - rule.dropPct / 100) : null;
         const intervalHours = rule.dropIntervalHours || 24;
         return (
         <div key={rule.id} style={{
@@ -304,19 +381,51 @@ export default function MicroTradePage() {
                       padding: '2px 7px', borderRadius: 4, textAlign: 'center', minWidth: 52,
                       border: isSelected ? `1px solid ${color}` : '1px solid transparent',
                     }}>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{h}h</div>
+                      <div style={{ fontSize: 10, color: isSelected ? 'var(--text-primary)' : 'var(--text-muted)' }}>{h}h</div>
                       <div style={{ fontSize: 13, fontWeight: 700, color }}>
                         {val == null ? '—' : `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`}
                       </div>
-                      {isSelected && <div style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>&le; -{rule.dropPct}%</div>}
+                      {isSelected && <div style={{ fontSize: 9, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>&le; -{rule.dropPct}%</div>}
                     </div>
                   );
                 })}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sell target</div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--green)' }}>buy + {rule.risePct}%</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Current price</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {currentPrice == null ? '—' : currentPrice}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Buy trigger price</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }} title={refPrice ? `${intervalHours}h ago: ${refPrice} → buy at or below ${triggerPrice}` : undefined}>
+                {triggerPrice == null ? '—' : `≤ ${Number(triggerPrice.toPrecision(6))}`}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>Interval</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button onClick={() => handleInterval(rule, -1)} disabled={DROP_INTERVALS.indexOf(intervalHours) <= 0} title="Use the next shorter interval" style={{ ...stepBtnStyle, opacity: DROP_INTERVALS.indexOf(intervalHours) <= 0 ? 0.35 : 1 }}>&minus;</button>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', minWidth: 32, textAlign: 'center' }}>{intervalHours}h</span>
+                <button onClick={() => handleInterval(rule, 1)} disabled={DROP_INTERVALS.indexOf(intervalHours) >= DROP_INTERVALS.length - 1} title="Use the next longer interval" style={{ ...stepBtnStyle, opacity: DROP_INTERVALS.indexOf(intervalHours) >= DROP_INTERVALS.length - 1 ? 0.35 : 1 }}>+</button>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>Buy margin</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button onClick={() => handleAdjust(rule, 'dropPct', -1)} title="Decrease buy margin by 1%" style={stepBtnStyle}>&minus;</button>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', minWidth: 38, textAlign: 'center' }}>-{rule.dropPct}%</span>
+                <button onClick={() => handleAdjust(rule, 'dropPct', 1)} title="Increase buy margin by 1%" style={stepBtnStyle}>+</button>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>Sell target</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button onClick={() => handleAdjust(rule, 'risePct', -1)} title="Decrease sell target by 1%" style={stepBtnStyle}>&minus;</button>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--green)', minWidth: 62, textAlign: 'center', whiteSpace: 'nowrap' }}>buy + {rule.risePct}%</span>
+                <button onClick={() => handleAdjust(rule, 'risePct', 1)} title="Increase sell target by 1%" style={stepBtnStyle}>+</button>
+              </div>
             </div>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Buy size</div>

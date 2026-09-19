@@ -57,6 +57,40 @@ public class PriceChangeService
         return result;
     }
 
+    /// <summary>
+    /// Returns the reference price each window's % change is measured against, keyed by hours — i.e. the
+    /// price N hours ago. A buy trigger of "drop &gt;= X%" fires when the live price is at or below
+    /// reference * (1 - X/100). 24h is backed out of the ticker's change_pct so it stays consistent with
+    /// the % shown for that window.
+    /// </summary>
+    public async Task<Dictionary<int, decimal?>> GetReferencePricesAsync(string symbol, PriceDataItem? priceItem = null)
+    {
+        priceItem ??= ResolvePriceItem(symbol);
+        var result = new Dictionary<int, decimal?>();
+
+        var currentPrice = priceItem?.BestKline?.Close ?? 0m;
+        var pct24h = priceItem?.TickerData?.ChangePct24h;
+        result[24] = currentPrice > 0 && pct24h != null && pct24h > -100m
+            ? currentPrice / (1m + pct24h.Value / 100m)
+            : null;
+
+        var klines = currentPrice > 0 ? await GetHourlyKlinesAsync(symbol) : new List<KrakenKline>();
+        foreach (var h in SupportedHours.Where(h => h != 24))
+            result[h] = FindReferencePrice(klines, h);
+
+        return result;
+    }
+
+    private static decimal? FindReferencePrice(List<KrakenKline> klines, int hours)
+    {
+        var target = DateTime.UtcNow.AddHours(-hours);
+        var reference = klines
+            .Where(k => k.OpenTime <= target)
+            .OrderByDescending(k => k.OpenTime)
+            .FirstOrDefault();
+        return reference == null || reference.ClosePrice <= 0 ? null : reference.ClosePrice;
+    }
+
     /// <summary>Returns % change for a single window. Prefer this over GetChangesAsync when only one is needed.</summary>
     public async Task<decimal?> GetChangeAsync(string symbol, int hours, PriceDataItem? priceItem = null)
     {

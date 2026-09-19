@@ -35,6 +35,14 @@ public class PricesController : ControllerBase
         return Ok(changes);
     }
 
+    /// <summary>Price N hours ago for every supported window, keyed by hours — the base each % change is measured from.</summary>
+    [HttpGet("{symbol}/references")]
+    public async Task<ActionResult<Dictionary<int, decimal?>>> GetReferences(string symbol)
+    {
+        symbol = Uri.UnescapeDataString(symbol);
+        return Ok(await _priceChange.GetReferencePricesAsync(symbol));
+    }
+
     [HttpGet("quote/{pair}")]
     public ActionResult<object> GetQuote(string pair)
     {

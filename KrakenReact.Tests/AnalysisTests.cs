@@ -157,6 +157,24 @@ public class AnalysisTests
             Assert.NotEqual(pivots[i - 1].IsHigh, pivots[i].IsHigh);
     }
 
+    [Fact]
+    public void FindTrendPivots_NeverReportsTheBarTheScanStartedOn()
+    {
+        // The saw opens mid-ramp, so the scan's first bar (index 14) is not a turn. It used to be
+        // confirmed as a low pivot simply because price then rose 3 ATR from it.
+        var closes = new List<decimal>();
+        for (int cycle = 0; cycle < 6; cycle++)
+        {
+            closes.AddRange(Ramp(100m, 160m, 40));
+            closes.AddRange(Ramp(160m, 100m, 40));
+        }
+        var pivots = TrendDetection.FindTrendPivots(Series(closes), 14, 3m);
+
+        Assert.DoesNotContain(pivots, p => p.Index == 14);
+        Assert.Equal(160.32m, pivots[0].Price);
+        Assert.True(pivots[0].IsHigh);
+    }
+
     // ── Plummet detection ───────────────────────────────────────────────────
 
     /// <summary>
@@ -377,8 +395,8 @@ public class AnalysisTests
     [Fact]
     public void ChartLevels_DoesNotTreatALonePivotAsNearestSupport()
     {
-        // The ZigZag emits a pivot at the bar the series starts on (a lone 1-touch level near 120
-        // here). It sits nearer to price than the real floor at 100, but it is not one.
+        // Every pivot here is a 1-touch level until it recurs, and a lone pivot is not yet a level:
+        // it must not be picked as nearest support/resistance even when it sits closer to price.
         var closes = TwoPriceRoundTrips(6);
         closes.AddRange(Ramp(100m, 130m, 20));
         var candles = Series(closes);

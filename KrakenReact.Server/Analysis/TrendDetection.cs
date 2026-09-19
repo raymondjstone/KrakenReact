@@ -218,6 +218,12 @@ public static class TrendDetection
     /// <summary>
     /// Confirmed swing pivots, where a reversal of the given multiple of ATR away from a running
     /// extreme is what confirms that extreme as a pivot.
+    /// <para>
+    /// The scan starts at bar <c>atrPeriod</c> with no direction and no history before it, so an
+    /// extreme that is still that first bar has not been shown to be a turn at all — it is only where
+    /// the scan began. Such an extreme is never reported, otherwise every series would open with a
+    /// phantom pivot at an arbitrary price.
+    /// </para>
     /// </summary>
     public static List<TrendPivot> FindTrendPivots(IReadOnlyList<AnalysisCandle> candles, int atrPeriod, decimal reversalAtrMultiple)
     {
@@ -246,14 +252,14 @@ public static class TrendDetection
 
             if (direction >= 0 && candidateHigh - candles[i].Low >= reversalAtrMultiple * atr[candidateHighIndex])
             {
-                pivots.Add(new TrendPivot(candidateHighIndex, candles[candidateHighIndex].OpenTime, candidateHigh, true));
+                if (candidateHighIndex != start) pivots.Add(new TrendPivot(candidateHighIndex, candles[candidateHighIndex].OpenTime, candidateHigh, true));
                 direction = -1;
                 candidateLow = candles[i].Low;
                 candidateLowIndex = i;
             }
             else if (direction <= 0 && candles[i].High - candidateLow >= reversalAtrMultiple * atr[candidateLowIndex])
             {
-                pivots.Add(new TrendPivot(candidateLowIndex, candles[candidateLowIndex].OpenTime, candidateLow, false));
+                if (candidateLowIndex != start) pivots.Add(new TrendPivot(candidateLowIndex, candles[candidateLowIndex].OpenTime, candidateLow, false));
                 direction = 1;
                 candidateHigh = candles[i].High;
                 candidateHighIndex = i;
