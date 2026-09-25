@@ -37,6 +37,7 @@ const STATUS_COLORS = {
   Buying: 'var(--text-muted)',
   Selling: 'var(--green)',
   Sold: 'var(--green)',
+  Placing: 'var(--text-muted)',
   Cancelled: 'var(--red, #ef4444)',
   DryRun: 'var(--text-muted)',
 };
@@ -178,11 +179,12 @@ export default function MicroTradePage() {
     }
   };
 
-  // Nudge a rule's buy margin (dropPct) or sell target (risePct) by +/-1 point straight from its card.
+  // Nudge a rule's buy margin (dropPct), sell target (risePct), or order size (buyOrderTotal) straight from its card.
   // Optimistic local update so repeated clicks feel instant; the server value replaces it on the next fetch.
+  const ADJUST_LABELS = { dropPct: 'Buy margin', risePct: 'Sell target', buyOrderTotal: 'Order size' };
   const handleAdjust = async (rule, field, delta) => {
     const next = Math.round((rule[field] + delta) * 100) / 100;
-    if (next <= 0) return flash(`${field === 'dropPct' ? 'Buy margin' : 'Sell target'} must stay above 0%`);
+    if (next <= 0) return flash(`${ADJUST_LABELS[field]} must stay above 0${field === 'buyOrderTotal' ? '' : '%'}`);
     const updated = { ...rule, [field]: next };
     setRules(prev => prev.map(r => r.id === rule.id ? updated : r));
     try { await api.put(`/microtrade/${rule.id}`, updated); }
@@ -428,8 +430,12 @@ export default function MicroTradePage() {
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Buy size</div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>${rule.buyOrderTotal}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>Buy size</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button onClick={() => handleAdjust(rule, 'buyOrderTotal', -50)} title="Decrease order size by $50" style={stepBtnStyle}>&minus;</button>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', minWidth: 50, textAlign: 'center' }}>${rule.buyOrderTotal}</span>
+                <button onClick={() => handleAdjust(rule, 'buyOrderTotal', 50)} title="Increase order size by $50" style={stepBtnStyle}>+</button>
+              </div>
             </div>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Rate limit</div>
@@ -494,7 +500,7 @@ export default function MicroTradePage() {
                   <tr key={o.id} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={{ padding: '8px 12px', color: 'var(--text-primary)', fontWeight: 600 }}>{o.symbol}</td>
                     <td style={{ padding: '8px 12px', color: STATUS_COLORS[o.status] || 'var(--text-muted)', fontWeight: 600 }}>
-                      {o.status}
+                      {o.status === 'Placing' ? 'Unconfirmed — checking Kraken' : o.status}
                       {o.stopLossTriggered && <span title="Stop loss repriced this sell" style={{ marginLeft: 6, fontSize: 10, color: 'var(--red, #ef4444)' }}>SL</span>}
                     </td>
                     <td style={{ padding: '8px 12px', color: 'var(--text-primary)' }}>{o.quantity}</td>

@@ -315,7 +315,7 @@ public class KrakenRestService
         return data.Values.Select(rec => new CombinedOrder(rec)).ToList();
     }
 
-    public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string? clientOrderId = null)
+    public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string? clientOrderId = null, uint? userReference = null)
     {
         // Round price to the symbol's required decimal precision
         if (price > 0)
@@ -333,12 +333,12 @@ public class KrakenRestService
             safeClientOrderId = KrakenReact.Server.Utils.ClientOrderId.Normalize(clientOrderId);
         var krakenClient = await AuthenticatedClient();
 
-        _logger.LogInformation("Placing order to Kraken: symbol={Symbol}, side={Side}, type={Type}, qty={Qty}, price={Price}, cl_ord_id={Cl}",
-            symbol, side, orderType, qty, price, safeClientOrderId ?? "<null>");
+        _logger.LogInformation("Placing order to Kraken: symbol={Symbol}, side={Side}, type={Type}, qty={Qty}, price={Price}, cl_ord_id={Cl}, userref={UserRef}",
+            symbol, side, orderType, qty, price, safeClientOrderId ?? "<null>", userReference);
 
         var result = await krakenClient.SpotApi.Trading.PlaceOrderAsync(
             symbol, side, orderType, qty, price,
-            null, null, null, null, false, null, safeClientOrderId,
+            null, null, null, null, false, userReference, safeClientOrderId,
             new List<OrderFlags> { OrderFlags.PostOnly },
             null, TimeInForce.GTC);
 
@@ -434,6 +434,40 @@ public class KrakenRestService
         var krakenClient = await AuthenticatedClient();
         var x = await krakenClient.SpotApi.Trading.EditOrderAsync(symbol, orderId, newQty, null, newPrice, ct: cts.Token);
         return x;
+    }
+
+    /// <summary>
+    /// Finds an order on Kraken by the userref it was tagged with — used to recover from a placement
+    /// whose HTTP response was lost (timeout) but which Kraken may well have accepted.
+    /// Returns (checked, order): checked=false means Kraken couldn't be asked at all, so "not found"
+    /// must NOT be assumed; checked=true with a null order means it definitely isn't there.
+    /// </summary>
+    public async Task<(bool Checked, CombinedOrder? Order)> FindOrderByUserRefAsync(uint userRef)
+    {
+        try
+        {
+            var krakenClient = await AuthenticatedClient();
+            var open = await krakenClient.SpotApi.Trading.GetOpenOrdersAsync(userRef);
+            if (!open.Success) return (false, null);
+            var hit = open.Data.Open.FirstOrDefault(kv => kv.Value.UserReference == userRef);
+            if (hit.Value != null)
+            {
+                var o = new CombinedOrder(hit.Value) { Id = hit.Key };
+                return (true, o);
+            }
+
+            var closed = await krakenClient.SpotApi.Trading.GetClosedOrdersAsync(userRef, DateTime.UtcNow.AddHours(-1));
+            if (!closed.Success) return (false, null);
+            var chit = closed.Data.Closed.FirstOrDefault(kv => kv.Value.UserReference == userRef);
+            if (chit.Value != null)
+                return (true, new CombinedOrder(chit.Value) { Id = chit.Key });
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error looking up order by userref {UserRef}", userRef);
+            return (false, null);
+        }
     }
 
     public async Task<bool> CancelOrderAsync(string orderId)

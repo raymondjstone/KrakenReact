@@ -689,6 +689,21 @@ public static class AutoMigrationService
 
         try
         {
+            // MicroTradeOrders userref columns — lets a placement whose response timed out be found on Kraken again
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('MicroTradeOrders', 'BuyUserRef') IS NULL
+                    ALTER TABLE [MicroTradeOrders] ADD [BuyUserRef] bigint NULL;
+                IF COL_LENGTH('MicroTradeOrders', 'SellUserRef') IS NULL
+                    ALTER TABLE [MicroTradeOrders] ADD [SellUserRef] bigint NULL;
+            ");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure MicroTradeOrders userref columns");
+        }
+
+        try
+        {
             // PriceAlert auto-order columns (added in new feature release)
             db.Database.ExecuteSqlRaw(@"
                 IF COL_LENGTH('PriceAlerts', 'AutoOrderEnabled') IS NULL

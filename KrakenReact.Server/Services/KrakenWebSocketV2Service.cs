@@ -410,10 +410,19 @@ public class KrakenWebSocketV2Service : BackgroundService
                         var execStatus = (exec.OrderStatus ?? "").ToLower();
                         if (execStatus == "filled" && !string.IsNullOrEmpty(exec.OrderId))
                         {
-                            var side = (exec.Side ?? "buy").ToLower() == "sell" ? "Sell" : "Buy";
-                            var sym = exec.Symbol ?? "?";
-                            var qty = exec.OrderQty;
-                            var price = exec.LimitPrice;
+                            // This execution message is a delta and may omit fields (symbol/qty/price)
+                            // that were only sent on an earlier "new" update. Use the merged order
+                            // state (populated above) so the notification isn't sent with blanks/zeros.
+                            _state.Orders.TryGetValue(exec.OrderId, out var mergedOrder);
+                            var side = !string.IsNullOrEmpty(exec.Side)
+                                ? ((exec.Side ?? "buy").ToLower() == "sell" ? "Sell" : "Buy")
+                                : (mergedOrder?.Side ?? "Buy");
+                            var sym = !string.IsNullOrEmpty(exec.Symbol) ? exec.Symbol : (mergedOrder?.Symbol ?? "?");
+                            var qty = exec.OrderQty != 0 ? exec.OrderQty : (mergedOrder?.Quantity ?? 0);
+                            var price = exec.LimitPrice != 0 ? exec.LimitPrice : (mergedOrder?.Price ?? 0);
+
+                            // Skip if we still don't have enough information to form a meaningful notification
+                            if (sym == "?" || qty <= 0 || price <= 0) continue;
 
                             // Compute P/L vs average buy price (sell orders only)
                             var plText = "";
