@@ -1,33 +1,36 @@
-import { useState, useEffect, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import Dashboard from './Dashboard';
 import AlertCentre from './AlertCentre';
-import InfoPage from '../pages/InfoPage';
-import BalancesPage from '../pages/BalancesPage';
-import AutoTradePage from '../pages/AutoTradePage';
-import GroupedTradesPage from '../pages/GroupedTradesPage';
-import TradesPage from '../pages/TradesPage';
-import PairedTradesPage from '../pages/PairedTradesPage';
-import OrdersPage from '../pages/OrdersPage';
-import LedgerPage from '../pages/LedgerPage';
-import ChartPage from '../pages/ChartPage';
-import DelistedPairsPage from '../pages/DelistedPairsPage';
 import SettingsPage, { loadSettings, saveSettings } from '../pages/SettingsPage';
-import PredictionPage from '../pages/PredictionPage';
-import MarketAnalysisPage from '../pages/MarketAnalysisPage';
-import TaxReportPage from '../pages/TaxReportPage';
-import PriceAlertsPage from '../pages/PriceAlertsPage';
-import AnalyticsPage from '../pages/AnalyticsPage';
-import DcaPage from '../pages/DcaPage';
-import HealthPage from '../pages/HealthPage';
-import StakingPage from '../pages/StakingPage';
-import RebalancePage from '../pages/RebalancePage';
-import FundingRatesPage from '../pages/FundingRatesPage';
-import ProfitLadderPage from '../pages/ProfitLadderPage';
-import MicroTradePage from '../pages/MicroTradePage';
-import RealizedPnLPage from '../pages/RealizedPnLPage';
-import ScheduledOrdersPage from '../pages/ScheduledOrdersPage';
-import AutoRepricePage from '../pages/AutoRepricePage';
 import api from '../api/apiClient';
+
+// Every other page loads on first visit, so the initial bundle only carries the dashboard, alert centre and
+// settings (the charting and grid libraries used by the rest were all downloaded up front).
+const InfoPage = lazy(() => import('../pages/InfoPage'));
+const BalancesPage = lazy(() => import('../pages/BalancesPage'));
+const AutoTradePage = lazy(() => import('../pages/AutoTradePage'));
+const GroupedTradesPage = lazy(() => import('../pages/GroupedTradesPage'));
+const TradesPage = lazy(() => import('../pages/TradesPage'));
+const PairedTradesPage = lazy(() => import('../pages/PairedTradesPage'));
+const OrdersPage = lazy(() => import('../pages/OrdersPage'));
+const LedgerPage = lazy(() => import('../pages/LedgerPage'));
+const ChartPage = lazy(() => import('../pages/ChartPage'));
+const DelistedPairsPage = lazy(() => import('../pages/DelistedPairsPage'));
+const PredictionPage = lazy(() => import('../pages/PredictionPage'));
+const MarketAnalysisPage = lazy(() => import('../pages/MarketAnalysisPage'));
+const TaxReportPage = lazy(() => import('../pages/TaxReportPage'));
+const PriceAlertsPage = lazy(() => import('../pages/PriceAlertsPage'));
+const AnalyticsPage = lazy(() => import('../pages/AnalyticsPage'));
+const DcaPage = lazy(() => import('../pages/DcaPage'));
+const HealthPage = lazy(() => import('../pages/HealthPage'));
+const StakingPage = lazy(() => import('../pages/StakingPage'));
+const RebalancePage = lazy(() => import('../pages/RebalancePage'));
+const FundingRatesPage = lazy(() => import('../pages/FundingRatesPage'));
+const ProfitLadderPage = lazy(() => import('../pages/ProfitLadderPage'));
+const MicroTradePage = lazy(() => import('../pages/MicroTradePage'));
+const RealizedPnLPage = lazy(() => import('../pages/RealizedPnLPage'));
+const ScheduledOrdersPage = lazy(() => import('../pages/ScheduledOrdersPage'));
+const AutoRepricePage = lazy(() => import('../pages/AutoRepricePage'));
 import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
 
@@ -236,6 +239,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         <div style={{ position: 'absolute', inset: 0, display: activeTab === 'dashboard' ? 'block' : 'none' }}>
           <Dashboard config={config} pinnedSymbols={pinnedSymbols} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} largeMovementThreshold={appSettings.largeMovementThreshold} hideAlmostZeroBalances={serverSettings?.hideAlmostZeroBalances} orderPriceOffsets={serverSettings?.orderPriceOffsets} orderQtyPercentages={serverSettings?.orderQtyPercentages} orderBookDepth={serverSettings?.orderBookDepth} />
         </div>
+        <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading…</div>}>
         {activeTab === 'info' && <InfoPage onSymbolClick={openChart} pinnedSet={pinnedSet} onPin={pinSymbol} onUnpin={unpinSymbol} />}
         {activeTab === 'balances' && <BalancesPage hideAlmostZeroBalances={serverSettings?.hideAlmostZeroBalances} />}
         {activeTab === 'autotrade' && <AutoTradePage />}
@@ -261,6 +265,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
         {activeTab === 'autoreprice' && <AutoRepricePage />}
         {activeTab === 'realizedpnl' && <RealizedPnLPage />}
         {activeTab === 'health' && <HealthPage />}
+        </Suspense>
         {activeTab === 'settings' && <SettingsPage settings={appSettings} onSettingsChange={handleSettingsChange} serverSettings={serverSettings} onServerSettingsRefresh={loadServerSettings} />}
       </div>
 
