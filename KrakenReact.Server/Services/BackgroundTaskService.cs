@@ -517,6 +517,7 @@ public class BackgroundTaskService : BackgroundService
             dto.PortfolioPercentage = totalPortfolioValue > 0
                 ? Math.Round(dto.LatestValue / totalPortfolioValue * 100, 2)
                 : 0;
+            _state.ApplyCostBasis(dto); // a fresh DTO has no cost basis; without this the protective jobs lose it on every refresh
             _state.Balances[dto.Asset] = dto;
         }
 

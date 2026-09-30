@@ -546,6 +546,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                             existing.LatestPrice = price;
                             existing.LatestValue = valueUsd;
                             existing.LatestValueGbp = valueGbp;
+                            _state.ApplyCostBasis(existing);
                         }
                         else
                         {
@@ -557,6 +558,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                             newBalance.LatestPrice = price;
                             newBalance.LatestValue = valueUsd;
                             newBalance.LatestValueGbp = valueGbp;
+                            _state.ApplyCostBasis(newBalance);
                             _state.Balances[b.Asset] = newBalance;
                         }
                     }

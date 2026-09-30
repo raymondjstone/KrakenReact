@@ -198,6 +198,7 @@ public class DailyPriceRefreshJob
             dto.PortfolioPercentage = totalPortfolioValue > 0
                 ? Math.Round(dto.LatestValue / totalPortfolioValue * 100, 2)
                 : 0;
+            _state.ApplyCostBasis(dto);
             _state.Balances[dto.Asset] = dto;
         }
 

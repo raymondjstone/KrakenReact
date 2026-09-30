@@ -395,6 +395,7 @@ public class KrakenWebSocketV1Service : BackgroundService
                         balance.LatestPrice = latestPrice.Close;
                         balance.LatestValue = Math.Round(balance.Total * latestPrice.Close, 2);
                         balance.LatestValueGbp = usdGbpRate > 0 ? Math.Round(balance.LatestValue * usdGbpRate, 2) : 0;
+                        _state.ApplyCostBasis(balance); // keeps P&L in step with the new price
                         _balancesDirty = true;
                         changedAny = true;
                     }

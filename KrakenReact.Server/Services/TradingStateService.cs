@@ -62,7 +62,12 @@ public partial class TradingStateService
     // Snapshot caches refreshed by BackgroundTaskService so request handlers don't hit the DB.
     public IReadOnlyList<KrakenUserTrade> CachedTrades { get; private set; } = Array.Empty<KrakenUserTrade>();
     public IReadOnlyList<KrakenLedgerEntry> CachedLedgers { get; private set; } = Array.Empty<KrakenLedgerEntry>();
-    public void SetCachedTrades(IEnumerable<KrakenUserTrade> trades) => CachedTrades = trades.ToList();
+    public void SetCachedTrades(IEnumerable<KrakenUserTrade> trades)
+    {
+        CachedTrades = trades.ToList();
+        try { RecalculateCostBasis(); }
+        catch (Exception) { /* keep the previous cost basis rather than failing the trade refresh */ }
+    }
     public void SetCachedLedgers(IEnumerable<KrakenLedgerEntry> ledgers) => CachedLedgers = ledgers.ToList();
 
     // ML prediction settings
