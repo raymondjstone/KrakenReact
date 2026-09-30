@@ -66,88 +66,164 @@ public class BracketMonitorJob
                     await HandleWatching(bracket);
                 else
                     await HandleActive(bracket);
+
+                // Save per bracket: an order placed for one must be recorded even if a later one throws
+                await db.SaveChangesAsync(ct);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[Bracket] Error processing bracket {Id}", bracket.Id);
             }
         }
-
-        await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>True when <paramref name="price"/> has reached the stop for a position opened by <paramref name="parentSide"/>.
+    /// A buy parent is protected by a sell stop below entry; a sell parent by a buy stop above it.</summary>
+    internal static bool IsStopHit(string parentSide, decimal price, decimal stopPrice)
+    {
+        if (stopPrice <= 0 || price <= 0) return false;
+        return parentSide.Equals("Buy", StringComparison.OrdinalIgnoreCase)
+            ? price <= stopPrice
+            : price >= stopPrice;
+    }
+
+    private decimal CurrentPrice(string symbol)
+    {
+        var key = _state.ResolveSymbolKey(symbol);
+        if (_state.Prices.TryGetValue(key, out var item) && item.BestKline?.Close > 0)
+            return item.BestKline.Close;
+        return _state.LatestPrice(_state.NormalizeOrderSymbolBase(symbol))?.Close ?? 0m;
+    }
+
+    private static bool IsLive(OrderStatus status) => status is OrderStatus.Open or OrderStatus.Pending;
+
+    /// <summary>
+    /// A bracket is an entry order plus exits. On spot the two exits cannot both rest on the book — each would
+    /// need the same coins — so only the take-profit rests; the stop-loss is watched here and, when hit, the
+    /// take-profit is cancelled and the position closed at market (a software OCO).
+    /// The entry's fill is confirmed with Kraken: "no longer in the open-orders cache" also describes a cancelled
+    /// order (and, because filled orders are never evicted from the cache, a filled one never looked gone).
+    /// </summary>
     private async Task HandleWatching(BracketOrder bracket)
     {
-        // Wait at least 90 seconds before assuming the parent order filled
-        if ((DateTime.UtcNow - bracket.CreatedAt).TotalSeconds < 90) return;
+        if ((DateTime.UtcNow - bracket.CreatedAt).TotalSeconds < 30) return;
 
-        // If parent still in open orders, nothing to do
-        if (_state.Orders.ContainsKey(bracket.KrakenOrderId)) return;
+        var parent = await _kraken.GetOrderInfoAsync(bracket.KrakenOrderId);
+        if (parent == null) return; // can't verify — try again next tick
+        if (IsLive(parent.Status)) return;
 
-        _logger.LogInformation("[Bracket] Parent {OrderId} gone — placing SL @ {Stop} TP @ {TP}",
-            bracket.KrakenOrderId, bracket.StopPrice, bracket.TakeProfitPrice);
-
-        var oppSide = bracket.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase)
-            ? OrderSide.Sell : OrderSide.Buy;
-        var sym = bracket.Symbol.Replace("/", "");
-
-        var slResult = await _kraken.PlaceOrderAsync(sym, oppSide, OrderType.Limit,
-            bracket.Quantity, bracket.StopPrice,
-            $"brk-sl-{bracket.Id}-{DateTime.UtcNow:HHmm}");
-
-        var tpResult = await _kraken.PlaceOrderAsync(sym, oppSide, OrderType.Limit,
-            bracket.Quantity, bracket.TakeProfitPrice,
-            $"brk-tp-{bracket.Id}-{DateTime.UtcNow:HHmm}");
-
-        if (slResult.Success && tpResult.Success)
-        {
-            bracket.StopOrderId = slResult.Data?.OrderIds?.FirstOrDefault();
-            bracket.TakeProfitOrderId = tpResult.Data?.OrderIds?.FirstOrDefault();
-            bracket.Status = "Active";
-            bracket.ActivatedAt = DateTime.UtcNow;
-            await _notify.Pushover(
-                $"Bracket Active — {bracket.Symbol}",
-                $"SL @ {bracket.StopPrice:F4}  TP @ {bracket.TakeProfitPrice:F4}");
-        }
-        else
+        if (parent.QuantityFilled <= 0)
         {
             bracket.Status = "Cancelled";
-            var err = $"SL={slResult.Error?.Message} TP={tpResult.Error?.Message}";
-            _logger.LogError("[Bracket] Failed to place SL/TP for {Id}: {Err}", bracket.Id, err);
-            await _notify.Pushover($"Bracket Failed — {bracket.Symbol}", err);
+            bracket.Note = $"Entry order ended {parent.Status} without filling — no exits placed";
+            await _notify.Pushover($"Bracket Cancelled — {bracket.Symbol}", bracket.Note);
+            return;
         }
+
+        // Protect what was actually bought, which may be less than requested after a partial fill
+        bracket.Quantity = parent.QuantityFilled;
+
+        var oppSide = bracket.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Sell : OrderSide.Buy;
+        var sym = bracket.Symbol.Replace("/", "");
+
+        if (bracket.TakeProfitPrice > 0)
+        {
+            var tp = await _kraken.PlaceOrderAsync(sym, oppSide, OrderType.Limit, bracket.Quantity, bracket.TakeProfitPrice,
+                $"brk-tp-{bracket.Id}-{DateTime.UtcNow:HHmm}");
+            if (!tp.Success)
+            {
+                bracket.Status = "Cancelled";
+                bracket.Note = $"Take-profit could not be placed: {tp.Error?.Message}";
+                _logger.LogError("[Bracket] {Id}: {Note}", bracket.Id, bracket.Note);
+                await _notify.Pushover($"Bracket Failed — {bracket.Symbol}", bracket.Note);
+                return;
+            }
+            bracket.TakeProfitOrderId = tp.Data?.OrderIds?.FirstOrDefault();
+        }
+
+        bracket.Status = "Active";
+        bracket.ActivatedAt = DateTime.UtcNow;
+        await _notify.Pushover($"Bracket Active — {bracket.Symbol}",
+            $"TP @ {bracket.TakeProfitPrice:F4} resting, stop-loss @ {bracket.StopPrice:F4} watched");
     }
 
     private async Task HandleActive(BracketOrder bracket)
     {
-        if (bracket.ActivatedAt == null ||
-            (DateTime.UtcNow - bracket.ActivatedAt.Value).TotalSeconds < 90) return;
+        if (bracket.ActivatedAt == null || (DateTime.UtcNow - bracket.ActivatedAt.Value).TotalSeconds < 30) return;
 
-        if (bracket.StopOrderId == null || bracket.TakeProfitOrderId == null) return;
+        decimal tpFilled = 0m;
 
-        var slGone = !_state.Orders.ContainsKey(bracket.StopOrderId);
-        var tpGone = !_state.Orders.ContainsKey(bracket.TakeProfitOrderId);
-
-        if (tpGone && !slGone)
+        // Take-profit leg
+        if (!string.IsNullOrEmpty(bracket.TakeProfitOrderId))
         {
-            await _kraken.CancelOrderAsync(bracket.StopOrderId);
-            bracket.Status = "TookProfit";
-            await _notify.Pushover($"Bracket TP — {bracket.Symbol}",
-                $"Take-profit @ {bracket.TakeProfitPrice:F4} filled. SL cancelled.");
-            _logger.LogInformation("[Bracket] TP hit for bracket {Id}", bracket.Id);
+            var tp = await _kraken.GetOrderInfoAsync(bracket.TakeProfitOrderId);
+            if (tp == null) return; // can't verify
+            tpFilled = tp.QuantityFilled;
+            if (!IsLive(tp.Status))
+            {
+                if (tp.QuantityFilled > 0)
+                {
+                    // Legacy brackets also rested a stop order — release it
+                    if (!string.IsNullOrEmpty(bracket.StopOrderId)) await _kraken.CancelOrderAsync(bracket.StopOrderId);
+                    bracket.Status = "TookProfit";
+                    await _notify.Pushover($"Bracket TP — {bracket.Symbol}", $"Take-profit @ {bracket.TakeProfitPrice:F4} filled.");
+                    _logger.LogInformation("[Bracket] TP hit for bracket {Id}", bracket.Id);
+                    return;
+                }
+                // Cancelled or expired without filling (e.g. by hand) — the stop below still applies
+                bracket.TakeProfitOrderId = null;
+                bracket.Note = "Take-profit order ended unfilled; stop-loss still watched";
+            }
         }
-        else if (slGone && !tpGone)
+
+        // Legacy brackets rested a real stop order: a fill means the stop hit
+        if (!string.IsNullOrEmpty(bracket.StopOrderId))
         {
-            await _kraken.CancelOrderAsync(bracket.TakeProfitOrderId);
+            var sl = await _kraken.GetOrderInfoAsync(bracket.StopOrderId);
+            if (sl != null && !IsLive(sl.Status) && sl.QuantityFilled > 0)
+            {
+                if (!string.IsNullOrEmpty(bracket.TakeProfitOrderId)) await _kraken.CancelOrderAsync(bracket.TakeProfitOrderId);
+                bracket.Status = "Stopped";
+                await _notify.Pushover($"Bracket SL — {bracket.Symbol}", $"Stop-loss @ {bracket.StopPrice:F4} filled. TP cancelled.");
+            }
+            return; // legacy: nothing more to watch in software
+        }
+
+        // Software stop
+        var price = CurrentPrice(bracket.Symbol);
+        if (!IsStopHit(bracket.Side, price, bracket.StopPrice)) return;
+
+        _logger.LogWarning("[Bracket] {Id}: price {Price} hit stop {Stop} — exiting", bracket.Id, price, bracket.StopPrice);
+
+        // Free the coins first; if the cancel fails, do nothing this tick (the order may be filling) and retry
+        if (!string.IsNullOrEmpty(bracket.TakeProfitOrderId))
+        {
+            if (!await _kraken.CancelOrderAsync(bracket.TakeProfitOrderId)) return;
+            bracket.TakeProfitOrderId = null;
+        }
+
+        var oppSide = bracket.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Sell : OrderSide.Buy;
+        var remaining = bracket.Quantity - tpFilled;
+        if (remaining <= 0)
+        {
+            bracket.Status = "TookProfit";
+            return;
+        }
+
+        var exit = await _kraken.PlaceOrderAsync(bracket.Symbol.Replace("/", ""), oppSide, OrderType.Market, remaining, 0,
+            $"brk-sl-{bracket.Id}-{DateTime.UtcNow:HHmm}", postOnly: false);
+        if (exit.Success)
+        {
             bracket.Status = "Stopped";
-            await _notify.Pushover($"Bracket SL — {bracket.Symbol}",
-                $"Stop-loss @ {bracket.StopPrice:F4} filled. TP cancelled.");
-            _logger.LogInformation("[Bracket] SL hit for bracket {Id}", bracket.Id);
+            bracket.Note = $"Stop-loss hit at {price:F4}; closed {remaining} at market";
+            await _notify.Pushover($"Bracket SL — {bracket.Symbol}", bracket.Note);
         }
-        else if (slGone && tpGone)
+        else
         {
-            bracket.Status = "TookProfit";
-            _logger.LogWarning("[Bracket] Both legs gone for bracket {Id}", bracket.Id);
+            // Take-profit is already cancelled, so stay Active and retry the exit next tick
+            bracket.Note = $"Stop-loss hit but exit failed: {exit.Error?.Message} — retrying";
+            _logger.LogError("[Bracket] {Id}: {Note}", bracket.Id, bracket.Note);
+            await _notify.Pushover($"Bracket exit FAILED — {bracket.Symbol}", bracket.Note);
         }
     }
 }
