@@ -10,9 +10,9 @@ namespace KrakenReact.Server.Services;
 public class DcaJob
 {
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
-    private readonly KrakenRestService _kraken;
+    private readonly IOrderGateway _kraken;
     private readonly TradingStateService _state;
-    private readonly NotificationService _notify;
+    private readonly INotifier _notify;
     private readonly ILogger<DcaJob> _logger;
 
     // Fear & Greed cache — shared across transient instances, refreshed every 4 hours
@@ -20,7 +20,7 @@ public class DcaJob
     private static readonly SemaphoreSlim _fgLock = new(1, 1);
     private static readonly HttpClient _fgHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
 
-    public DcaJob(IDbContextFactory<KrakenDbContext> dbFactory, KrakenRestService kraken, TradingStateService state, NotificationService notify, ILogger<DcaJob> logger)
+    public DcaJob(IDbContextFactory<KrakenDbContext> dbFactory, IOrderGateway kraken, TradingStateService state, INotifier notify, ILogger<DcaJob> logger)
     {
         _dbFactory = dbFactory;
         _kraken = kraken;
