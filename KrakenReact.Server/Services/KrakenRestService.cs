@@ -286,7 +286,7 @@ public class KrakenRestService : IOrderGateway
 
     public async Task<List<CombinedOrder>> GetClosedOrdersAsync(bool initialLoad)
     {
-        var dbItems = await _db.GetCombinedOrdersAsync() ?? new List<CombinedOrder>();
+        var dbItems = (await _db.GetCombinedOrdersAsync())?.ToList() ?? new List<CombinedOrder>();
         if (initialLoad) return dbItems;
 
         var krakenClient = await AuthenticatedClient();

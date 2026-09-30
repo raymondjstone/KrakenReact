@@ -205,7 +205,7 @@ public class DbMethods
     /// query rather than one each — which is precisely the moment this matters, at startup.
     /// </para>
     /// </summary>
-    private async Task<List<T>> GetCachedAsync<T>(Func<List<T>?> read, Action<List<T>> write, Func<Task<List<T>>> load)
+    private async Task<IReadOnlyList<T>> GetCachedAsync<T>(Func<List<T>?> read, Action<List<T>> write, Func<Task<List<T>>> load)
     {
         var cached = read();
         if (cached is not null) return cached;
@@ -251,11 +251,11 @@ public class DbMethods
         }
     }
 
-    public Task<List<KrakenUserTrade>> GetTradesAsync() =>
+    public Task<IReadOnlyList<KrakenUserTrade>> GetTradesAsync() =>
         GetCachedAsync(() => _tradesCache, v => _tradesCache = v,
             () => UseDbContextAsync(async context => await context.Trades.AsNoTracking().OrderByDescending(c => c.Timestamp).ToListAsync()));
 
-    public Task<List<KrakenLedgerEntry>> GetLedgersAsync() =>
+    public Task<IReadOnlyList<KrakenLedgerEntry>> GetLedgersAsync() =>
         GetCachedAsync(() => _ledgersCache, v => _ledgersCache = v,
             () => UseDbContextAsync(context => context.Ledgers.AsNoTracking().OrderByDescending(c => c.Timestamp).ToListAsync()));
 
@@ -271,7 +271,7 @@ public class DbMethods
             .Where(k => k.Asset == asset && (interval == null || k.Interval == interval))
             .AsNoTracking().OrderBy(c => c.OpenTime).ToListAsync());
 
-    public Task<List<CombinedOrder>> GetCombinedOrdersAsync() =>
+    public Task<IReadOnlyList<CombinedOrder>> GetCombinedOrdersAsync() =>
         GetCachedAsync(() => _combinedOrdersCache, v => _combinedOrdersCache = v,
             () => UseDbContextAsync(context => context.CombinedOrders.AsNoTracking().OrderByDescending(c => c.CloseTime ?? DateTime.MaxValue).ToListAsync()));
 
