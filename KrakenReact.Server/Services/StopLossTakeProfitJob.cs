@@ -18,6 +18,11 @@ public class StopLossTakeProfitJob
     public const string TrailingHighsKey = "TrailingHighPrices";
 
     private static bool _trailingHighsLoaded;
+    private static Dictionary<string, decimal> _savedHighs = new();
+    private static DateTime _lastHighsSaveUtc = DateTime.MinValue;
+
+    private static readonly TimeSpan HighsMaxSaveAge = TimeSpan.FromMinutes(30);
+    private const decimal HighsSaveMovePct = 1m;
 
     private readonly TradingStateService _state;
     private readonly IOrderGateway _kraken;
@@ -272,7 +277,8 @@ public class StopLossTakeProfitJob
         foreach (var asset in _state.TrailingHighPrices.Keys.ToList())
             if (!heldAssets.Contains(asset) && _state.TrailingHighPrices.TryRemove(asset, out _)) changed = true;
 
-        if (changed) await SaveTrailingHighsAsync(ct);
+        if (changed && ShouldPersistHighs(_savedHighs, _state.TrailingHighPrices, _lastHighsSaveUtc, DateTime.UtcNow))
+            await SaveTrailingHighsAsync(ct);
     }
 
     /// <summary>True while a balance is a real position (worth more than dust).</summary>
@@ -286,8 +292,11 @@ public class StopLossTakeProfitJob
         {
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
             var json = (await db.AppSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == TrailingHighsKey, ct))?.Value;
-            foreach (var (asset, high) in ParseTrailingHighs(json))
+            var saved = ParseTrailingHighs(json);
+            foreach (var (asset, high) in saved)
                 _state.TrailingHighPrices.AddOrUpdate(asset, high, (_, existing) => Math.Max(existing, high));
+            _savedHighs = saved;
+            _lastHighsSaveUtc = DateTime.UtcNow;
             _trailingHighsLoaded = true;
         }
         catch (Exception ex)
@@ -308,8 +317,32 @@ public class StopLossTakeProfitJob
             else
                 setting.Value = json;
             await db.SaveChangesAsync(ct);
+            _savedHighs = new Dictionary<string, decimal>(_state.TrailingHighPrices);
+            _lastHighsSaveUtc = DateTime.UtcNow;
         }
         catch (Exception ex) { _logger.LogWarning(ex, "[TrailingStop] Could not save highs"); }
+    }
+
+    /// <summary>
+    /// Whether the trailing highs are worth writing yet. A high moves whenever any held coin makes a new peak, so saving on
+    /// every change meant a database write nearly every five-minute tick — on a server already sensitive to write volume.
+    /// Save immediately when a position is added or dropped (that changes what the stop protects), or when a high has moved
+    /// by at least 1% from what is stored; otherwise let small drifts wait up to 30 minutes.
+    /// </summary>
+    internal static bool ShouldPersistHighs(IReadOnlyDictionary<string, decimal> saved, IEnumerable<KeyValuePair<string, decimal>> current, DateTime lastSaveUtc, DateTime nowUtc)
+    {
+        var now = current.ToDictionary(k => k.Key, k => k.Value, StringComparer.OrdinalIgnoreCase);
+        if (now.Count != saved.Count) return true;
+
+        var differs = false;
+        foreach (var (asset, high) in now)
+        {
+            if (!saved.TryGetValue(asset, out var was)) return true;           // a different set of positions
+            if (high == was) continue;
+            differs = true;
+            if (was > 0 && Math.Abs(high - was) / was * 100m >= HighsSaveMovePct) return true;
+        }
+        return differs && nowUtc - lastSaveUtc >= HighsMaxSaveAge;
     }
 
     internal static Dictionary<string, decimal> ParseTrailingHighs(string? json)

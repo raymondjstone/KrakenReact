@@ -93,3 +93,37 @@ public class TrailingHighLifecycleTests
         Assert.Equal(expected, StopLossTakeProfitJob.IsPositionHeld((decimal)total, (decimal)valueUsd));
     }
 }
+
+public class TrailingHighPersistenceTests
+{
+    private static readonly DateTime Now = new(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+    private static Dictionary<string, decimal> Highs(params (string, decimal)[] h) => h.ToDictionary(x => x.Item1, x => x.Item2);
+
+    [Fact]
+    public void Unchanged_DoesNotWrite() =>
+        Assert.False(StopLossTakeProfitJob.ShouldPersistHighs(Highs(("BTC", 100m)), Highs(("BTC", 100m)), Now.AddHours(-5), Now));
+
+    [Fact]
+    public void ATinyDriftJustAfterASave_Waits() =>
+        Assert.False(StopLossTakeProfitJob.ShouldPersistHighs(Highs(("BTC", 100m)), Highs(("BTC", 100.2m)), Now.AddMinutes(-5), Now));
+
+    [Fact]
+    public void ATinyDrift_IsWrittenOnceThirtyMinutesHavePassed() =>
+        Assert.True(StopLossTakeProfitJob.ShouldPersistHighs(Highs(("BTC", 100m)), Highs(("BTC", 100.2m)), Now.AddMinutes(-31), Now));
+
+    [Fact]
+    public void AOnePercentMove_IsWrittenAtOnce() =>
+        Assert.True(StopLossTakeProfitJob.ShouldPersistHighs(Highs(("BTC", 100m)), Highs(("BTC", 101m)), Now.AddMinutes(-1), Now));
+
+    [Fact]
+    public void ANewPosition_IsWrittenAtOnce() =>
+        Assert.True(StopLossTakeProfitJob.ShouldPersistHighs(Highs(("BTC", 100m)), Highs(("BTC", 100m), ("ETH", 50m)), Now.AddMinutes(-1), Now));
+
+    [Fact]
+    public void AClosedPosition_IsWrittenAtOnce() =>
+        Assert.True(StopLossTakeProfitJob.ShouldPersistHighs(Highs(("BTC", 100m), ("ETH", 50m)), Highs(("BTC", 100m)), Now.AddMinutes(-1), Now));
+
+    [Fact]
+    public void ASwappedAsset_IsWrittenAtOnce() =>
+        Assert.True(StopLossTakeProfitJob.ShouldPersistHighs(Highs(("BTC", 100m)), Highs(("ETH", 100m)), Now.AddMinutes(-1), Now));
+}
