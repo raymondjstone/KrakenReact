@@ -240,4 +240,103 @@ public class ProtectionJobTests : OrderJobTestBase
 
         NothingPlaced();
     }
+
+    // ── Profit ladder: one sale per crossing ────────────────────────────────
+
+    private void LadderSold(Times times) =>
+        Gateway.Verify(g => g.PlaceOrderWithRecoveryAsync("XBTUSD", OrderSide.Sell, OrderType.Limit, It.IsAny<decimal>(), It.IsAny<decimal>(),
+            It.IsAny<string?>(), false), times);
+
+    [Fact]
+    public async Task ProfitLadder_DoesNotSellAgainWhileTheGainStaysAboveTheTrigger_EvenWithNoCooldown()
+    {
+        await Seed(new ProfitLadderRule { Symbol = "BTC/USD", TriggerPct = 10m, SellPct = 50m, CooldownHours = 0 });
+        Holding("BTC", price: 120m, total: 2m);
+        var job = NewJob();
+
+        for (var i = 0; i < 4; i++) await job.ExecuteAsync(CancellationToken.None);
+
+        LadderSold(Times.Once()); // previously: one more slice every cooldown period for as long as the price stayed high
+    }
+
+    [Fact]
+    public async Task ProfitLadder_ReArmsAfterTheGainFallsBelowTheTrigger_ThenSellsAtTheNextCrossing()
+    {
+        await Seed(new ProfitLadderRule { Symbol = "BTC/USD", TriggerPct = 10m, SellPct = 50m, CooldownHours = 0 });
+        var job = NewJob();
+
+        Holding("BTC", price: 120m, total: 2m);
+        await job.ExecuteAsync(CancellationToken.None);          // first crossing → sells
+        Holding("BTC", price: 105m, total: 1m);                  // falls back to +5% → re-arms
+        await job.ExecuteAsync(CancellationToken.None);
+        LadderSold(Times.Once());
+
+        Holding("BTC", price: 125m, total: 1m);                  // crosses again → sells again
+        await job.ExecuteAsync(CancellationToken.None);
+        LadderSold(Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task ProfitLadder_ADipDuringTheCooldownStillReArms()
+    {
+        await Seed(new ProfitLadderRule { Symbol = "BTC/USD", TriggerPct = 10m, SellPct = 50m, CooldownHours = 24 });
+        var job = NewJob();
+
+        Holding("BTC", price: 120m, total: 2m);
+        await job.ExecuteAsync(CancellationToken.None);
+        Holding("BTC", price: 102m, total: 1m);                  // dips while the 24h cooldown is still running
+        await job.ExecuteAsync(CancellationToken.None);
+
+        // Force the cooldown to have elapsed, then cross again
+        await using (var db = Factory.CreateDbContext())
+        {
+            var rule = await db.ProfitLadderRules.SingleAsync();
+            rule.LastTriggeredAt = DateTime.UtcNow.AddHours(-25);
+            await db.SaveChangesAsync();
+        }
+        Holding("BTC", price: 130m, total: 1m);
+        await job.ExecuteAsync(CancellationToken.None);
+
+        LadderSold(Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task ProfitLadder_AFailedSellStaysArmed_AndIsRetried()
+    {
+        await Seed(new ProfitLadderRule { Symbol = "BTC/USD", TriggerPct = 10m, SellPct = 50m, CooldownHours = 0 });
+        Holding("BTC", price: 120m, total: 2m);
+        Gateway.Setup(g => g.PlaceOrderWithRecoveryAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .ReturnsAsync(new Placement(false, null, "EOrder:Insufficient funds"));
+        var job = NewJob();
+
+        await job.ExecuteAsync(CancellationToken.None);
+        await job.ExecuteAsync(CancellationToken.None);
+
+        LadderSold(Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task ProfitLadder_AnUnconfirmedSellIsNotRepeated()
+    {
+        await Seed(new ProfitLadderRule { Symbol = "BTC/USD", TriggerPct = 10m, SellPct = 50m, CooldownHours = 0 });
+        Holding("BTC", price: 120m, total: 2m);
+        Gateway.Setup(g => g.PlaceOrderWithRecoveryAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .ReturnsAsync(new Placement(false, null, "EService:Timeout", Unknown: true));
+        var job = NewJob();
+
+        await job.ExecuteAsync(CancellationToken.None);
+        await job.ExecuteAsync(CancellationToken.None);
+
+        LadderSold(Times.Once());
+    }
+
+    [Fact]
+    public void DisarmedRules_RoundTrip_AndIgnoreJunk()
+    {
+        var ids = StopLossTakeProfitJob.ParseDisarmedRules(" 3, 1 ,x,,-2");
+        Assert.Equal("1,3", StopLossTakeProfitJob.SerializeDisarmedRules(ids));
+        Assert.Empty(StopLossTakeProfitJob.ParseDisarmedRules(null));
+    }
 }

@@ -312,9 +312,13 @@ public class StopLossTakeProfitJob
         var rules = await db.ProfitLadderRules.Where(r => r.Active).ToListAsync(ct);
         if (rules.Count == 0) return;
 
+        var disarmedRow = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == DisarmedRulesKey, ct);
+        var disarmed = ParseDisarmedRules(disarmedRow?.Value);
+        var before = SerializeDisarmedRules(disarmed);
+
         foreach (var rule in rules)
         {
-            try { await ProcessProfitLadderRuleAsync(rule); }
+            try { await ProcessProfitLadderRuleAsync(rule, disarmed); }
             catch (Exception ex)
             {
                 rule.LastResult = $"Exception: {ex.Message}";
@@ -322,27 +326,55 @@ public class StopLossTakeProfitJob
             }
         }
 
+        var after = SerializeDisarmedRules(disarmed);
+        if (after != before)
+        {
+            if (disarmedRow == null)
+                db.AppSettings.Add(new AppSettings { Key = DisarmedRulesKey, Value = after, Description = "Profit ladder rules that have sold and are waiting for the gain to fall back below their trigger (managed automatically)" });
+            else
+                disarmedRow.Value = after;
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
-    private async Task ProcessProfitLadderRuleAsync(ProfitLadderRule rule)
-    {
-        // Cooldown check
-        if (rule.LastTriggeredAt.HasValue &&
-            (DateTime.UtcNow - rule.LastTriggeredAt.Value).TotalHours < rule.CooldownHours)
-            return;
+    /// <summary>AppSettings key holding the ids of profit-ladder rules that have fired and not yet re-armed.</summary>
+    public const string DisarmedRulesKey = "ProfitLadderDisarmedRules";
 
+    internal static HashSet<int> ParseDisarmedRules(string? value) =>
+        (value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => int.TryParse(s, out var id) ? id : -1).Where(id => id >= 0).ToHashSet();
+
+    internal static string SerializeDisarmedRules(IEnumerable<int> ids) => string.Join(",", ids.OrderBy(i => i));
+
+    private async Task ProcessProfitLadderRuleAsync(ProfitLadderRule rule, HashSet<int> disarmed)
+    {
         var normalizedAsset = TradingStateService.NormalizeAsset(rule.Symbol.Split('/')[0]);
         var bal = _state.Balances.Values.FirstOrDefault(b =>
             string.Equals(b.Asset, normalizedAsset, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(b.Asset, rule.Symbol.Split('/')[0], StringComparison.OrdinalIgnoreCase));
 
-        if (bal == null || bal.Available <= 0 || bal.LatestPrice <= 0) return;
+        if (bal == null || bal.LatestPrice <= 0) return;
         if (!bal.TotalCostBasis.HasValue || bal.TotalCostBasis.Value <= 0 || bal.Total <= 0) return;
 
         var avgCost = bal.TotalCostBasis.Value / bal.Total;
         var changePct = (bal.LatestPrice - avgCost) / avgCost * 100m;
 
+        // A rung sells once per crossing. After it fires the rule is disarmed and stays so while the gain remains at or
+        // above the trigger — the cooldown alone re-sold another slice every period for as long as the price stayed high.
+        // It re-arms once the gain has fallen back below the trigger, so the next crossing sells again. Checked before
+        // the cooldown so a dip that happens during the cooldown isn't missed.
+        if (disarmed.Contains(rule.Id))
+        {
+            if (changePct < rule.TriggerPct) disarmed.Remove(rule.Id);
+            return;
+        }
+
+        if (rule.LastTriggeredAt.HasValue &&
+            (DateTime.UtcNow - rule.LastTriggeredAt.Value).TotalHours < rule.CooldownHours)
+            return;
+
+        if (bal.Available <= 0) return;
         if (changePct < rule.TriggerPct) return;
 
         _logger.LogInformation("[ProfitLadder] {Asset} up {Pct:F1}% — triggering rule {Id} (sell {SellPct}%)",
@@ -360,6 +392,7 @@ public class StopLossTakeProfitJob
             _logger.LogInformation("[ProfitLadder] DRY RUN — would limit-sell {Qty} {Asset} @ {Price}", sellQty, bal.Asset, bal.LatestPrice);
             rule.LastTriggeredAt = DateTime.UtcNow;
             rule.LastResult = $"DRY RUN — would sell {sellQty:F6} {bal.Asset} @ {bal.LatestPrice:F4} (up {changePct:F1}%)";
+            disarmed.Add(rule.Id);
             await _notify.Pushover($"DRY RUN — Profit Ladder {bal.Asset}",
                 $"Would limit-sell {sellQty:F6} {bal.Asset} @ {bal.LatestPrice:F4} (+{changePct:F1}% from avg cost)");
             return;
@@ -372,6 +405,10 @@ public class StopLossTakeProfitJob
         rule.LastResult = result.Success
             ? $"OK — sold {sellQty:F6} {bal.Asset} @ {bal.LatestPrice:F4} (up {changePct:F1}%)"
             : $"FAIL: {result.Error ?? "unknown"}";
+
+        // Disarm on success and on an unconfirmed outcome (the sell may exist — don't risk selling the slice twice);
+        // a definite failure stays armed and is retried after the cooldown.
+        if (result.Success || result.Unknown) disarmed.Add(rule.Id);
 
         if (result.Success)
         {
