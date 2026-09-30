@@ -36,16 +36,23 @@ public class TradingHub : Hub
         await base.OnDisconnectedAsync(exception);
     }
 
-    public Task SubscribeBook(string pair)
+    public async Task SubscribeBook(string pair)
     {
+        var previous = _books.PairOf(Context.ConnectionId);
         if (!_books.Subscribe(Context.ConnectionId, pair))
             throw new HubException("Unknown pair");
-        return Task.CompletedTask;
+
+        // Book messages go only to the connections watching that pair, not to every open tab
+        var current = _books.PairOf(Context.ConnectionId)!;
+        if (previous != null && !string.Equals(previous, current, StringComparison.OrdinalIgnoreCase))
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, BookSubscriptions.GroupName(previous));
+        await Groups.AddToGroupAsync(Context.ConnectionId, BookSubscriptions.GroupName(current));
     }
 
-    public Task UnsubscribeBook()
+    public async Task UnsubscribeBook()
     {
+        var previous = _books.PairOf(Context.ConnectionId);
         _books.Release(Context.ConnectionId);
-        return Task.CompletedTask;
+        if (previous != null) await Groups.RemoveFromGroupAsync(Context.ConnectionId, BookSubscriptions.GroupName(previous));
     }
 }

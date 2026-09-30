@@ -17,6 +17,12 @@ public sealed class BookSubscriptions
 
     public BookSubscriptions(TradingStateService state) => _state = state;
 
+    /// <summary>The SignalR group that receives one pair's book messages. Case-insensitive, so any spelling of a pair maps to one group.</summary>
+    public static string GroupName(string pair) => "book:" + pair.ToUpperInvariant();
+
+    /// <summary>The pair a connection is currently watching, or null.</summary>
+    public string? PairOf(string connectionId) => _byConnection.TryGetValue(connectionId, out var pair) ? pair : null;
+
     /// <summary>Returns false (and changes nothing) when the pair is not a known exchange pair.</summary>
     public bool Subscribe(string connectionId, string? pair)
     {

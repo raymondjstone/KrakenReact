@@ -235,7 +235,7 @@ public class KrakenWebSocketV1Service : BackgroundService
                     {
                         var asks = ParseBookLevels(bookRoot, "as");
                         var bids = ParseBookLevels(bookRoot, "bs");
-                        _ = _hub.Clients.All.SendAsync("BookSnapshot", new { pair, asks, bids });
+                        _ = _hub.Clients.Group(BookSubscriptions.GroupName(pair)).SendAsync("BookSnapshot", new { pair, asks, bids });
                     }
                     else
                     {
@@ -255,7 +255,7 @@ public class KrakenWebSocketV1Service : BackgroundService
                         var finalBids = bids2 ?? bids;
                         if (asks != null && asks2 != null) finalAsks = asks2; // prefer the second if both
                         if (bids != null && bids2 != null) finalBids = bids2;
-                        _ = _hub.Clients.All.SendAsync("BookUpdate", new { pair, asks = finalAsks, bids = finalBids });
+                        _ = _hub.Clients.Group(BookSubscriptions.GroupName(pair)).SendAsync("BookUpdate", new { pair, asks = finalAsks, bids = finalBids });
                     }
                 }
             }

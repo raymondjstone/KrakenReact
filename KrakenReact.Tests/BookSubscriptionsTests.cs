@@ -79,4 +79,24 @@ public class BookSubscriptionsTests
         books.Release("ghost");
         Assert.Equal("XBT/USD", state.BookPair);
     }
+
+    [Fact]
+    public void GroupNames_IgnoreCase_SoAnySpellingReachesTheSameGroup()
+    {
+        Assert.Equal(BookSubscriptions.GroupName("XBT/USD"), BookSubscriptions.GroupName("xbt/usd"));
+        Assert.NotEqual(BookSubscriptions.GroupName("XBT/USD"), BookSubscriptions.GroupName("ETH/USD"));
+    }
+
+    [Fact]
+    public void PairOf_ReportsWhatAConnectionWatches_AndForgetsItOnRelease()
+    {
+        var (books, _) = Make();
+        Assert.Null(books.PairOf("c1"));
+
+        books.Subscribe("c1", "xbt/usd");
+        Assert.Equal("XBT/USD", books.PairOf("c1"));
+
+        books.Release("c1");
+        Assert.Null(books.PairOf("c1"));
+    }
 }
