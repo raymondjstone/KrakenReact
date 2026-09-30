@@ -12,6 +12,19 @@ const api = axios.create({
   timeout: 30000,
 });
 
+// Placing an order can legitimately take longer than an ordinary request: the server waits up to its Kraken timeout (60 s by
+// default) and then looks the order up again (a further 9 s). Giving up sooner leaves the user not knowing whether the order
+// exists. Pass this as the request timeout on calls that place or change orders.
+export const ORDER_TIMEOUT_MS = 100000;
+
+/** True when the request got no answer at all (timed out, or the connection dropped): the server may still have acted on it. */
+export function hasNoResponse(err) {
+  return !!err && !err.response && (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK' || err.code === 'ETIMEDOUT');
+}
+
+export const NO_RESPONSE_ORDER_MESSAGE =
+  'No response from the server - the order may or may not have been placed. Check Open Orders before trying again.';
+
 /**
  * Shows a short error banner (rendered by App). Use it where a failed action would otherwise be swallowed — a
  * delete or save that silently did nothing looks exactly like one that worked.

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
-import api from '../api/apiClient';
+import api, { ORDER_TIMEOUT_MS, hasNoResponse, NO_RESPONSE_ORDER_MESSAGE } from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 import { formatPrice, colorForValue } from '../utils/formatters';
 import OrderDialog from '../components/OrderDialog';
@@ -193,11 +193,11 @@ function OrderLadderDialog({ symbols, onClose }) {
         startPrice: parseFloat(startPrice),
         endPrice: parseFloat(endPrice),
         count,
-      });
+      }, { timeout: ORDER_TIMEOUT_MS * 3 });   // places several orders one after another
       setStatus(r.data.message || 'Placed');
       setTimeout(onClose, 2000);
     } catch (err) {
-      setStatus(err.response?.data?.error || 'Error placing ladder');
+      setStatus(hasNoResponse(err) ? NO_RESPONSE_ORDER_MESSAGE : (err.response?.data?.error || 'Error placing ladder'));
     } finally {
       setPlacing(false);
     }

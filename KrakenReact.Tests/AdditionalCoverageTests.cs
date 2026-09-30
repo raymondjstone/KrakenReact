@@ -19,22 +19,6 @@ public class AutoOrderServiceTests
         return new AutoOrderService(state, null!, null!, olog.Object);
     }
 
-    [Theory]
-    [InlineData(123.4567, 2, 123.45)]
-    [InlineData(0.0001, 2, 0)]
-    [InlineData(99.999, 0, 99)]
-    [InlineData(100.0, 4, 100)]
-    public void RoundDown_TruncatesDownward(double value, int decimals, double expected)
-    {
-        Assert.Equal((decimal)expected, AutoOrderService.RoundDown((decimal)value, decimals));
-    }
-
-    [Fact]
-    public void RoundDown_DoesNotRoundHalfUp()
-    {
-        Assert.Equal(1.235m, AutoOrderService.RoundDown(1.2359m, 3));
-    }
-
     [Fact]
     public async Task CheckAsync_NoHistoricPrices_ReturnsReasonNotLoaded()
     {

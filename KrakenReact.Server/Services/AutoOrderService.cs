@@ -123,10 +123,4 @@ public class AutoOrderService
         ao.Reason = ao.OrderRanking < 4400 ? $"{rulename} OK but low score" : $"{rulename} OK";
         return ao;
     }
-
-    public static decimal RoundDown(decimal value, int decimals)
-    {
-        decimal factor = (decimal)Math.Pow(10, decimals);
-        return Math.Floor(value * factor) / factor;
-    }
 }

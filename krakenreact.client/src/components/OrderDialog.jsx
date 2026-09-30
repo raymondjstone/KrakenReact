@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import api from '../api/apiClient';
+import api, { ORDER_TIMEOUT_MS, hasNoResponse, NO_RESPONSE_ORDER_MESSAGE } from '../api/apiClient';
 
 const DEFAULT_PRICE_OFFSETS = [2, 5, 10, 15];
 const DEFAULT_QTY_PERCENTAGES = [5, 10, 20, 25, 50, 75, 100];
@@ -242,14 +242,14 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
     try {
       const send = async (confirmPriceDeviation) => {
         if (editOrder) {
-          await api.put('/orders/' + editOrder.id, { price: Number(price), quantity: Number(quantity), confirmPriceDeviation });
+          await api.put('/orders/' + editOrder.id, { price: Number(price), quantity: Number(quantity), confirmPriceDeviation }, { timeout: ORDER_TIMEOUT_MS });
         } else {
           const payload = { symbol: symbol.replace('/', ''), side, price: Number(price), quantity: Number(quantity), confirmPriceDeviation };
           if (bracketEnabled && side === 'Buy') {
             if (Number(bracketStopPct) > 0) payload.bracketStopPct = Number(bracketStopPct);
             if (Number(bracketTpPct) > 0) payload.bracketTakeProfitPct = Number(bracketTpPct);
           }
-          await api.post('/orders', payload);
+          await api.post('/orders', payload, { timeout: ORDER_TIMEOUT_MS });
         }
       };
 
@@ -270,8 +270,11 @@ Place it anyway?`)) return; // finally re-enables the button
       }
       onClose(true);
     } catch (submitErr) {
-      if (submitErr.response?.status === 504 || submitErr.response?.status === 502) {
-        setError('Server timed out - the Kraken API did not respond in time. Please try again.');
+      if (hasNoResponse(submitErr)) {
+        // Not "failed": the request may have reached Kraken. Retrying blindly is how a second order gets placed.
+        setError(NO_RESPONSE_ORDER_MESSAGE);
+      } else if (submitErr.response?.status === 504 || submitErr.response?.status === 502) {
+        setError('The server did not get an answer from Kraken in time - the order may or may not have been placed. Check Open Orders before trying again.');
       } else {
         const data = submitErr.response?.data;
         const msg = (typeof data === 'string' && !data.trim().startsWith('<'))
