@@ -251,24 +251,12 @@ public class KrakenRestService : IOrderGateway
 
         var starttime = dbItems.Any() ? dbItems.Max(a => a.Timestamp).AddHours(-4) : DateTime.UtcNow.AddYears(-3);
         var krakenClient = await AuthenticatedClient();
-        var data = new Dictionary<string, KrakenLedgerEntry>(MAX_RECORDS_WANTED);
-        int recs = MAX_RECORDS_RETURNED_PER_CALL;
-        int attempt = 0;
-        while (recs >= MAX_RECORDS_RETURNED_PER_CALL && data.Count < MAX_RECORDS_WANTED)
+        var (ok, data) = await PagedFetch.FetchAllAsync<KrakenLedgerEntry>(async offset =>
         {
-            var result = await krakenClient.SpotApi.Account.GetLedgerInfoAsync(null, null, null, starttime, null, data.Count);
-            if (result.Success)
-            {
-                attempt = 0;
-                recs = result.Data.Ledger.Count;
-                foreach (var kvp in result.Data.Ledger) data[kvp.Key] = kvp.Value;
-            }
-            else
-            {
-                if (!(await HandleErrors(result.Error, attempt++))) return dbItems;
-                recs = MAX_RECORDS_RETURNED_PER_CALL;
-            }
-        }
+            var result = await krakenClient.SpotApi.Account.GetLedgerInfoAsync(null, null, null, starttime, null, offset);
+            return result.Success ? new PageResult<KrakenLedgerEntry>(true, result.Data.Ledger) : new PageResult<KrakenLedgerEntry>(false, null, result.Error);
+        }, (error, attempt) => HandleErrors(error as CryptoExchange.Net.Objects.Error, attempt), MAX_RECORDS_WANTED);
+        if (!ok) return dbItems;
         var knownIds = dbItems.Select(i => i.Id).ToHashSet();
         var newrecs = data.Values.Where(rec => !knownIds.Contains(rec.Id)).ToList();
         dbItems.AddRange(newrecs);
@@ -320,24 +308,12 @@ public class KrakenRestService : IOrderGateway
         if (initialLoad) return dbItems;
 
         var krakenClient = await AuthenticatedClient();
-        var data = new Dictionary<string, KrakenOrder>(MAX_RECORDS_WANTED);
-        int recs = MAX_RECORDS_RETURNED_PER_CALL;
-        int attempt = 0;
-        while (recs >= MAX_RECORDS_RETURNED_PER_CALL && data.Count < MAX_RECORDS_WANTED)
+        var (ok, data) = await PagedFetch.FetchAllAsync<KrakenOrder>(async offset =>
         {
-            var result = await krakenClient.SpotApi.Trading.GetClosedOrdersAsync(null, null, null, data.Count);
-            if (result.Success)
-            {
-                attempt = 0;
-                recs = result.Data.Closed.Count;
-                foreach (var kvp in result.Data.Closed) data[kvp.Key] = kvp.Value;
-            }
-            else
-            {
-                if (!(await HandleErrors(result.Error, attempt++))) return dbItems;
-                recs = MAX_RECORDS_RETURNED_PER_CALL;
-            }
-        }
+            var result = await krakenClient.SpotApi.Trading.GetClosedOrdersAsync(null, null, null, offset);
+            return result.Success ? new PageResult<KrakenOrder>(true, result.Data.Closed) : new PageResult<KrakenOrder>(false, null, result.Error);
+        }, (error, attempt) => HandleErrors(error as CryptoExchange.Net.Objects.Error, attempt), MAX_RECORDS_WANTED);
+        if (!ok) return dbItems;
         return data.Values.Select(rec => new CombinedOrder(rec)).ToList();
     }
 
@@ -441,24 +417,12 @@ public class KrakenRestService : IOrderGateway
 
         var starttime = dbItems.Any() ? dbItems.Max(a => a.Timestamp).AddHours(-4) : DateTime.UtcNow.AddYears(-3);
         var krakenClient = await AuthenticatedClient();
-        var data = new Dictionary<string, KrakenUserTrade>(MAX_RECORDS_WANTED);
-        int recs = MAX_RECORDS_RETURNED_PER_CALL;
-        int attempt = 0;
-        while (recs >= MAX_RECORDS_RETURNED_PER_CALL && data.Count < MAX_RECORDS_WANTED)
+        var (ok, data) = await PagedFetch.FetchAllAsync<KrakenUserTrade>(async offset =>
         {
-            var result = await krakenClient.SpotApi.Trading.GetUserTradesAsync(starttime, null, data.Count);
-            if (result.Success)
-            {
-                attempt = 0;
-                recs = result.Data.Trades.Count;
-                foreach (var kvp in result.Data.Trades) data[kvp.Key] = kvp.Value;
-            }
-            else
-            {
-                if (!(await HandleErrors(result.Error, attempt++))) return dbItems;
-                recs = MAX_RECORDS_RETURNED_PER_CALL;
-            }
-        }
+            var result = await krakenClient.SpotApi.Trading.GetUserTradesAsync(starttime, null, offset);
+            return result.Success ? new PageResult<KrakenUserTrade>(true, result.Data.Trades) : new PageResult<KrakenUserTrade>(false, null, result.Error);
+        }, (error, attempt) => HandleErrors(error as CryptoExchange.Net.Objects.Error, attempt), MAX_RECORDS_WANTED);
+        if (!ok) return dbItems;
         var knownIds = dbItems.Select(i => i.Id).ToHashSet();
         var newrecs = data.Values.Where(rec => !knownIds.Contains(rec.Id)).ToList();
         dbItems.AddRange(newrecs);
