@@ -1,24 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api/apiClient';
 
-const SETTINGS_KEY = 'kraken_app_settings';
-
-export function loadSettings() {
-  try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    if (stored) return { ...defaultSettings, ...JSON.parse(stored) };
-  } catch { /* ignore */ }
-  return { ...defaultSettings };
-}
-
-export function saveSettings(settings) {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-}
-
-const defaultSettings = {
-  largeMovementThreshold: 5,
-};
-
 export default function SettingsPage({ settings, onSettingsChange, serverSettings, onServerSettingsRefresh }) {
   const [threshold, setThreshold] = useState(settings.largeMovementThreshold);
   const [activeTab, setActiveTab] = useState('general');

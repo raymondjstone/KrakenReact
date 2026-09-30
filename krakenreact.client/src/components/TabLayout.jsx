@@ -1,7 +1,8 @@
 import { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import Dashboard from './Dashboard';
 import AlertCentre from './AlertCentre';
-import SettingsPage, { loadSettings, saveSettings } from '../pages/SettingsPage';
+import SettingsPage from '../pages/SettingsPage';
+import { loadSettings, saveSettings } from '../utils/appSettings';
 import api, { reportError, errorMessage, CLIENT_HEADERS } from '../api/apiClient';
 
 // Every other page loads on first visit, so the initial bundle only carries the dashboard, alert centre and

@@ -1,6 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api/apiClient';
 
+/** A sortable column header. Defined at module level: declared inside the page component it was a NEW component type on every
+ *  render, so React unmounted and remounted every header each time the page updated. */
+function Th({ col, label, right, sortCol, sortAsc, onSort }) {
+  return (
+    <th
+      onClick={() => onSort(col)}
+      style={{ padding: '8px', textAlign: right ? 'right' : 'left', color: sortCol === col ? 'var(--text-primary)' : 'var(--text-muted)', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600 }}
+    >
+      {label} {sortCol === col ? (sortAsc ? '▲' : '▼') : ''}
+    </th>
+  );
+}
+
 export default function FundingRatesPage() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -59,14 +72,6 @@ export default function FundingRatesPage() {
     return prem > 0 ? '#f97316' : '#22c55e';
   };
 
-  const Th = ({ col, label, right }) => (
-    <th
-      onClick={() => toggleSort(col)}
-      style={{ padding: '8px', textAlign: right ? 'right' : 'left', color: sortCol === col ? 'var(--text-primary)' : 'var(--text-muted)', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600 }}
-    >
-      {label} {sortCol === col ? (sortAsc ? '▲' : '▼') : ''}
-    </th>
-  );
 
   return (
     <div style={{ padding: 24, height: '100%', overflow: 'auto', background: 'var(--bg-primary)' }}>
@@ -99,15 +104,15 @@ export default function FundingRatesPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg-card)' }}>
-                <Th col="displayName" label="Symbol" />
-                <Th col="fundingRatePct" label="Funding Rate" right />
-                <Th col="fundingRatePrediction" label="Predicted" right />
-                <Th col="annualisedFundingPct" label="Annualised" right />
-                <Th col="premium" label="Premium" right />
-                <Th col="markPrice" label="Mark Price" right />
-                <Th col="indexPrice" label="Index Price" right />
-                <Th col="openInterest" label="Open Interest" right />
-                <Th col="vol24h" label="24h Volume" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="displayName" label="Symbol" />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="fundingRatePct" label="Funding Rate" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="fundingRatePrediction" label="Predicted" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="annualisedFundingPct" label="Annualised" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="premium" label="Premium" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="markPrice" label="Mark Price" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="indexPrice" label="Index Price" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="openInterest" label="Open Interest" right />
+                <Th sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} col="vol24h" label="24h Volume" right />
               </tr>
             </thead>
             <tbody>
