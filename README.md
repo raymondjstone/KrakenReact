@@ -148,7 +148,7 @@ cd KrakenReact.Server
 dotnet run
 ```
 
-This starts both the ASP.NET backend (https://localhost:7247) and the Vite dev server (http://localhost:5173) automatically. Open http://localhost:5173 in your browser.
+This starts both the ASP.NET backend (https://localhost:7247) and the Vite dev server (http://localhost:5173) automatically. Open http://localhost:5173 in your browser. (In Docker the app is served on port 4567 instead - see [Docker Support](#docker-support).)
 
 ## Background Services
 
@@ -376,31 +376,53 @@ Key limitations to keep in mind:
 
 ## Docker Support
 
-You can build and run KrakenReact using Docker for simplified deployment and consistent environments.
+One image serves both the API and the built React frontend, on **port 4567**. You need Docker with Compose and a reachable
+SQL Server database.
 
-- See [DOCKER.md](DOCKER.md) for full instructions.
+```bash
+# .env next to docker-compose.yml (compose refuses to start without it)
+EFDB_CONNECTION_STRING=Server=YOURHOST;Database=Kraken;User Id=YOURUSER;Password=YOURPASSWORD;TrustServerCertificate=True;
+ALLOWED_HOSTS=localhost,myserver      # recommended - see Security below
 
-### Quick Start
+docker compose up --build -d
+```
 
-1. **Build images:**
-   ```bash
-   docker build -t krakenreact-server -f KrakenReact.Server/Dockerfile .
-   docker build -t krakenreact-client -f krakenreact.client/Dockerfile .
-   ```
-2. **Run containers:**
-   ```bash
-   docker run -d --name krakenreact-server -p 7247:7247 krakenreact-server
-   docker run -d --name krakenreact-client -p 5173:5173 krakenreact-client
-   ```
-   Or use Docker Compose if available:
-   ```bash
-   docker-compose up --build
-   ```
-3. **Configuration:**
-   - Mount your `appsettings.Local.json` or set environment variables for DB connection.
-   - Set API keys and settings via the web UI after launch.
+Then open <http://localhost:4567> and enter the Kraken and Pushover keys on the Settings page. The compose file restarts the
+container after a crash or reboot, health-checks the port, allows 30 s for an in-flight order to finish on shutdown, and runs as
+an unprivileged user. See [DOCKER.md](DOCKER.md) for running the image directly and for more detail.
 
-The `.dockerignore` file ensures fast, clean builds by excluding node_modules, bin/obj, test projects, etc.
+---
+
+## Security and Operations
+
+**There is no login.** Anyone who can reach the app can place and cancel orders and read settings, and the Hangfire dashboard at
+`/hangfire` is open and writable. Keep the port on a trusted network or behind a reverse proxy that authenticates. What the app
+does add is protection against *other websites* using your browser to reach it:
+
+- Every state-changing `/api` call must carry an `X-Requested-With: KrakenReact` header. The bundled client sends it; a script
+  calling the API directly (curl, your own tooling) must send it too, or the call is refused. The Hangfire dashboard's own buttons
+  are not covered by this check.
+- `ALLOWED_HOSTS` (compose) / `Security:AllowedHosts` (config, env `Security__AllowedHosts`) is a comma-separated list of the host
+  names you reach the app by. Requests with any other `Host` header are refused, which blocks DNS-rebinding attacks. Unset means
+  any host is accepted (a warning is logged at startup).
+
+Optional settings (`appsettings.*.json` or environment variables, `:` becomes `__`):
+
+| Setting                        | Default | Meaning                                                                                                                                           |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Orders:PriceGuardPct`         | `5`     | A manual order priced more than this % through the market (a buy above it, a sell below it) is refused until confirmed, and then sent as a taker. `0` disables; capped at 50. |
+| `Kraken:RequestTimeoutSeconds` | `60`    | Timeout for authenticated Kraken calls (10 to 300). A timed-out order placement is looked up afterwards rather than blindly retried.               |
+
+Safety behaviours worth knowing:
+
+- **Trading jobs pause when the price feed stalls.** If no price tick has arrived for 5 minutes, stop-loss/take-profit, bracket
+  stops, Micro Trade, DCA, rebalance, smart reprice, price alerts and portfolio snapshots skip their run instead of acting on old
+  prices, and resume by themselves when the feed returns.
+- **Excluding assets from protection.** Add an `AppSettings` row with key `ProtectionExcludedAssets` and a comma-separated value
+  such as `BTC,ETH` (names are normalised, so `XBT` and `BTC` are the same). Those assets are never sold by stop-loss,
+  take-profit or trailing stop. There is no UI for it yet; insert the row in the database.
+- **Debug endpoints** (`/api/orders/debug`, `/api/prices/{symbol}/klines-debug`, `/api/balances/diagnostics`) answer 404 unless
+  the app runs in the Development environment.
 
 ---
 
