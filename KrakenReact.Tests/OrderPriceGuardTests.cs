@@ -115,4 +115,52 @@ public class OrdersControllerGuardTests
         });
         Assert.True(outcome == null || outcome is not Xunit.Sdk.XunitException);
     }
+
+    // ── the confirmation must change how the order is sent ─────────────────
+
+    [Fact]
+    public void AConfirmedCrossingOrder_IsSentAsATaker_SoKrakenDoesNotRejectItAsPostOnly()
+    {
+        var (controller, _) = Make();
+
+        var refusal = controller.CheckPriceDeviation("XBTUSD", "Buy", 60_000m, confirmed: true, out var asTaker);
+
+        Assert.Null(refusal);
+        Assert.True(asTaker);   // manual orders are post-only otherwise, and Kraken refuses a post-only order that crosses
+    }
+
+    [Fact]
+    public void AnUnconfirmedCrossingOrder_IsRefused_AndNotMarkedAsATaker()
+    {
+        var (controller, _) = Make();
+
+        var refusal = controller.CheckPriceDeviation("XBTUSD", "Buy", 60_000m, confirmed: false, out var asTaker);
+
+        Assert.Equal(422, Assert.IsType<ObjectResult>(refusal).StatusCode);
+        Assert.False(asTaker);
+    }
+
+    [Fact]
+    public void AnOrderThatRestsOnTheBook_StaysPostOnly_EvenIfTheFlagIsSet()
+    {
+        var (controller, _) = Make();
+
+        var refusal = controller.CheckPriceDeviation("XBTUSD", "Buy", 45_000m, confirmed: true, out var asTaker);
+
+        Assert.Null(refusal);
+        Assert.False(asTaker);   // a stray confirmation flag must not turn a normal resting order into a market-taker
+    }
+
+    [Fact]
+    public void TheRefusalExplainsWhatWouldHappen_WithoutClaimingItFillsAtTheLimit()
+    {
+        var (controller, _) = Make();
+
+        var refusal = controller.CheckPriceDeviation("XBTUSD", "Buy", 60_000m, false, out _);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<ObjectResult>(refusal).Value);
+        Assert.Contains("against the market", json);
+        Assert.Contains("taker fees", json);
+        Assert.DoesNotContain("at that price", json);
+    }
 }

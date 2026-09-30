@@ -48,18 +48,23 @@ public class OrdersController : ControllerBase
     /// Refuses (422) an order priced far through the market unless the client has confirmed it. The response carries a
     /// machine-readable code so the dialog can ask the user and resend. Returns null when the order may go ahead.
     /// </summary>
-    private ActionResult? CheckPriceDeviation(string symbol, string side, decimal price, bool confirmed)
+    internal ActionResult? CheckPriceDeviation(string symbol, string side, decimal price, bool confirmed, out bool asTaker)
     {
-        if (confirmed) return null;
+        asTaker = false;
         var market = MarketPriceFor(symbol);
         if (market == null || !OrderPriceGuard.IsSuspicious(side, price, market.Value)) return null;
+
+        // Confirmed: the user has agreed to an order that executes against the market. Manual orders are otherwise sent post-only,
+        // which Kraken rejects for a crossing order — so the confirmation must also lift that flag, or agreeing would just end in
+        // a rejection.
+        if (confirmed) { asTaker = true; return null; }
 
         var through = OrderPriceGuard.ThroughMarketPct(side, price, market.Value)!.Value;
         var verb = side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? "above" : "below";
         return StatusCode(422, new
         {
             code = "PRICE_DEVIATION",
-            error = $"This {side.ToLower()} is priced {through:F1}% {verb} the current market ({market.Value:0.########}), so it would fill immediately at that price.",
+            error = $"This {side.ToLower()} is priced {through:F1}% {verb} the current market ({market.Value:0.########}), so it would execute immediately against the market (at prices up to your limit) rather than rest on the book, and be charged taker fees.",
             deviationPct = Math.Round(through, 2),
             marketPrice = market.Value,
         });
@@ -75,14 +80,24 @@ public class OrdersController : ControllerBase
         if (!req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) && !req.Side.Equals("Sell", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = "Side must be Buy or Sell" });
 
-        var deviation = CheckPriceDeviation(req.Symbol, req.Side, req.Price, req.ConfirmPriceDeviation);
+        var deviation = CheckPriceDeviation(req.Symbol, req.Side, req.Price, req.ConfirmPriceDeviation, out var asTaker);
         if (deviation != null) return deviation;
 
         var side = req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell;
         var clientOrderId = KrakenReact.Server.Utils.ClientOrderId.GenerateWithPrefix("UI");
-        var result = await _kraken.PlaceOrderAsync(req.Symbol.Replace("/", ""), side, OrderType.Limit, req.Quantity, req.Price, clientOrderId);
+        var result = await _kraken.PlaceOrderAsync(req.Symbol.Replace("/", ""), side, OrderType.Limit, req.Quantity, req.Price, clientOrderId, postOnly: !asTaker);
         if (!result.Success)
-            return BadRequest(new { error = result.Error?.Message ?? "Failed to place order" });
+        {
+            var reason = result.Error?.Message ?? "Failed to place order";
+            if (reason.Contains("post only", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new
+                {
+                    code = "WOULD_CROSS",
+                    error = "This order would execute immediately against the market, and manual orders are placed as post-only (resting) orders, which Kraken refuses in that case. " +
+                            "Price it on the resting side of the market (a buy below it, a sell above it).",
+                });
+            return BadRequest(new { error = reason });
+        }
 
         // Add the new order(s) to state immediately with calculated fields
         foreach (var orderId in result.Data.OrderIds)
@@ -159,7 +174,7 @@ public class OrdersController : ControllerBase
         var order = _state.Orders.Values.FirstOrDefault(o => o.Id == id);
         if (order == null) return NotFound();
 
-        var deviation = CheckPriceDeviation(order.Symbol, order.Side, req.Price, req.ConfirmPriceDeviation);
+        var deviation = CheckPriceDeviation(order.Symbol, order.Side, req.Price, req.ConfirmPriceDeviation, out _);
         if (deviation != null) return deviation;
 
         WebCallResult<KrakenEditOrder> orderResult;
