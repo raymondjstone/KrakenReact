@@ -347,14 +347,29 @@ app.Lifetime.ApplicationStarted.Register(() =>
 
         // Restore rebalance schedule jobs from DB
         var rebalSchedules = db.RebalanceSchedules.Where(s => s.Active).ToList();
+        var restored = 0;
         foreach (var sched in rebalSchedules)
         {
-            manager.AddOrUpdate<RebalanceJob>(
-                $"rebal-{sched.Id}",
-                job => job.ExecuteAsync(sched.Id, CancellationToken.None),
-                sched.CronExpression);
+            // One schedule with a bad cron (saved before cron was validated) must not stop the ones after it being restored
+            if (!InputRules.IsValidCron(sched.CronExpression, out var cronError))
+            {
+                Log.Warning("[Hangfire] Rebalance schedule {Id} not restored — {Error}", sched.Id, cronError);
+                continue;
+            }
+            try
+            {
+                manager.AddOrUpdate<RebalanceJob>(
+                    $"rebal-{sched.Id}",
+                    job => job.ExecuteAsync(sched.Id, CancellationToken.None),
+                    sched.CronExpression);
+                restored++;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[Hangfire] Rebalance schedule {Id} could not be restored", sched.Id);
+            }
         }
-        Log.Information("[Hangfire] Restored {Count} rebalance schedule(s)", rebalSchedules.Count);
+        Log.Information("[Hangfire] Restored {Count} of {Total} rebalance schedule(s)", restored, rebalSchedules.Count);
     }
     catch (Exception ex)
     {

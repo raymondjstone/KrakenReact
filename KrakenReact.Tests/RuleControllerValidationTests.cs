@@ -118,3 +118,49 @@ public class DcaControllerValidationTests : IDisposable
         Assert.IsType<BadRequestObjectResult>(await Ctrl().Create(fg));
     }
 }
+
+public class RebalanceControllerValidationTests : IDisposable
+{
+    private readonly KrakenDbContext _db = new(new DbContextOptionsBuilder<KrakenDbContext>().UseInMemoryDatabase($"reb-{Guid.NewGuid()}").Options);
+    private readonly Mock<IRecurringJobManager> _jobs = new();
+    public void Dispose() => _db.Dispose();
+
+    private RebalanceScheduleController Ctrl() => new(_db, _jobs.Object);
+    private static RebalanceSchedule Good() => new() { Targets = "BTC:50,ETH:30,USD:20", CronExpression = "0 9 * * 1", DriftMinPct = 5m };
+
+    [Theory]
+    [InlineData("BTC:4O,ETH:50", "0 9 * * 1", 5)]          // letter O: used to be silently dropped
+    [InlineData("BTC:70,ETH:70", "0 9 * * 1", 5)]          // 140%
+    [InlineData("BTC:50,BTC:20", "0 9 * * 1", 5)]          // duplicate asset
+    [InlineData("", "0 9 * * 1", 5)]
+    [InlineData("BTC:50,ETH:50", "nonsense", 5)]           // bad cron used to be saved, then break the restore at startup
+    [InlineData("BTC:50,ETH:50", "0 9 * * 1", 0)]          // a drift of 0 would trade on every run
+    [InlineData("BTC:50,ETH:50", "0 9 * * 1", 500)]
+    public async Task Create_RejectsAndSavesNothing(string targets, string cron, double drift)
+    {
+        var s = Good(); s.Targets = targets; s.CronExpression = cron; s.DriftMinPct = (decimal)drift;
+
+        Assert.IsType<BadRequestObjectResult>(await Ctrl().Create(s));
+        Assert.Empty(_db.RebalanceSchedules);
+        _jobs.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task Update_AppliesTheSameRules_AndKeepsTheOldValues()
+    {
+        var ctrl = Ctrl();
+        var created = (RebalanceSchedule)((OkObjectResult)await ctrl.Create(Good())).Value!;
+
+        var bad = Good(); bad.Targets = "BTC:90,ETH:90";
+        Assert.IsType<BadRequestObjectResult>(await ctrl.Update(created.Id, bad));
+
+        Assert.Equal("BTC:50,ETH:30,USD:20", (await _db.RebalanceSchedules.AsNoTracking().SingleAsync()).Targets);
+    }
+
+    [Fact]
+    public async Task Update_OfAMissingSchedule_IsStill404()
+    {
+        var bad = Good(); bad.Targets = "junk";
+        Assert.IsType<NotFoundResult>(await Ctrl().Update(999, bad));
+    }
+}
