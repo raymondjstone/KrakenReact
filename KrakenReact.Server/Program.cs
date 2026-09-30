@@ -75,6 +75,7 @@ builder.Services.AddSingleton<DbMethods>();
 
 // Services
 builder.Services.AddSingleton<TradingStateService>();
+builder.Services.AddSingleton<KrakenReact.Server.Hubs.BookSubscriptions>();
 OrderPriceGuard.MaxDeviationPct = Math.Clamp(builder.Configuration.GetValue<decimal?>("Orders:PriceGuardPct") ?? 5m, 0m, 50m);
 KrakenRestService.RequestTimeout = TimeSpan.FromSeconds(Math.Clamp(builder.Configuration.GetValue<int?>("Kraken:RequestTimeoutSeconds") ?? 60, 10, 300));
 builder.Services.AddSingleton<KrakenRestService>();

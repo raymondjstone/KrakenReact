@@ -52,6 +52,7 @@ export default function OrderBook({ symbol, depth = 25 }) {
     conn.on('BookUpdate', updateHandler);
 
     return () => {
+      conn.invoke('UnsubscribeBook').catch(() => {});
       conn.off('BookSnapshot', snapshotHandler);
       conn.off('BookUpdate', updateHandler);
     };
