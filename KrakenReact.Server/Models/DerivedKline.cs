@@ -14,10 +14,13 @@ public class DerivedKline
     public int TradeCount { get; set; }
     public string Interval { get; set; } = "OneMinute";
 
+    /// <summary>The stored key for a candle. Everything that persists candles uses this, so the same candle always has the same key.</summary>
+    public static string MakeKey(string asset, string interval, DateTime openTime) => $"{asset}{interval}{openTime.Ticks}";
+
     public DerivedKline()
     {
         Asset = string.Empty;
-        Key = $"{Asset}_{OpenTime.Ticks}";
+        Key = string.Empty;   // set from MakeKey when the candle is saved (the fields are not filled in yet at this point)
     }
 
     public DerivedKline(Kraken.Net.Objects.Models.KrakenKline kline, string asset, Kraken.Net.Enums.KlineInterval interval)
@@ -32,6 +35,6 @@ public class DerivedKline
         Volume = kline.Volume;
         VolumeWeightedAveragePrice = kline.VolumeWeightedAveragePrice;
         TradeCount = kline.TradeCount;
-        Key = $"{Asset}{Interval}{OpenTime.Ticks}";
+        Key = MakeKey(Asset, Interval, OpenTime);
     }
 }
