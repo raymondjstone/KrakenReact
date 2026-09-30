@@ -373,8 +373,10 @@ public class PredictionJob
             HashSet<string> existingKeys;
             await using (var dedupeDb = await _dbFactory.CreateDbContextAsync(ct))
             {
+                // Only candles at or after the earliest one just fetched can be duplicates - reading every stored key is wasted work
+                var earliest = newDerived.Min(k => k.OpenTime);
                 existingKeys = await dedupeDb.DerivedKlines
-                    .Where(k => k.Asset == symbol && k.Interval == intervalStr)
+                    .Where(k => k.Asset == symbol && k.Interval == intervalStr && k.OpenTime >= earliest)
                     .Select(k => k.Key)
                     .ToHashSetAsync(ct);
             }

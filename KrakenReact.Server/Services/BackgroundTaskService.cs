@@ -165,11 +165,16 @@ public class BackgroundTaskService : BackgroundService
         var allToLoad = _state.GetPriceSnapshot().Where(p => p.KrakenNewPricesLoaded == "no" && !TradingStateService.Blacklist.Contains(p.Base)).ToList();
         int total = allToLoad.Count;
 
+        // The passes below overlap (a main coin may also hold a balance). A symbol that failed to load stays "not loaded", so
+        // without this each later pass would try it - and wait out Kraken's retries - again.
+        var attempted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         async Task LoadKlinesForList(List<PriceDataItem> items)
         {
             foreach (var d in items)
             {
                 if (ct.IsCancellationRequested) break;
+                if (!attempted.Add(d.Symbol)) continue;
                 if (TradingStateService.Blacklist.Contains(d.Base)) continue;
                 try
                 {
