@@ -13,6 +13,14 @@ public interface IOrderGateway
     Task<KrakenRestService.PlacementResult> PlaceOrderWithRecoveryAsync(string symbol, OrderSide side, OrderType orderType,
         decimal qty, decimal price, string? clientOrderId = null, bool postOnly = true);
 
+    /// <summary>As above, with a caller-chosen userref that the caller has already persisted.</summary>
+    Task<KrakenRestService.PlacementResult> PlaceOrderWithUserRefAsync(string symbol, OrderSide side, OrderType orderType,
+        decimal qty, decimal price, uint userRef, string? clientOrderId = null, bool postOnly = true);
+
+    /// <summary>Finds an order by the userref it was tagged with. Checked=false means Kraken couldn't be asked, so
+    /// "not found" must not be assumed; Checked=true with a null order means it definitely isn't there.</summary>
+    Task<(bool Checked, CombinedOrder? Order)> FindOrderByUserRefAsync(uint userRef);
+
     Task<bool> CancelOrderAsync(string orderId);
 
     /// <summary>The order as Kraken reports it, or null if it couldn't be fetched.</summary>

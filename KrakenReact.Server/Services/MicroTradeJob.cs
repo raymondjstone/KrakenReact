@@ -24,14 +24,14 @@ public class MicroTradeJob
     private const int MaxSellAttempts = 5;
 
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
-    private readonly KrakenRestService _kraken;
+    private readonly IOrderGateway _kraken;
     private readonly TradingStateService _state;
     private readonly PriceChangeService _priceChange;
-    private readonly NotificationService _notify;
+    private readonly INotifier _notify;
     private readonly ILogger<MicroTradeJob> _logger;
     private readonly SqlTimeoutDiagnostics _sqlDiag;
 
-    public MicroTradeJob(IDbContextFactory<KrakenDbContext> dbFactory, KrakenRestService kraken, TradingStateService state, PriceChangeService priceChange, NotificationService notify, ILogger<MicroTradeJob> logger, SqlTimeoutDiagnostics sqlDiag)
+    public MicroTradeJob(IDbContextFactory<KrakenDbContext> dbFactory, IOrderGateway kraken, TradingStateService state, PriceChangeService priceChange, INotifier notify, ILogger<MicroTradeJob> logger, SqlTimeoutDiagnostics sqlDiag)
     {
         _dbFactory = dbFactory;
         _kraken = kraken;
@@ -430,28 +430,9 @@ public class MicroTradeJob
     /// </summary>
     private async Task<PlaceOutcome> PlaceAndConfirmAsync(string symbol, OrderSide side, decimal qty, decimal price, uint userRef, bool postOnly = true)
     {
-        var result = await _kraken.PlaceOrderAsync(symbol, side, OrderType.Limit, qty, price, null, userRef, postOnly);
-        if (result.Success)
-            return new PlaceOutcome(true, result.Data?.OrderIds?.FirstOrDefault(), null);
-
-        var error = result.Error?.Message;
-        if (IsDefiniteRejection(error))
-            return new PlaceOutcome(false, null, error);
-
-        _logger.LogWarning("[MicroTrade] {Side} {Symbol} placement failed ambiguously ({Error}) — checking Kraken for userref {UserRef}", side, symbol, error, userRef);
-        var notFoundChecks = 0;
-        foreach (var delayMs in new[] { 3000, 6000 })
-        {
-            await Task.Delay(delayMs);
-            var (isChecked, found) = await _kraken.FindOrderByUserRefAsync(userRef);
-            if (found != null)
-                return new PlaceOutcome(true, found.Id, null, Recovered: true);
-            if (isChecked) notFoundChecks++;
-        }
-
-        return notFoundChecks >= 2
-            ? new PlaceOutcome(false, null, error)
-            : new PlaceOutcome(false, null, error, Unknown: true);
+        // The place-then-look-up-by-userref recovery lives in the gateway, shared with the other order jobs
+        var r = await _kraken.PlaceOrderWithUserRefAsync(symbol, side, OrderType.Limit, qty, price, userRef, null, postOnly);
+        return new PlaceOutcome(r.Success, r.OrderId, r.Error, r.Unknown, r.Recovered);
     }
 
     /// <summary>Saves the current changes after an order was actually sent to Kraken. Never throws: on failure the

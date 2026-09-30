@@ -383,10 +383,17 @@ public class KrakenRestService : IOrderGateway
     /// connection) the order is often accepted anyway, so Kraken is asked for that userref before anything is called
     /// a failure. Prevents a lost response turning into a second, duplicate order on the caller's retry.
     /// </summary>
-    public async Task<PlacementResult> PlaceOrderWithRecoveryAsync(string symbol, OrderSide side, OrderType orderType,
-        decimal qty, decimal price, string? clientOrderId = null, bool postOnly = true)
+    public Task<PlacementResult> PlaceOrderWithRecoveryAsync(string symbol, OrderSide side, OrderType orderType,
+        decimal qty, decimal price, string? clientOrderId = null, bool postOnly = true) =>
+        PlaceOrderWithUserRefAsync(symbol, side, orderType, qty, price, (uint)Random.Shared.Next(1, int.MaxValue), clientOrderId, postOnly);
+
+    /// <summary>
+    /// As <see cref="PlaceOrderWithRecoveryAsync"/> but with a userref chosen (and typically persisted) by the caller
+    /// beforehand, so that if the process dies mid-placement the order can still be found by that reference later.
+    /// </summary>
+    public async Task<PlacementResult> PlaceOrderWithUserRefAsync(string symbol, OrderSide side, OrderType orderType,
+        decimal qty, decimal price, uint userRef, string? clientOrderId = null, bool postOnly = true)
     {
-        var userRef = (uint)Random.Shared.Next(1, int.MaxValue);
         var result = await PlaceOrderAsync(symbol, side, orderType, qty, price, clientOrderId, userRef, postOnly);
         if (result.Success)
             return new PlacementResult(true, result.Data?.OrderIds?.FirstOrDefault(), null);
