@@ -24,6 +24,7 @@ public class BalancesController : ControllerBase
         _logger = logger;
     }
 
+    [DevelopmentOnly]
     [HttpGet("diagnostics")]
     public async Task<ActionResult> GetDiagnostics()
     {

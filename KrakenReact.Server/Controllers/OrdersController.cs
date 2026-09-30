@@ -298,6 +298,7 @@ public class OrdersController : ControllerBase
     }
 
     /// <summary>GET /api/orders/debug — diagnostic info for price lookups per order</summary>
+    [DevelopmentOnly]
     [HttpGet("debug")]
     public ActionResult GetDebug()
     {

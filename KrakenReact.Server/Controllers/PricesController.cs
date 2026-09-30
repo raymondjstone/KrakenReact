@@ -278,6 +278,7 @@ public class PricesController : ControllerBase
         };
     }
 
+    [DevelopmentOnly]
     [HttpGet("{symbol}/klines-debug")]
     public async Task<ActionResult<object>> GetKlinesDebug(string symbol)
     {
