@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import TabLayout from './components/TabLayout';
 import api from './api/apiClient';
-import { startConnection, getConnection } from './api/signalRService';
+import { startConnection, getConnection, getConnectionState, subscribeConnectionState } from './api/signalRService';
 import { ThemeProvider } from './context/ThemeContext';
 import { setVisibleInterval } from './utils/visibleInterval';
 
@@ -57,8 +57,33 @@ export default function App() {
     return () => { window.removeEventListener('app-error', handler); clearTimeout(timer); };
   }, []);
 
+  // Live-feed status: shown only once the connection has been down for a moment, so a brief blip or the initial connect is quiet
+  const [feedDown, setFeedDown] = useState(false);
+  useEffect(() => {
+    let timer;
+    const apply = (state) => {
+      clearTimeout(timer);
+      if (state === 'reconnecting' || state === 'disconnected') timer = setTimeout(() => setFeedDown(true), 3000);
+      else setFeedDown(false);
+    };
+    apply(getConnectionState());
+    const unsubscribe = subscribeConnectionState(apply);
+    return () => { unsubscribe(); clearTimeout(timer); };
+  }, []);
+
   return (
     <ThemeProvider>
+      {feedDown && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, zIndex: 10000, padding: '6px 12px', textAlign: 'center',
+            background: 'var(--orange, #f59e0b)', color: '#000', fontSize: 13,
+          }}
+        >
+          Live updates are disconnected - reconnecting. Prices and orders shown may be out of date.
+        </div>
+      )}
       <TabLayout totalValue={totalValue} totalValueGbp={totalValueGbp} />
       {errorText && (
         <div

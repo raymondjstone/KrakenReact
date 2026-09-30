@@ -3,6 +3,21 @@ import * as signalR from '@microsoft/signalr';
 let connection = null;
 let connectionPromise = null;
 
+// 'connecting' (first start) | 'connected' | 'reconnecting' | 'disconnected'. The UI shows a banner for the last two so a stalled
+// live feed is visible instead of silently freezing the screens.
+let connectionState = 'connecting';
+const stateListeners = new Set();
+function setConnectionState(next) {
+  if (next === connectionState) return;
+  connectionState = next;
+  stateListeners.forEach(cb => { try { cb(next); } catch { /* a listener must not break the connection */ } });
+}
+export function getConnectionState() { return connectionState; }
+export function subscribeConnectionState(cb) {
+  stateListeners.add(cb);
+  return () => stateListeners.delete(cb);
+}
+
 // The server now sends only what changed ("OrdersDelta" / "BalancesDelta") plus a full snapshot to each client as it
 // connects. Pages still subscribe to the familiar "OrderUpdate" / "BalanceUpdate" events and expect the complete list,
 // so a small store merges deltas into the full list and hands that to those subscribers.
@@ -42,6 +57,16 @@ export function getConnection() {
       .configureLogging(signalR.LogLevel.Warning)
       .build();
 
+    connection.onreconnecting(() => setConnectionState('reconnecting'));
+    connection.onreconnected(() => setConnectionState('connected'));
+    // The built-in policy gives up after its last delay (about 47 s here). A server restart or a sleeping laptop easily outlasts
+    // that, and a closed connection never comes back by itself - so keep trying until it does.
+    connection.onclose(() => {
+      setConnectionState('disconnected');
+      connectionPromise = null;
+      setTimeout(() => startConnection(), 5000);
+    });
+
     // Route subscriptions to the two list events through the store instead of straight to the wire
     const originalOn = connection.on.bind(connection);
     const originalOff = connection.off.bind(connection);
@@ -66,8 +91,8 @@ export async function startConnection() {
   if (conn.state === signalR.HubConnectionState.Disconnected) {
     if (!connectionPromise) {
       connectionPromise = conn.start()
-        .then(() => { console.log('SignalR connected'); connectionPromise = null; })
-        .catch(err => { console.error('SignalR connection error:', err); connectionPromise = null; setTimeout(() => startConnection(), 5000); });
+        .then(() => { console.log('SignalR connected'); connectionPromise = null; setConnectionState('connected'); })
+        .catch(err => { console.error('SignalR connection error:', err); connectionPromise = null; setConnectionState('disconnected'); setTimeout(() => startConnection(), 5000); });
     }
     await connectionPromise;
   }
