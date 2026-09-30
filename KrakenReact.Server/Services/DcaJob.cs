@@ -92,8 +92,12 @@ public class DcaJob
                 return;
             }
 
-            var price = Math.Round(latestKline.Close * 1.002m, 2);
-            var qty = Math.Round(rule.AmountUsd / price, 6);
+            // Price uses the pair's own precision (a fixed 2 decimals mispriced anything under a few dollars);
+            // quantity is floored so the buy can never exceed the configured amount.
+            var pairMeta = _state.Symbols.Values.FirstOrDefault(s => s.WebsocketName.Equals(rule.Symbol, StringComparison.OrdinalIgnoreCase));
+            var price = Math.Round(latestKline.Close * 1.002m, pairMeta?.PriceDecimals > 0 ? pairMeta.PriceDecimals : 8);
+            var lotDecimals = pairMeta?.LotDecimals > 0 ? pairMeta.LotDecimals : 8;
+            var qty = KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(rule.AmountUsd / price, lotDecimals);
 
             // Feature: ATR-adjusted position sizing
             if (rule.AtrSizingEnabled && rule.AtrRiskUsd > 0)
@@ -106,7 +110,7 @@ public class DcaJob
                     var atr = ComputeAtr(klines);
                     if (atr > 0)
                     {
-                        qty = Math.Round(rule.AtrRiskUsd / atr, 6);
+                        qty = KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(rule.AtrRiskUsd / atr, lotDecimals);
                         _logger.LogInformation("[DCA] ATR sizing: ATR={Atr:F4}, RiskUsd={Risk}, qty={Qty}",
                             atr, rule.AtrRiskUsd, qty);
                     }
@@ -121,8 +125,7 @@ public class DcaJob
                 }
             }
 
-            var sym = _state.Symbols.Values.FirstOrDefault(s =>
-                s.WebsocketName.Equals(rule.Symbol, StringComparison.OrdinalIgnoreCase));
+            var sym = pairMeta;
 
             var minQty = sym?.OrderMin ?? 0.0001m;
             if (qty < minQty)

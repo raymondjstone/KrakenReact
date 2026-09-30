@@ -215,3 +215,23 @@ public class ProximityAlertTests
         Assert.True(s.TryMarkProximityAlerted("o0"));     // only the oldest aged out
     }
 }
+
+public class DecimalMathTests
+{
+    [Theory]
+    [InlineData("1.99999999", 8, "1.99999999")]
+    [InlineData("0.123456789012", 10, "0.1234567890")]   // a Kraken balance with 12 decimals, pair lot of 10
+    [InlineData("0.99999", 2, "0.99")]
+    [InlineData("5", 0, "5")]
+    public void FloorToDecimals_NeverRoundsUp(string value, int decimals, string expected)
+    {
+        Assert.Equal(decimal.Parse(expected), KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(decimal.Parse(value), decimals));
+    }
+
+    [Fact]
+    public void Pow10_IsExactAndClamped()
+    {
+        Assert.Equal(1_000_000m, KrakenReact.Server.Utils.DecimalMath.Pow10(6));
+        Assert.Equal(KrakenReact.Server.Utils.DecimalMath.Pow10(28), KrakenReact.Server.Utils.DecimalMath.Pow10(40));
+    }
+}

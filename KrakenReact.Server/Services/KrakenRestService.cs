@@ -326,14 +326,21 @@ public class KrakenRestService
 
     public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string? clientOrderId = null, uint? userReference = null, bool postOnly = true)
     {
-        // Round price to the symbol's required decimal precision
-        if (price > 0)
+        // Apply the pair's price and lot precision. Price rounds to nearest; quantity is FLOORED — Kraken rejects a
+        // volume with more decimals than the pair allows (balances carry ~10 decimals, lots often 8 or fewer), and
+        // flooring guarantees we never try to sell more than held or buy more than budgeted.
+        var wsName = symbol.Contains('/')
+            ? symbol
+            : _state.Symbols.Keys.FirstOrDefault(k => k.Replace("/", "") == symbol) ?? symbol;
+        if (_state.Symbols.TryGetValue(wsName, out var sym))
         {
-            var wsName = symbol.Contains('/')
-                ? symbol
-                : _state.Symbols.Keys.FirstOrDefault(k => k.Replace("/", "") == symbol) ?? symbol;
-            if (_state.Symbols.TryGetValue(wsName, out var sym) && sym.PriceDecimals > 0)
+            if (price > 0 && sym.PriceDecimals > 0)
                 price = Math.Round(price, sym.PriceDecimals);
+            if (sym.LotDecimals > 0)
+            {
+                var floored = KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(qty, sym.LotDecimals);
+                if (floored > 0) qty = floored; // if flooring would zero it, let Kraken report the real problem
+            }
         }
 
         // If clientOrderId is provided, normalize to expected safe format; otherwise allow exchange to assign one by passing null

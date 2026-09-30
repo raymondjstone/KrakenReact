@@ -693,20 +693,10 @@ public class MicroTradeJob
         return sym?.PriceDecimals > 0 ? sym.PriceDecimals : 8;
     }
 
-    /// <summary>Exact 10^n as a decimal (Math.Pow goes through double). Clamped to decimal's 28-digit range.</summary>
-    private static decimal DecimalPow10(int n)
-    {
-        var f = 1m;
-        for (var i = 0; i < Math.Min(n, 28); i++) f *= 10m;
-        return f;
-    }
+    private static decimal DecimalPow10(int n) => KrakenReact.Server.Utils.DecimalMath.Pow10(n);
 
-    internal static decimal FloorToDecimals(decimal value, int decimals)
-    {
-        if (decimals < 0) return value;
-        var factor = DecimalPow10(decimals);
-        return Math.Floor(value * factor) / factor;
-    }
+    internal static decimal FloorToDecimals(decimal value, int decimals) =>
+        KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(value, decimals);
 
     private async Task HandleSelling(KrakenDbContext db, MicroTradeOrder order, MicroTradeRule? rule)
     {

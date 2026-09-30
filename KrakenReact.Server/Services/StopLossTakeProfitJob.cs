@@ -205,7 +205,8 @@ public class StopLossTakeProfitJob
             _logger.LogInformation("[ProfitLadder] {Asset} up {Pct:F1}% — triggering rule {Id} (sell {SellPct}%)",
                 bal.Asset, changePct, rule.Id, rule.SellPct);
 
-            var sellQty = Math.Round(bal.Available * rule.SellPct / 100m, 8);
+            // Floor rather than round (never sell more than the rule's share); PlaceOrderAsync applies the pair's lot precision
+            var sellQty = KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(bal.Available * rule.SellPct / 100m, 8);
             if (sellQty <= 0) continue;
 
             var sym = FindSymbol(bal.Asset);
