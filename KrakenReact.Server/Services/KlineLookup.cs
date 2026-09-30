@@ -100,6 +100,9 @@ public sealed class KlineResponseCache<T>
 
     public static string Key(string pair, string interval) => $"{pair}|{interval}";
 
+    /// <summary>Forgets everything (used by tests, which share the static caches).</summary>
+    public void Clear() => _entries.Clear();
+
     public bool TryGet(string key, out T value)
     {
         if (_entries.TryGetValue(key, out var e) && e.Expires > _now()) { value = e.Value; return true; }

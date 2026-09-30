@@ -10,6 +10,10 @@ public class FundingRatesController : ControllerBase
     private readonly IHttpClientFactory _http;
     private readonly ILogger<FundingRatesController> _logger;
 
+    /// <summary>Every open Funding Rates tab polls this; one upstream fetch per window serves them all.</summary>
+    internal static readonly KrakenReact.Server.Services.KlineResponseCache<List<object>> Cache = new();
+    private const string CacheKey = "funding";
+
     public FundingRatesController(IHttpClientFactory http, ILogger<FundingRatesController> logger)
     {
         _http = http;
@@ -21,6 +25,8 @@ public class FundingRatesController : ControllerBase
     {
         try
         {
+            if (Cache.TryGet(CacheKey, out var cached)) return Ok(cached);
+
             using var client = _http.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(10);
             var resp = await client.GetAsync("https://futures.kraken.com/derivatives/api/v3/tickers", ct);
@@ -79,7 +85,9 @@ public class FundingRatesController : ControllerBase
                 }));
             }
 
-            return Ok(result.OrderBy(r => r.Symbol, StringComparer.Ordinal).Select(r => r.Row).ToList());
+            var sorted = result.OrderBy(r => r.Symbol, StringComparer.Ordinal).Select(r => r.Row).ToList();
+            Cache.Set(CacheKey, sorted);
+            return Ok(sorted);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
