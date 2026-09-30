@@ -45,7 +45,7 @@ public class AlertsController : ControllerBase
     [HttpDelete]
     public async Task<IActionResult> ClearAll()
     {
-        await _db.Database.ExecuteSqlRawAsync("DELETE FROM [AlertLogs]");
+        await _db.AlertLogs.ExecuteDeleteAsync();
         return NoContent();
     }
 

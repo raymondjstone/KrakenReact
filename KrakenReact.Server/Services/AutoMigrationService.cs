@@ -53,7 +53,7 @@ public static class AutoMigrationService
             {
                 canConnectToAssetNormalizations = db.AssetNormalizations.Any();
             }
-            catch { }
+            catch (Exception ex) { Log.Debug(ex, "[Migration] AssetNormalizations table not readable - it will be created"); }
 
             // Check if PredictionResults table exists
             var canConnectToPredictions = false;
@@ -61,7 +61,7 @@ public static class AutoMigrationService
             {
                 canConnectToPredictions = db.PredictionResults.Any();
             }
-            catch { }
+            catch (Exception ex) { Log.Debug(ex, "[Migration] PredictionResults table not readable - it will be created"); }
 
             // If tables are missing, create them
             if (!canConnectToAppSettings || !canConnectToAssetNormalizations || !canConnectToPredictions)

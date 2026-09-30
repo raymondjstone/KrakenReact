@@ -103,6 +103,7 @@ public class PredictionController : ControllerBase
             .Where(h => h.Symbol == symbol)
             .OrderByDescending(h => h.ComputedAt)
             .Take(limit)
+            .AsNoTracking()
             .ToListAsync();
 
         if (history.Count < 3)
