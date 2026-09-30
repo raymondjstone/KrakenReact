@@ -44,8 +44,8 @@ public class HealthControllerTests : IDisposable
     {
         var ok = Assert.IsType<OkObjectResult>(await NewCtrl().Get());
         var checks = ExtractChecks(ok.Value!);
-        // 7 checks total: Database, Symbols, Live Prices, Balances, ML Predictions, Portfolio Snapshot, Initial Load
-        Assert.Equal(7, checks.Count);
+        // 9 checks total: Database, Symbols, Live Prices, Balances, ML Predictions, Portfolio Snapshot, Kraken API Keys, Pushover, Initial Load
+        Assert.Equal(9, checks.Count);
     }
 
     [Fact]

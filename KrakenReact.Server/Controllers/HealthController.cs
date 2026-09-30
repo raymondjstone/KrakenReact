@@ -105,6 +105,33 @@ public class HealthController : ControllerBase
         catch (Exception ex) { Serilog.Log.Warning(ex, "Health check (snapshots) failed"); snapMsg = "Check failed - see the server log"; }
         checks.Add(new { name = "Portfolio Snapshot", ok = snapOk, detail = snapMsg });
 
+        // Keys are the first thing a new install lacks, and without them every trading and sync job fails
+        var krakenKeys = false;
+        var pushoverKeys = false;
+        try
+        {
+            var settings = await _db.AppSettings.AsNoTracking()
+                .Where(s => s.Key == "KrakenApiKey" || s.Key == "KrakenApiSecret" || s.Key == "PushoverUserKey" || s.Key == "PushoverAppToken")
+                .ToDictionaryAsync(s => s.Key, s => s.Value);
+            bool Has(string key) => settings.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v);
+            krakenKeys = (Has("KrakenApiKey") && Has("KrakenApiSecret")) || await _db.AppCreds.AnyAsync(c => c.id == "KrakenDefault");
+            pushoverKeys = Has("PushoverUserKey") && Has("PushoverAppToken");
+        }
+        catch (Exception ex) { Serilog.Log.Warning(ex, "Health check (credentials) failed"); }
+        checks.Add(new
+        {
+            name = "Kraken API Keys",
+            ok = krakenKeys,
+            detail = krakenKeys ? "Saved" : "Not set - add them on the Settings page; trading and sync jobs cannot run without them"
+        });
+        // Optional: alerts still appear in the in-app alert log without Pushover, so this never fails the overall check
+        checks.Add(new
+        {
+            name = "Pushover",
+            ok = true,
+            detail = pushoverKeys ? "Configured" : "Not configured - alerts are kept in the in-app log only"
+        });
+
         // 7. Initial data load complete
         checks.Add(new
         {

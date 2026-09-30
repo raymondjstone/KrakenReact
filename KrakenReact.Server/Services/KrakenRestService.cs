@@ -90,8 +90,8 @@ public class KrakenRestService : IOrderGateway
         {
             if (_creds == null)
             {
-                var appcreds = await _db.GetCredentialsAsync();
-                _creds = new ApiCredentials(appcreds!.appkey, appcreds.appsecret);
+                var appcreds = await _db.GetCredentialsAsync() ?? throw new KrakenCredentialsMissingException();
+                _creds = new ApiCredentials(appcreds.appkey, appcreds.appsecret);
             }
             if (_authClientWhen < DateTime.UtcNow.AddHours(-1))
             {
