@@ -109,14 +109,24 @@ public class KrakenWebSocketV2Service : BackgroundService
         _socket.ReconnectionHappened.Subscribe(info =>
         {
             _logger.LogInformation("[WS V2] Reconnection: {Type}", info.Type);
+            // The first connection is subscribed by TryStartAsync itself; doing it here too asked for every channel twice
+            if (info.Type == ReconnectionType.Initial) return;
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    var freshToken = await _kraken.GetWebSocketAsyncToken();
-                    if (freshToken != null) _wsToken = freshToken.Token;
-                    await Subscribe();
+                    var freshToken = await WsTokenRefresh.TryGetAsync(
+                        async () => (await _kraken.GetWebSocketAsyncToken())?.Token, WsTokenRefresh.DefaultDelays, stoppingToken);
+                    if (freshToken == null)
+                    {
+                        // Subscribing with the old token would only be rejected and leave a silent, connected-looking socket
+                        _logger.LogError("[WS V2] Could not get a new websocket token after reconnecting - executions and balances are NOT live until the next reconnect");
+                        return;
+                    }
+                    _wsToken = freshToken;
+                    Subscribe();
                 }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
                 catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error during reconnect subscribe"); }
             });
         });
@@ -131,13 +141,13 @@ public class KrakenWebSocketV2Service : BackgroundService
         });
 
         await _socket.Start();
-        await Subscribe();
+        Subscribe();
         await StartPublicSocket(stoppingToken);
         _logger.LogInformation("[WS V2] Connected and subscribed");
         return true;
     }
 
-    private async Task Subscribe()
+    private void Subscribe()
     {
         if (_wsToken == null) return;
 
@@ -164,6 +174,7 @@ public class KrakenWebSocketV2Service : BackgroundService
         _publicSocket.ReconnectionHappened.Subscribe(info =>
         {
             _logger.LogInformation("[WS V2 Public] Reconnection: {Type}", info.Type);
+            if (info.Type == ReconnectionType.Initial) return;   // StartPublicSocket subscribes right after Start()
             _ = Task.Run(async () =>
             {
                 try { await SubscribePublicTicker(stoppingToken); }
