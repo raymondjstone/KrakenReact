@@ -223,7 +223,8 @@ public class BackgroundTaskService : BackgroundService
 
         var minDay = old.Any(p => p.Interval == "OneDay") ? old.Where(p => p.Interval == "OneDay").Max(p => p.OpenTime) : DateTime.UtcNow.AddDays(-9999);
         var cleanSymbol = priceItem.Symbol.Replace(".F/", "/").Replace(".B/", "/");
-        var result = await _kraken.GetKlinesAsync(cleanSymbol, KlineInterval.OneDay, minDay);
+        // A few days back, so a candle stored while it was still forming is fetched again now that it is complete
+        var result = await _kraken.GetKlinesAsync(cleanSymbol, KlineInterval.OneDay, minDay.AddDays(-KlineRules.RecentRefetchDays));
         var temp = result.Select(a => new DerivedKline(a, priceItem.Symbol, KlineInterval.OneDay)).ToList();
         if (temp.Any())
         {

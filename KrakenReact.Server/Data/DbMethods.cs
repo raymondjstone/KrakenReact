@@ -298,37 +298,29 @@ public class DbMethods
 
     public Task AddBalancesAsync(List<KrakenBalanceAvailable> list) => UpsertListAsync(list, b => b.Asset);
 
+    /// <summary>
+    /// Saves daily candles: new ones are inserted and stored ones whose values differ are corrected. Only FINISHED candles are
+    /// stored - Kraken always includes the current, still-forming candle, and saving it froze a half-day high, low, close and
+    /// volume that no later run would ever fix (the old insert-only rule assumed daily candles never change).
+    /// </summary>
     public async Task AddKlineAsync(List<DerivedKline> list)
     {
-        var deduped = list
-            .Where(i => i.Interval == "OneDay")
-            .GroupBy(k => k.Key)
-            .Select(g => g.First())
-            .ToList();
-        if (deduped.Count == 0) return;
-
-        // One round-trip to load existing keys instead of N FindAsync calls.
-        // Daily klines are immutable once stored, so INSERT-only is correct here.
-        await using var db = await _factory.CreateDbContextAsync();
-        var keys = deduped.Select(k => k.Key).ToList();
-        var existing = await db.DerivedKlines
-            .Where(k => keys.Contains(k.Key))
-            .Select(k => k.Key)
-            .ToHashSetAsync();
-
-        var toAdd = deduped.Where(d => !existing.Contains(d.Key)).ToList();
-        if (toAdd.Count == 0) return;
-
-        const int batchSize = 100;
-        for (int i = 0; i < toAdd.Count; i += batchSize)
-        {
-            await using var batchDb = await _factory.CreateDbContextAsync();
-            batchDb.DerivedKlines.AddRange(toAdd.Skip(i).Take(batchSize));
-            try { await batchDb.SaveChangesAsync(); }
-            catch (DbUpdateException ex) when (ex.InnerException is SqlException sqlEx &&
-                (sqlEx.Number == 2627 || sqlEx.Number == 2601)) { }
-        }
+        var daily = list.Where(i => i.Interval == "OneDay").ToList();
+        if (daily.Count == 0) return;
+        await KlineStore.UpsertAsync(_factory, daily, DateTime.UtcNow);
     }
+
+    public async Task<string?> GetAppSettingAsync(string key) =>
+        (await UseDbContextAsync(c => c.AppSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == key)))?.Value;
+
+    public Task SetAppSettingAsync(string key, string value) => UseDbContextAsync(async c =>
+    {
+        var row = await c.AppSettings.FirstOrDefaultAsync(s => s.Key == key);
+        if (row == null) c.AppSettings.Add(new AppSettings { Key = key, Value = value });
+        else row.Value = value;
+        await c.SaveChangesAsync();
+        return true;
+    });
 
     public Task AddCombinedOrdersAsync(List<CombinedOrder> list)
     {

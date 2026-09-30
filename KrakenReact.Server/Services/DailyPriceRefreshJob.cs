@@ -36,10 +36,20 @@ public class DailyPriceRefreshJob
         _logger = logger;
     }
 
+    /// <summary>AppSettings key set once the stored daily history has been re-fetched and corrected (see <see cref="KlineStore"/>).</summary>
+    public const string RepairFlagKey = "DailyKlinesRepairedV1";
+
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
         var snapshot = _state.GetPriceSnapshot();
+
+        // Earlier versions stored each day's candle while it was still forming and never corrected it. Until the whole history
+        // has been re-fetched once, do that instead of the usual short refresh.
+        var repair = await _db.GetAppSettingAsync(RepairFlagKey) != "true";
+        if (repair && snapshot.Count == 0) repair = false;   // nothing loaded yet: try again on the next run
+        if (repair) _logger.LogInformation("[PriceJob] One-off repair: re-fetching up to {Days} days of daily candles per symbol", KlineRules.MaxHistoryCandles);
+        var failed = 0;
         _logger.LogInformation("[PriceJob] Daily kline refresh starting at {Time} — {Count} symbols",
             DateTime.Now.ToString("HH:mm"), snapshot.Count);
 
@@ -55,20 +65,29 @@ public class DailyPriceRefreshJob
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 cts.CancelAfter(TimeSpan.FromMinutes(2));
-                await LoadLatestPriceData(p).WaitAsync(cts.Token);
+                await LoadLatestPriceData(p, repair).WaitAsync(cts.Token);
 
                 var result = await _autoOrder.CheckAsync(p, "Default Rule");
                 _state.AutoOrders[result.Symbol] = result;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                failed++;
                 _logger.LogWarning("[PriceJob] Timed out for {Symbol}, skipping", p.Symbol);
             }
             catch (Exception ex)
             {
+                failed++;
                 _logger.LogWarning(ex, "[PriceJob] Failed for {Symbol}, skipping", p.Symbol);
             }
             done++;
+        }
+
+        // Only when every symbol went through, so a partial run is repeated rather than declared done
+        if (repair && failed == 0 && done == snapshot.Count && !cancellationToken.IsCancellationRequested)
+        {
+            await _db.SetAppSettingAsync(RepairFlagKey, "true");
+            _logger.LogInformation("[PriceJob] Daily candle repair complete");
         }
 
         try { await LoadBalances(); }
@@ -81,7 +100,7 @@ public class DailyPriceRefreshJob
         _logger.LogInformation("[PriceJob] Complete — {Done}/{Total} symbols", done, snapshot.Count);
     }
 
-    internal async Task LoadLatestPriceData(PriceDataItem priceItem)
+    internal async Task LoadLatestPriceData(PriceDataItem priceItem, bool repair = false)
     {
         var old = priceItem.GetKlineSnapshot();
         if (!old.Any(k => k.Interval == "OneDay"))
@@ -95,12 +114,15 @@ public class DailyPriceRefreshJob
             ? old.Where(p => p.Interval == "OneDay").Max(p => p.OpenTime)
             : DateTime.UtcNow.AddDays(-9999);
         var cleanSymbol = priceItem.Symbol.Replace(".F/", "/").Replace(".B/", "/");
-        var result = await _kraken.GetKlinesAsync(cleanSymbol, KlineInterval.OneDay, minDay);
+        // Start a few days back so a candle stored while still forming is fetched again now that it is complete; a repair run
+        // goes back as far as Kraken serves
+        var since = repair ? DateTime.UtcNow.AddDays(-KlineRules.MaxHistoryCandles) : minDay.AddDays(-KlineRules.RecentRefetchDays);
+        var result = await _kraken.GetKlinesAsync(cleanSymbol, KlineInterval.OneDay, since);
         var temp = result.Select(a => new DerivedKline(a, priceItem.Symbol, KlineInterval.OneDay)).ToList();
 
         if (temp.Any())
         {
-            _ = _db.AddKlineAsync(temp);
+            await _db.AddKlineAsync(temp);   // awaited: the repair flag must not be set while writes are still in flight
             priceItem.AddKlineHistory(temp);
         }
         else if (!old.Any(k => k.Interval == "OneDay"))

@@ -369,34 +369,13 @@ public class PredictionJob
 
             if (newDerived.Count == 0) return;
 
-            // Phase 2: dedupe with a fresh DbContext, then write in batches.
-            HashSet<string> existingKeys;
-            await using (var dedupeDb = await _dbFactory.CreateDbContextAsync(ct))
-            {
-                // Only candles at or after the earliest one just fetched can be duplicates - reading every stored key is wasted work
-                var earliest = newDerived.Min(k => k.OpenTime);
-                existingKeys = await dedupeDb.DerivedKlines
-                    .Where(k => k.Asset == symbol && k.Interval == intervalStr && k.OpenTime >= earliest)
-                    .Select(k => k.Key)
-                    .ToHashSetAsync(ct);
-            }
-
-            var toAdd = newDerived.Where(k => !existingKeys.Contains(k.Key)).ToList();
-            if (toAdd.Count > 0)
-            {
-                // Batch inserts to keep each transaction short; a single large INSERT held
-                // row/page locks for 125+ seconds and cascaded timeouts to unrelated tables.
-                const int batchSize = 25;
-                for (int i = 0; i < toAdd.Count; i += batchSize)
-                {
-                    await using var batchDb = await _dbFactory.CreateDbContextAsync(ct);
-                    batchDb.DerivedKlines.AddRange(toAdd.Skip(i).Take(batchSize));
-                    await batchDb.SaveChangesAsync(ct);
-                    if (i + batchSize < toAdd.Count)
-                        await Task.Delay(50, ct);
-                }
-                _logger.LogInformation("[Predict] {Symbol}: stored {N} new {Interval} candles", symbol, toAdd.Count, intervalStr);
-            }
+            // Phase 2: save only FINISHED candles (the response always ends with the one still forming - storing it froze a
+            // half-built bar that every later run then skipped as already present), correcting any stored copy that differs.
+            // Small batches with a pause keep each transaction short; one large INSERT once held locks for 125+ seconds.
+            var (added, updated) = await KlineStore.UpsertAsync(_dbFactory, newDerived, DateTime.UtcNow,
+                batchSize: 25, pauseBetweenBatches: TimeSpan.FromMilliseconds(50), ct: ct);
+            if (added + updated > 0)
+                _logger.LogInformation("[Predict] {Symbol}: stored {Added} new and corrected {Updated} {Interval} candles", symbol, added, updated, intervalStr);
         }
         catch (Exception ex)
         {

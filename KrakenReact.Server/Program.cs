@@ -226,6 +226,15 @@ app.Lifetime.ApplicationStarted.Register(() =>
             new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
         Log.Information("[Hangfire] Daily price download scheduled at {Time} (cron: {Cron})", timeSetting?.Value ?? "04:00", cron);
 
+        // One-off: re-fetch and correct the stored daily candles (older versions saved each day's still-forming candle). Delayed so
+        // the symbol and price lists are loaded first; if they are not, the job leaves the flag unset and the next daily run retries.
+        if (db.AppSettings.FirstOrDefault(s => s.Key == DailyPriceRefreshJob.RepairFlagKey)?.Value != "true")
+        {
+            app.Services.GetRequiredService<IBackgroundJobClient>().Schedule<DailyPriceRefreshJob>(
+                job => job.ExecuteAsync(CancellationToken.None), TimeSpan.FromMinutes(10));
+            Log.Information("[Hangfire] Daily candle repair scheduled in 10 minutes");
+        }
+
         // Schedule prediction job from DB setting (default 05:00)
         var predTimeSetting = db.AppSettings.FirstOrDefault(s => s.Key == "PredictionJobTime");
         var predCron = TimeToCron(predTimeSetting?.Value ?? "05:00");
