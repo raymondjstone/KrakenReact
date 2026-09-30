@@ -15,6 +15,11 @@ public class KrakenRestService : IOrderGateway
     private readonly TradingStateService _state;
     private readonly ILogger<KrakenRestService> _logger;
 
+    /// <summary>Per-request timeout for authenticated calls (config: Kraken:RequestTimeoutSeconds). It was 180s, so one hung
+    /// call held a job for three minutes and made the next scheduled ticks fail to acquire their lock; a lost order response is
+    /// already handled by looking the order up afterwards, so failing fast costs nothing.</summary>
+    public static TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
     private const int MAX_RECORDS_RETURNED_PER_CALL = 50;
     private const int MAX_RECORDS_WANTED = 3501;
     private DateTime _lastUnauthCall = DateTime.MinValue;
@@ -94,7 +99,7 @@ public class KrakenRestService : IOrderGateway
                 _authClient = new KrakenRestClient(options =>
                 {
                     options.ApiCredentials = _creds;
-                    options.RequestTimeout = TimeSpan.FromSeconds(180);
+                    options.RequestTimeout = RequestTimeout;
                 });
                 _authClientWhen = DateTime.Now;
             }

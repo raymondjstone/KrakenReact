@@ -75,6 +75,7 @@ builder.Services.AddSingleton<DbMethods>();
 
 // Services
 builder.Services.AddSingleton<TradingStateService>();
+KrakenRestService.RequestTimeout = TimeSpan.FromSeconds(Math.Clamp(builder.Configuration.GetValue<int?>("Kraken:RequestTimeoutSeconds") ?? 60, 10, 300));
 builder.Services.AddSingleton<KrakenRestService>();
 builder.Services.AddSingleton<IOrderGateway>(sp => sp.GetRequiredService<KrakenRestService>());
 builder.Services.AddSingleton<PriceChangeService>();
