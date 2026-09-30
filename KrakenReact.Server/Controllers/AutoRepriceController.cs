@@ -24,12 +24,25 @@ public class AutoRepriceController : ControllerBase
     public async Task<IActionResult> GetAll() =>
         Ok(await _db.AutoRepriceRules.AsNoTracking().OrderBy(r => r.Id).ToListAsync());
 
+    /// <summary>Rules for a reprice rule, for Create and Update alike. (Update skipped all of them, and the offset was never
+    /// bounded anywhere: an offset of 100% priced a buy at zero.)</summary>
+    internal static string? Validate(AutoRepriceRule rule)
+    {
+        if (string.IsNullOrWhiteSpace(rule.Symbol)) return "Symbol required";
+        if (rule.MaxDeviationPct <= 0 || rule.MaxDeviationPct > 100) return "MaxDeviationPct must be greater than 0 and at most 100";
+        if (rule.MinAgeMinutes < 1) return "MinAgeMinutes must be at least 1";
+        if (rule.MaxAgeMinutes < 0) return "MaxAgeMinutes cannot be negative (0 means no limit)";
+        if (rule.MaxAgeMinutes > 0 && rule.MaxAgeMinutes <= rule.MinAgeMinutes) return "MaxAgeMinutes must be greater than MinAgeMinutes (or 0 for no limit)";
+        if (rule.NewPriceOffsetPct < 0 || rule.NewPriceOffsetPct > 50) return "NewPriceOffsetPct must be between 0 and 50";
+        return null;
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] AutoRepriceRule rule)
     {
-        if (string.IsNullOrWhiteSpace(rule.Symbol)) return BadRequest("Symbol required");
-        if (rule.MaxDeviationPct <= 0) return BadRequest("MaxDeviationPct must be positive");
-        if (rule.MinAgeMinutes < 1) return BadRequest("MinAgeMinutes must be at least 1");
+        var problem = Validate(rule);
+        if (problem != null) return BadRequest(problem);
+
         rule.Symbol = NormalizeSymbol(rule.Symbol, _db);
         rule.Id = 0;
         rule.CreatedAt = DateTime.UtcNow;
@@ -45,6 +58,10 @@ public class AutoRepriceController : ControllerBase
     {
         var rule = await _db.AutoRepriceRules.FindAsync(id);
         if (rule == null) return NotFound();
+
+        var problem = Validate(updated);
+        if (problem != null) return BadRequest(problem);
+
         rule.Symbol = NormalizeSymbol(updated.Symbol, _db);
         rule.MaxDeviationPct = updated.MaxDeviationPct;
         rule.MinAgeMinutes = updated.MinAgeMinutes;

@@ -217,11 +217,13 @@ public class OrdersController : ControllerBase
     public async Task<ActionResult> PlaceLadder([FromBody] OrderLadderRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Symbol)) return BadRequest("Symbol required");
+        var ladderSide = InputRules.NormalizeSide(req.Side);
+        if (ladderSide == null) return BadRequest("Side must be Buy or Sell");   // anything else used to become a SELL
         if (req.Count < 2 || req.Count > 20) return BadRequest("Count must be 2–20");
         if (req.StartPrice <= 0 || req.EndPrice <= 0) return BadRequest("Prices must be positive");
         if (req.TotalQty <= 0) return BadRequest("TotalQty must be positive");
 
-        var side = req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell;
+        var side = ladderSide == "Buy" ? OrderSide.Buy : OrderSide.Sell;
         var priceStep = (req.EndPrice - req.StartPrice) / (req.Count - 1);
         var qtyEach = Math.Round(req.TotalQty / req.Count, 6);
         var symbol = req.Symbol.Replace("/", "");

@@ -1,5 +1,6 @@
 using KrakenReact.Server.Data;
 using KrakenReact.Server.Models;
+using KrakenReact.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,12 +21,30 @@ public class ScheduledOrderController : ControllerBase
     public async Task<IActionResult> GetAll() =>
         Ok(await _db.ScheduledOrders.AsNoTracking().OrderByDescending(o => o.ScheduledAt).ToListAsync());
 
+    /// <summary>
+    /// Rules for a scheduled order, for Create and Update alike; also normalizes side and time in place. The side must be exactly
+    /// Buy or Sell — the job treats anything else as a buy, so "Sell " (a trailing space) used to place a BUY. The time is
+    /// normalized to UTC because the job compares it to the UTC clock (a zoneless time from another client is taken as UTC).
+    /// Update used to check none of this.
+    /// </summary>
+    internal static string? ValidateAndNormalize(ScheduledOrder order)
+    {
+        if (string.IsNullOrWhiteSpace(order.Symbol)) return "Symbol required";
+        var side = InputRules.NormalizeSide(order.Side);
+        if (side == null) return "Side must be Buy or Sell";
+        if (order.Price <= 0) return "Price must be positive";
+        if (order.Quantity <= 0) return "Quantity must be positive";
+        order.Symbol = order.Symbol.Trim();
+        order.Side = side;
+        order.ScheduledAt = InputRules.ToUtc(order.ScheduledAt);
+        return null;
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] ScheduledOrder order)
     {
-        if (string.IsNullOrWhiteSpace(order.Symbol)) return BadRequest("Symbol required");
-        if (order.Price <= 0) return BadRequest("Price must be positive");
-        if (order.Quantity <= 0) return BadRequest("Quantity must be positive");
+        var problem = ValidateAndNormalize(order);
+        if (problem != null) return BadRequest(problem);
         order.Id = 0;
         order.Status = "Pending";
         order.ExecutedAt = null;
@@ -42,6 +61,10 @@ public class ScheduledOrderController : ControllerBase
         var order = await _db.ScheduledOrders.FindAsync(id);
         if (order == null) return NotFound();
         if (order.Status != "Pending") return BadRequest("Only Pending orders can be updated");
+
+        var problem = ValidateAndNormalize(updated);
+        if (problem != null) return BadRequest(problem);
+
         order.Symbol = updated.Symbol;
         order.Side = updated.Side;
         order.Price = updated.Price;
@@ -78,6 +101,11 @@ public class ScheduledOrderController : ControllerBase
     public async Task<IActionResult> CreateTwap([FromBody] TwapRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Symbol)) return BadRequest("Symbol required");
+        var twapSide = InputRules.NormalizeSide(req.Side);
+        if (twapSide == null) return BadRequest("Side must be Buy or Sell");
+        req.Side = twapSide;
+        req.StartAt = InputRules.ToUtc(req.StartAt);
+        req.EndAt = InputRules.ToUtc(req.EndAt);
         if (req.Price <= 0) return BadRequest("Price must be positive");
         if (req.TotalQuantity <= 0) return BadRequest("TotalQuantity must be positive");
         if (req.Slices < 2 || req.Slices > 100) return BadRequest("Slices must be 2–100");
