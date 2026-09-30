@@ -298,22 +298,20 @@ public class KrakenWebSocketV1Service : BackgroundService
             priceItem.SetLiveKline(kline);
             _state.MarkFeedTick(); // feed heartbeat: trading jobs refuse to act on prices if this goes quiet
 
-            // Mutate the existing TickerData in place rather than replacing it outright — this V1
-            // feed has no 24h-change fields of its own (Kraken's legacy ticker payload doesn't carry
-            // a rolling change_pct), so a full `= new TickerDataItem { ... }` here was silently
-            // wiping out Change24h/ChangePct24h the moment they'd been set by the V2 ticker feed.
-            // Both sockets run concurrently, and V1 ticks far more often, so the reset happened
-            // within minutes of the value appearing — which looked like the data "disappearing".
-            priceItem.TickerData ??= new TickerDataItem();
-            priceItem.TickerData.BestAskPrice = tickerData.a?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.BestBidPrice = tickerData.b?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.LastTradePrice = tickerData.c?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.OpenPrice = tickerData.o?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.HighPrice = tickerData.h?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.LowPrice = tickerData.l?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.Volume = tickerData.v?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.VolumeWeightedAvgPrice = tickerData.p?.FirstOrDefault() ?? 0;
-            priceItem.TickerData.TradeCount = tickerData.t?.FirstOrDefault() ?? 0;
+            // Publish the whole quote in one atomic write. This feed owns only the QUOTE half of TickerData; the 24h change fields
+            // (Kraken's legacy ticker payload has none) belong to the V2 feed and live in a separate snapshot that this write cannot
+            // touch - replacing the whole TickerData object here used to wipe them the moment V2 had set them. Writing the nine
+            // fields one by one would also let a reader (a stop-loss deciding on LastTradePrice) see a half-updated quote.
+            priceItem.EnsureTickerData().SetQuote(new TickerDataItem.QuoteSnapshot(
+                BestAsk: tickerData.a?.FirstOrDefault() ?? 0,
+                BestBid: tickerData.b?.FirstOrDefault() ?? 0,
+                Last: tickerData.c?.FirstOrDefault() ?? 0,
+                Open: tickerData.o?.FirstOrDefault() ?? 0,
+                High: tickerData.h?.FirstOrDefault() ?? 0,
+                Low: tickerData.l?.FirstOrDefault() ?? 0,
+                Volume: tickerData.v?.FirstOrDefault() ?? 0,
+                Vwap: tickerData.p?.FirstOrDefault() ?? 0,
+                TradeCount: tickerData.t?.FirstOrDefault() ?? 0));
 
             // Push to SignalR clients — at most one TickerUpdate per pair per TickerBroadcastMinMs
             var nowMs = Environment.TickCount64;

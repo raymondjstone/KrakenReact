@@ -17,7 +17,23 @@ public class PriceDataItem
     public bool KrakenNewPricesLoadedEver { get; set; }
     public string KrakenNewPricesLoaded { get; set; } = "no";
     public DateTime KrakenNewPricesLoadedTime { get; set; } = DateTime.MinValue;
-    public TickerDataItem? TickerData { get; set; }
+    private TickerDataItem? _tickerData;
+
+    public TickerDataItem? TickerData
+    {
+        get => Volatile.Read(ref _tickerData);
+        set => Volatile.Write(ref _tickerData, value);
+    }
+
+    /// <summary>The ticker data, creating it if absent. Both price feeds call this; two racing <c>??=</c> could each create one and
+    /// one feed writes would land on the discarded copy.</summary>
+    public TickerDataItem EnsureTickerData()
+    {
+        var existing = TickerData;
+        if (existing != null) return existing;
+        var created = new TickerDataItem();
+        return Interlocked.CompareExchange(ref _tickerData, created, null) ?? created;
+    }
 
     private readonly List<DerivedKline> _klineSnapshot = new(10000);
     private readonly object _klineLock = new();
@@ -218,17 +234,63 @@ public class PriceDataItem
     }
 }
 
+/// <summary>
+/// The live quote for one pair, shared between the price feeds (writers) and every job that trades or alerts on it (readers).
+/// <para>
+/// A <c>decimal</c> is 16 bytes and .NET does not guarantee that writing one is atomic, so a reader racing the feed can see half
+/// of the old price and half of the new - a number that never existed - and a stop-loss or auto-order could act on it. The data
+/// is therefore held as two IMMUTABLE snapshots, each swapped in by a single reference write (which is atomic): the exchange
+/// quote (written by the V1 feed) and the 24h statistics (written by the V2 feed). Readers always see one complete, consistent
+/// version of each. The property names are unchanged, so existing code reads and writes as before.
+/// </para>
+/// </summary>
 public class TickerDataItem
 {
-    public decimal BestAskPrice { get; set; }
-    public decimal BestBidPrice { get; set; }
-    public decimal LastTradePrice { get; set; }
-    public decimal OpenPrice { get; set; }
-    public decimal HighPrice { get; set; }
-    public decimal LowPrice { get; set; }
-    public decimal Volume { get; set; }
-    public decimal VolumeWeightedAvgPrice { get; set; }
-    public int TradeCount { get; set; }
-    public decimal? Change24h { get; set; }
-    public decimal? ChangePct24h { get; set; }
+    /// <summary>One complete version of the quote. Replaced as a whole, never edited.</summary>
+    public sealed record QuoteSnapshot(
+        decimal BestAsk = 0, decimal BestBid = 0, decimal Last = 0, decimal Open = 0, decimal High = 0,
+        decimal Low = 0, decimal Volume = 0, decimal Vwap = 0, int TradeCount = 0);
+
+    /// <summary>One complete version of the rolling 24h statistics. Replaced as a whole, never edited.</summary>
+    public sealed record StatsSnapshot(decimal? Change24h = null, decimal? ChangePct24h = null);
+
+    private QuoteSnapshot _quote = new();
+    private StatsSnapshot _stats = new();
+
+    public QuoteSnapshot Quote => Volatile.Read(ref _quote);
+    public StatsSnapshot Stats => Volatile.Read(ref _stats);
+
+    /// <summary>Publishes a whole new quote at once (what the live feed uses: one write per tick, never a half-updated quote).</summary>
+    public void SetQuote(QuoteSnapshot quote) => Volatile.Write(ref _quote, quote);
+
+    /// <summary>Publishes new 24h statistics at once.</summary>
+    public void SetStats(StatsSnapshot stats) => Volatile.Write(ref _stats, stats);
+
+    // Per-field access, kept so existing callers (and object initializers) work unchanged. Each setter swaps in a new snapshot
+    // through a compare-and-swap, so concurrent setters of different fields cannot lose each other's update.
+    private void UpdateQuote(Func<QuoteSnapshot, QuoteSnapshot> change)
+    {
+        QuoteSnapshot current, next;
+        do { current = Volatile.Read(ref _quote); next = change(current); }
+        while (!ReferenceEquals(Interlocked.CompareExchange(ref _quote, next, current), current));
+    }
+
+    private void UpdateStats(Func<StatsSnapshot, StatsSnapshot> change)
+    {
+        StatsSnapshot current, next;
+        do { current = Volatile.Read(ref _stats); next = change(current); }
+        while (!ReferenceEquals(Interlocked.CompareExchange(ref _stats, next, current), current));
+    }
+
+    public decimal BestAskPrice { get => Quote.BestAsk; set => UpdateQuote(q => q with { BestAsk = value }); }
+    public decimal BestBidPrice { get => Quote.BestBid; set => UpdateQuote(q => q with { BestBid = value }); }
+    public decimal LastTradePrice { get => Quote.Last; set => UpdateQuote(q => q with { Last = value }); }
+    public decimal OpenPrice { get => Quote.Open; set => UpdateQuote(q => q with { Open = value }); }
+    public decimal HighPrice { get => Quote.High; set => UpdateQuote(q => q with { High = value }); }
+    public decimal LowPrice { get => Quote.Low; set => UpdateQuote(q => q with { Low = value }); }
+    public decimal Volume { get => Quote.Volume; set => UpdateQuote(q => q with { Volume = value }); }
+    public decimal VolumeWeightedAvgPrice { get => Quote.Vwap; set => UpdateQuote(q => q with { Vwap = value }); }
+    public int TradeCount { get => Quote.TradeCount; set => UpdateQuote(q => q with { TradeCount = value }); }
+    public decimal? Change24h { get => Stats.Change24h; set => UpdateStats(s => s with { Change24h = value }); }
+    public decimal? ChangePct24h { get => Stats.ChangePct24h; set => UpdateStats(s => s with { ChangePct24h = value }); }
 }

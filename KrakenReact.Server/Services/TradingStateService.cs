@@ -26,7 +26,8 @@ public partial class TradingStateService
     public bool StakingNotifications { get; set; }
     public bool HideAlmostZeroBalances { get; set; }
     public bool OrderProximityNotifications { get; set; } = true;
-    public decimal OrderProximityThreshold { get; set; } = 2.0m;
+    private readonly AtomicDecimal _OrderProximityThreshold = new(2.0m);
+    public decimal OrderProximityThreshold { get => _OrderProximityThreshold.Value; set => _OrderProximityThreshold.Value = value; }
     // Bounded ledger-ID dedup set with FIFO eviction. Clear-on-overflow (used by
     // _notifiedOrders) is wrong here — wiping the set would trigger a re-notification
     // storm on the next Kraken ledger poll because every recently-returned ledger
@@ -106,19 +107,24 @@ public partial class TradingStateService
     public List<decimal> OrderQtyPercentages { get; set; } = new(DefaultOrderQtyPercentages);
 
     public bool AutoSellOnBuyFill { get; set; }
-    public decimal AutoSellPercentage { get; set; } = 10m;
+    private readonly AtomicDecimal _AutoSellPercentage = new(10m);
+    public decimal AutoSellPercentage { get => _AutoSellPercentage.Value; set => _AutoSellPercentage.Value = value; }
     public bool AutoAddStakingToOrder { get; set; }
     public bool StopLossEnabled { get; set; }
-    public decimal StopLossPct { get; set; } = 5m;
+    private readonly AtomicDecimal _StopLossPct = new(5m);
+    public decimal StopLossPct { get => _StopLossPct.Value; set => _StopLossPct.Value = value; }
     public bool TakeProfitEnabled { get; set; }
-    public decimal TakeProfitPct { get; set; } = 15m;
+    private readonly AtomicDecimal _TakeProfitPct = new(15m);
+    public decimal TakeProfitPct { get => _TakeProfitPct.Value; set => _TakeProfitPct.Value = value; }
     public bool DrawdownAlertEnabled { get; set; }
-    public decimal DrawdownAlertThreshold { get; set; } = 10m;
+    private readonly AtomicDecimal _DrawdownAlertThreshold = new(10m);
+    public decimal DrawdownAlertThreshold { get => _DrawdownAlertThreshold.Value; set => _DrawdownAlertThreshold.Value = value; }
     public bool DryRunJobs { get; set; }
 
     // Trailing stop-loss
     public bool TrailingStopEnabled { get; set; }
-    public decimal TrailingStopPct { get; set; } = 5m;
+    private readonly AtomicDecimal _TrailingStopPct = new(5m);
+    public decimal TrailingStopPct { get => _TrailingStopPct.Value; set => _TrailingStopPct.Value = value; }
     public ConcurrentDictionary<string, decimal> TrailingHighPrices { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     // Auto-cancel stale open orders

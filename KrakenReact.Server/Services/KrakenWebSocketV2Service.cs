@@ -265,9 +265,8 @@ public class KrakenWebSocketV2Service : BackgroundService
                 if (!_state.Prices.TryGetValue(internalKey, out var priceItem))
                     priceItem = _state.GetOrAddPrice(internalKey);
 
-                priceItem.TickerData ??= new TickerDataItem();
-                priceItem.TickerData.Change24h = data.Change;
-                priceItem.TickerData.ChangePct24h = data.ChangePct;
+                // Both 24h fields published together as one snapshot, so a reader never pairs a new change with an old percentage
+                priceItem.EnsureTickerData().SetStats(new TickerDataItem.StatsSnapshot(data.Change, data.ChangePct));
 
                 // At most one broadcast per pair per TickerBroadcastMinMs (this feed ticks on every trade)
                 var nowMs = Environment.TickCount64;
