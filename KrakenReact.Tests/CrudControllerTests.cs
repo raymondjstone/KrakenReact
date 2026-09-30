@@ -305,13 +305,64 @@ public class PriceAlertsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_DefaultsAutoOrderSideToBuy_WhenUnknown()
+    public async Task Create_WithAutoOrderOn_RefusesAnUnknownSide_InsteadOfBuying()
+    {
+        // This used to default to Buy, so a mistyped side on an alert that places a real order quietly became a BUY
+        var req = new CreatePriceAlertRequest("BTC/USD", 100m, "above", null,
+            AutoOrderEnabled: true, AutoOrderSide: "Weird", AutoOrderQty: 1m);
+        Assert.IsType<BadRequestObjectResult>(await NewCtrl().Create(req));
+    }
+
+    [Fact]
+    public async Task Create_WithAutoOrderOff_StillDefaultsTheUnusedSideToBuy()
+    {
+        var req = new CreatePriceAlertRequest("BTC/USD", 100m, "above", null, AutoOrderEnabled: false, AutoOrderSide: "Weird");
+        var saved = Assert.IsType<PriceAlert>(Assert.IsType<OkObjectResult>(await NewCtrl().Create(req)).Value);
+        Assert.Equal("Buy", saved.AutoOrderSide);
+    }
+
+    [Theory]
+    [InlineData("Below", "below")]      // used to fall through to "above", inverting the alert
+    [InlineData(" BELOW ", "below")]
+    [InlineData("ABOVE", "above")]
+    public async Task Create_DirectionIsMatchedCaseInsensitively(string sent, string stored)
+    {
+        var saved = Assert.IsType<PriceAlert>(Assert.IsType<OkObjectResult>(
+            await NewCtrl().Create(new CreatePriceAlertRequest("BTC/USD", 100m, sent, null))).Value);
+        Assert.Equal(stored, saved.Direction);
+    }
+
+    [Theory]
+    [InlineData("sell ", "Sell")]
+    [InlineData("BUY", "Buy")]
+    public async Task Create_AutoOrderSideIsNormalized(string sent, string stored)
+    {
+        var req = new CreatePriceAlertRequest("BTC/USD", 100m, "above", null, AutoOrderEnabled: true, AutoOrderSide: sent, AutoOrderQty: 1m);
+        var saved = Assert.IsType<PriceAlert>(Assert.IsType<OkObjectResult>(await NewCtrl().Create(req)).Value);
+        Assert.Equal(stored, saved.AutoOrderSide);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]        // an enabled auto-order needs a quantity
+    [InlineData(-1, 0)]
+    [InlineData(1, -100)]     // -100% would price the order at zero
+    [InlineData(1, 500)]
+    public async Task Create_WithAutoOrderOn_RefusesABadQuantityOrOffset(double qty, double offset)
     {
         var req = new CreatePriceAlertRequest("BTC/USD", 100m, "above", null,
-            AutoOrderEnabled: true, AutoOrderSide: "Weird");
-        var ok = Assert.IsType<OkObjectResult>(await NewCtrl().Create(req));
-        var saved = Assert.IsType<PriceAlert>(ok.Value);
-        Assert.Equal("Buy", saved.AutoOrderSide);
+            AutoOrderEnabled: true, AutoOrderSide: "Buy", AutoOrderQty: (decimal)qty, AutoOrderOffsetPct: (decimal)offset);
+        Assert.IsType<BadRequestObjectResult>(await NewCtrl().Create(req));
+    }
+
+    [Fact]
+    public async Task Update_AppliesTheSameAutoOrderRules_AndKeepsTheAlert()
+    {
+        var created = Assert.IsType<PriceAlert>(Assert.IsType<OkObjectResult>(
+            await NewCtrl().Create(new CreatePriceAlertRequest("BTC/USD", 100m, "above", null))).Value);
+
+        var bad = new CreatePriceAlertRequest("BTC/USD", 100m, "above", null, AutoOrderEnabled: true, AutoOrderSide: "Nope", AutoOrderQty: 1m);
+        Assert.IsType<BadRequestObjectResult>(await NewCtrl().Update(created.Id, bad));
+        Assert.False(_db.PriceAlerts.Single().AutoOrderEnabled);
     }
 
     [Fact]
