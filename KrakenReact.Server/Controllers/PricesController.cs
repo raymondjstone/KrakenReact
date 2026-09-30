@@ -226,11 +226,12 @@ public class PricesController : ControllerBase
         }
 
         // Fallback to DB (try both resolved and original symbol)
-        var klines = await _db.GetKlineAsync(resolvedSymbol);
+        var dbInterval = (krakenInterval ?? KlineInterval.OneDay).ToString();
+        var klines = await _db.GetKlineAsync(resolvedSymbol, dbInterval);
         _logger.LogInformation("Klines DB fallback for {Resolved}: {Count} rows", resolvedSymbol, klines.Count);
         if (!klines.Any() && resolvedSymbol != symbol)
         {
-            klines = await _db.GetKlineAsync(symbol);
+            klines = await _db.GetKlineAsync(symbol, dbInterval);
             _logger.LogInformation("Klines DB fallback for {Symbol}: {Count} rows", symbol, klines.Count);
         }
         if (klines.Any())

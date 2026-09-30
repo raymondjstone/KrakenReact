@@ -243,8 +243,16 @@ public class DbMethods
             () => UseDbContextAsync(context => context.Ledgers.AsNoTracking().OrderByDescending(c => c.Timestamp).ToListAsync()));
 
 
-    public Task<List<DerivedKline>> GetKlineAsync(string asset) =>
-        UseDbContextAsync(context => context.DerivedKlines.Where(k => k.Asset == asset).AsNoTracking().OrderBy(c => c.OpenTime).ToListAsync());
+    /// <summary>
+    /// Stored klines for an asset. <paramref name="interval"/> defaults to daily: minute candles share the same
+    /// Asset key and can run to hundreds of thousands of rows per pair, which — loaded unfiltered — flooded the
+    /// in-memory history (capped at 10,000 bars) and pushed the daily bars out. Pass null for every interval.
+    /// Uses the (Asset, Interval) index.
+    /// </summary>
+    public Task<List<DerivedKline>> GetKlineAsync(string asset, string? interval = "OneDay") =>
+        UseDbContextAsync(context => context.DerivedKlines
+            .Where(k => k.Asset == asset && (interval == null || k.Interval == interval))
+            .AsNoTracking().OrderBy(c => c.OpenTime).ToListAsync());
 
     public Task<List<CombinedOrder>> GetCombinedOrdersAsync() =>
         GetCachedAsync(() => _combinedOrdersCache, v => _combinedOrdersCache = v,
