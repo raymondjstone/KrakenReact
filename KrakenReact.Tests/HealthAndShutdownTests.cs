@@ -59,13 +59,8 @@ public class HealthControllerTests : IDisposable
     [Fact]
     public async Task Get_StalePrice_ReportsLivePricesNotOk()
     {
-        // Stale price (>10 min old)
-        var price = new PriceDataItem
-        {
-            Symbol = "BTC/USD",
-            KrakenNewPricesLoadedTime = DateTime.UtcNow.AddMinutes(-30)
-        };
-        _state.Prices["BTC/USD"] = price;
+        // The ticker feed last delivered half an hour ago
+        _state.MarkFeedTick(DateTime.UtcNow.AddMinutes(-30));
 
         var ok = Assert.IsType<OkObjectResult>(await NewCtrl().Get());
         var checks = ExtractChecks(ok.Value!);
@@ -74,14 +69,20 @@ public class HealthControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Get_LoaderActivityAlone_DoesNotMakePricesLookLive()
+    {
+        // A loader refreshing a price stamps KrakenNewPricesLoadedTime, but that is not a live tick
+        _state.Prices["BTC/USD"] = new PriceDataItem { Symbol = "BTC/USD", KrakenNewPricesLoadedTime = DateTime.UtcNow };
+
+        var ok = Assert.IsType<OkObjectResult>(await NewCtrl().Get());
+        var livePrices = ExtractChecks(ok.Value!).First(c => (string)c.GetType().GetProperty("name")!.GetValue(c)! == "Live Prices");
+        Assert.False((bool)livePrices.GetType().GetProperty("ok")!.GetValue(livePrices)!);
+    }
+
+    [Fact]
     public async Task Get_FreshPrice_ReportsLivePricesOk()
     {
-        var price = new PriceDataItem
-        {
-            Symbol = "BTC/USD",
-            KrakenNewPricesLoadedTime = DateTime.UtcNow.AddMinutes(-1)
-        };
-        _state.Prices["BTC/USD"] = price;
+        _state.MarkFeedTick();
 
         var ok = Assert.IsType<OkObjectResult>(await NewCtrl().Get());
         var checks = ExtractChecks(ok.Value!);

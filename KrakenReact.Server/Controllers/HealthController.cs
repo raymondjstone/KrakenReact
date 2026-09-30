@@ -39,22 +39,20 @@ public class HealthController : ControllerBase
         var symbolCount = _state.Symbols.Count;
         checks.Add(new { name = "Symbols", ok = symbolCount > 0, detail = $"{symbolCount} symbols loaded" });
 
-        // 3. Price data freshness — at least one price updated within last 10 minutes
-        var recentPrice = _state.Prices.Values
-            .Where(p => p.KrakenNewPricesLoadedTime > DateTime.MinValue)
-            .OrderByDescending(p => p.KrakenNewPricesLoadedTime)
-            .FirstOrDefault();
-        var priceAge = recentPrice != null
-            ? (DateTime.UtcNow - recentPrice.KrakenNewPricesLoadedTime).TotalMinutes
-            : double.MaxValue;
-        var priceOk = priceAge < 10;
+        // 3. Live price feed — judged by the ticker heartbeat, the same signal the trading jobs use to decide whether they may act.
+        // (This used to look at the newest KrakenNewPricesLoadedTime of any price, which the daily and startup loaders also
+        // bump, so it reported "live" for ten minutes after a loader ran even with the websocket dead.)
+        var feedAge = _state.FeedAge;
+        var priceOk = _state.IsPriceFeedAlive();
         checks.Add(new
         {
             name = "Live Prices",
             ok = priceOk,
             detail = priceOk
-                ? $"Last price {priceAge:F1} min ago ({recentPrice?.Symbol})"
-                : recentPrice == null ? "No prices received" : $"Stale — last price {priceAge:F1} min ago"
+                ? $"Last tick {feedAge!.Value.TotalSeconds:F0}s ago"
+                : feedAge == null
+                    ? "No price ticks received yet — trading jobs are paused until the feed delivers"
+                    : $"Stale — last tick {feedAge.Value.TotalMinutes:F1} min ago. Stop-loss, take-profit, MicroTrade, DCA and other price-driven jobs are paused until it recovers"
         });
 
         // 4. Balances loaded

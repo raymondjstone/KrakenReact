@@ -45,6 +45,8 @@ public class StopLossTakeProfitJob
         _sqlDiag = sqlDiag;
     }
 
+    // No automatic retry: this job sells real holdings, and a retry after a partial run must not act twice
+    [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 10)]
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
