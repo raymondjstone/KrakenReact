@@ -201,7 +201,7 @@ public class KrakenWebSocketV1Service : BackgroundService
         }
     }
 
-    private void ProcessMessage(string? message)
+    internal void ProcessMessage(string? message)
     {
         if (string.IsNullOrEmpty(message)) return;
 
