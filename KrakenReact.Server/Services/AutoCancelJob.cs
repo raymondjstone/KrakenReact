@@ -1,3 +1,4 @@
+using Hangfire;
 using KrakenReact.Server.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -6,12 +7,12 @@ namespace KrakenReact.Server.Services;
 public class AutoCancelJob
 {
     private readonly TradingStateService _state;
-    private readonly KrakenRestService _kraken;
-    private readonly NotificationService _notify;
+    private readonly IOrderGateway _kraken;
+    private readonly INotifier _notify;
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly ILogger<AutoCancelJob> _logger;
 
-    public AutoCancelJob(TradingStateService state, KrakenRestService kraken, NotificationService notify,
+    public AutoCancelJob(TradingStateService state, IOrderGateway kraken, INotifier notify,
         IDbContextFactory<KrakenDbContext> dbFactory, ILogger<AutoCancelJob> logger)
     {
         _state = state;
@@ -21,6 +22,8 @@ public class AutoCancelJob
         _logger = logger;
     }
 
+    [AutomaticRetry(Attempts = 0)]
+    [DisableConcurrentExecution(timeoutInSeconds: 60)]
     public async Task ExecuteAsync(CancellationToken ct = default)
     {
         if (!_state.AutoCancelEnabled) return;
@@ -34,10 +37,20 @@ public class AutoCancelJob
 
         if (!candidates.Any()) return;
 
+        // Orders another feature is actively managing are not "stale": a MicroTrade sell waiting for its target, or a bracket's
+        // take-profit, can legitimately rest for months. Cancelling one silently strips that position of its exit.
+        var managed = await GetManagedOrderIdsAsync(ct);
+
         foreach (var order in candidates)
         {
             try
             {
+                if (managed.Contains(order.Id))
+                {
+                    _logger.LogInformation("[AutoCancel] Leaving {OrderId} alone — it belongs to a MicroTrade position or bracket", order.Id);
+                    continue;
+                }
+
                 var age = (int)(DateTime.UtcNow - order.CreateTime).TotalDays;
                 var label = $"{order.Side} {order.Quantity} {order.Symbol} @ {order.Price:F4} (age: {age}d)";
 
@@ -64,5 +77,35 @@ public class AutoCancelJob
                 _logger.LogError(ex, "[AutoCancel] Exception cancelling {OrderId}", order.Id);
             }
         }
+    }
+
+    /// <summary>Kraken order ids currently owned by an open MicroTrade position or an unfinished bracket.</summary>
+    private async Task<HashSet<string>> GetManagedOrderIdsAsync(CancellationToken ct)
+    {
+        var ids = new HashSet<string>();
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+
+        var micro = await db.MicroTradeOrders.AsNoTracking()
+            .Where(o => o.Status == "Buying" || o.Status == "Selling" || o.Status == "Placing")
+            .Select(o => new { o.BuyOrderId, o.SellOrderId })
+            .ToListAsync(ct);
+        foreach (var o in micro)
+        {
+            if (!string.IsNullOrEmpty(o.BuyOrderId)) ids.Add(o.BuyOrderId);
+            if (!string.IsNullOrEmpty(o.SellOrderId)) ids.Add(o.SellOrderId);
+        }
+
+        var brackets = await db.BracketOrders.AsNoTracking()
+            .Where(b => b.Status == "Watching" || b.Status == "Active")
+            .Select(b => new { b.KrakenOrderId, b.TakeProfitOrderId, b.StopOrderId })
+            .ToListAsync(ct);
+        foreach (var b in brackets)
+        {
+            if (!string.IsNullOrEmpty(b.KrakenOrderId)) ids.Add(b.KrakenOrderId);
+            if (!string.IsNullOrEmpty(b.TakeProfitOrderId)) ids.Add(b.TakeProfitOrderId);
+            if (!string.IsNullOrEmpty(b.StopOrderId)) ids.Add(b.StopOrderId);
+        }
+
+        return ids;
     }
 }
