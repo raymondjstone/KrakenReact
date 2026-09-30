@@ -249,7 +249,7 @@ public class KrakenRestService : IOrderGateway
         var dbItems = (await _db.GetLedgersAsync()).ToList();
         if (initialLoad) return dbItems;
 
-        var starttime = dbItems.Any() ? dbItems.Max(a => a.Timestamp).AddHours(-4) : DateTime.Now.AddYears(-3);
+        var starttime = dbItems.Any() ? dbItems.Max(a => a.Timestamp).AddHours(-4) : DateTime.UtcNow.AddYears(-3);
         var krakenClient = await AuthenticatedClient();
         var data = new Dictionary<string, KrakenLedgerEntry>(MAX_RECORDS_WANTED);
         int recs = MAX_RECORDS_RETURNED_PER_CALL;
@@ -280,14 +280,26 @@ public class KrakenRestService : IOrderGateway
     {
         var closed = await GetClosedOrdersAsync(initialLoad);
         var open = await GetOpenOrdersAsync(initialLoad);
-        closed = closed.Where(c => !open.Any(o => o.Id == c.Id)).ToList();
-        closed.AddRange(open);
+        if (open == null)
+        {
+            // The open-orders call failed. Don't pretend there are none: leave the current open orders as they are and only
+            // refresh the closed ones, rather than treating an outage as 'every order has closed'.
+            _logger.LogWarning("Open orders could not be fetched; keeping the existing open orders and refreshing closed ones only");
+        }
+        else
+        {
+            var openIds = open.Select(o => o.Id).ToHashSet();
+            closed = closed.Where(c => !openIds.Contains(c.Id)).ToList();
+            closed.AddRange(open);
+        }
         closed = closed.OrderByDescending(o => o.CreateTime).ToList();
         if (closed.Any()) await _db.AddCombinedOrdersAsync(closed);
         return closed;
     }
 
-    public async Task<List<CombinedOrder>> GetOpenOrdersAsync(bool initialLoad)
+    /// <summary>Every open order, an empty list if there are none, or NULL if Kraken could not be asked (so a failure is
+    /// not mistaken for 'no open orders').</summary>
+    public async Task<List<CombinedOrder>?> GetOpenOrdersAsync(bool initialLoad)
     {
         if (initialLoad) return new List<CombinedOrder>();
         var krakenClient = await AuthenticatedClient();
@@ -298,7 +310,7 @@ public class KrakenRestService : IOrderGateway
             var result = await krakenClient.SpotApi.Trading.GetOpenOrdersAsync();
             if (result.Success)
                 return result.Data.Open.Select(kv => new CombinedOrder(kv.Value)).ToList();
-            if (!(await HandleErrors(result.Error, attempt))) return new List<CombinedOrder>();
+            if (!(await HandleErrors(result.Error, attempt))) return null;
         }
     }
 
@@ -427,7 +439,7 @@ public class KrakenRestService : IOrderGateway
         var dbItems = (await _db.GetTradesAsync()).ToList();
         if (initialLoad) return dbItems;
 
-        var starttime = dbItems.Any() ? dbItems.Max(a => a.Timestamp).AddHours(-4) : DateTime.Now.AddYears(-3);
+        var starttime = dbItems.Any() ? dbItems.Max(a => a.Timestamp).AddHours(-4) : DateTime.UtcNow.AddYears(-3);
         var krakenClient = await AuthenticatedClient();
         var data = new Dictionary<string, KrakenUserTrade>(MAX_RECORDS_WANTED);
         int recs = MAX_RECORDS_RETURNED_PER_CALL;

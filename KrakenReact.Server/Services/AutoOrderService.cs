@@ -55,8 +55,8 @@ public class AutoOrderService
             return ao;
         }
 
-        var monthend = DateTime.Now.AddDays(-32);
-        var weekend = DateTime.Now.AddDays(-7);
+        var monthend = DateTime.UtcNow.AddDays(-32);
+        var weekend = DateTime.UtcNow.AddDays(-7);
         var closePrice = instrument.LatestKline?.Close ?? 0;
         var avgDay = instrument.ClosePriceAverage(1);
         var avgWeek = instrument.ClosePriceAverage(7);
