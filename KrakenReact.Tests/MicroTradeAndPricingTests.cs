@@ -44,6 +44,9 @@ public class MicroTradeHelperTests
     [Theory]
     [InlineData("EOrder:Insufficient funds", true)]
     [InlineData("EGeneral:Invalid arguments", true)]
+    [InlineData("EService:Timeout", false)]          // may have been processed
+    [InlineData("EGeneral:Internal error", false)]   // outcome unknown
+    [InlineData("EService:Busy", true)]              // rejected before processing
     [InlineData("Request timed out", false)]
     [InlineData("", false)]
     [InlineData(null, false)]

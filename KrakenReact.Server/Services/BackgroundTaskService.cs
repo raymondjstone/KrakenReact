@@ -141,6 +141,8 @@ public class BackgroundTaskService : BackgroundService
                 _state.GetOrAddPrice(key);
             }
             _logger.LogInformation("[BG] All klines loaded");
+            // Prices (and so the GBP/EUR rates used to value non-USD trades) are only now available
+            _state.RecalculateCostBasis();
         }
         catch (Exception ex) { _logger.LogError(ex, "[BG] Error in LoadKlinesBackground"); }
     }

@@ -378,8 +378,20 @@ public class MicroTradeJob
     internal static bool IsPostOnlyRejection(string? message) =>
         !string.IsNullOrEmpty(message) && message.Contains("post only", StringComparison.OrdinalIgnoreCase);
 
-    internal static bool IsDefiniteRejection(string? message) =>
-        !string.IsNullOrEmpty(message) && System.Text.RegularExpressions.Regex.IsMatch(message, @"\bE(Order|General|Service|Trade|Funding|Query|API|Auth)\w*:");
+    /// <summary>
+    /// True when the error proves the order was NOT placed. Kraken error codes like "EOrder:Insufficient funds" are
+    /// definite, but two are not: "EService:Timeout" (the request timed out server-side; the order may have gone
+    /// through) and "EGeneral:Internal error". Those are ambiguous and must be resolved by looking the order up, or a
+    /// duplicate gets placed / a real order goes untracked.
+    /// </summary>
+    internal static bool IsDefiniteRejection(string? message)
+    {
+        if (string.IsNullOrEmpty(message)) return false;
+        if (message.Contains("Timeout", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("Internal error", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return System.Text.RegularExpressions.Regex.IsMatch(message, @"\bE(Order|General|Service|Trade|Funding|Query|API|Auth)\w*:");
+    }
 
     /// <summary>
     /// Places a limit order tagged with <paramref name="userRef"/>. If the call fails ambiguously (timeout etc.)
