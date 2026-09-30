@@ -110,8 +110,8 @@ public class OrdersController : ControllerBase
         {
             try
             {
-                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
-                await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+                await _hub.BroadcastOrdersAsync(_state);
+                await _hub.BroadcastBalancesAsync(_state);
             }
             catch { /* Ignore broadcast errors */ }
         });
@@ -167,8 +167,8 @@ public class OrdersController : ControllerBase
         {
             try
             {
-                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
-                await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+                await _hub.BroadcastOrdersAsync(_state);
+                await _hub.BroadcastBalancesAsync(_state);
             }
             catch { /* Ignore broadcast errors */ }
         });
@@ -237,7 +237,7 @@ public class OrdersController : ControllerBase
 
         _ = Task.Run(async () =>
         {
-            try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+            try { await _hub.BroadcastOrdersAsync(_state); }
             catch (Exception ex) { Serilog.Log.Warning(ex, "OrderUpdate broadcast failed after closing {Asset}", asset); }
         });
 
@@ -302,8 +302,8 @@ public class OrdersController : ControllerBase
         {
             try
             {
-                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
-                await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+                await _hub.BroadcastOrdersAsync(_state);
+                await _hub.BroadcastBalancesAsync(_state);
             }
             catch { /* Ignore broadcast errors */ }
         });

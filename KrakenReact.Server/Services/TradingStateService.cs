@@ -53,6 +53,11 @@ public partial class TradingStateService
         }
     }
 
+    // Delta broadcast channels for the two lists the UI keeps live (see LiveStream). Owned by the state so every
+    // publisher — the feeds, the jobs, the controllers — shares one baseline and one send order.
+    public LiveStream<OrderDto> LiveOrders { get; } = new(o => o.Id, "OrdersDelta", "OrderUpdate");
+    public LiveStream<BalanceDto> LiveBalances { get; } = new(b => b.Asset, "BalancesDelta", "BalanceUpdate");
+
     public ConcurrentDictionary<string, PriceDataItem> Prices { get; } = new();
     public ConcurrentDictionary<string, OrderDto> Orders { get; } = new();
     public ConcurrentDictionary<string, BalanceDto> Balances { get; } = new();

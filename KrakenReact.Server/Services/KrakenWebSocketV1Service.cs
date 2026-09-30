@@ -417,14 +417,14 @@ public class KrakenWebSocketV1Service : BackgroundService
                 {
                     _ordersDirty = false;
                     Interlocked.Exchange(ref _lastOrderBroadcastTicks, nowTicks);
-                    try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+                    try { await _hub.BroadcastOrdersAsync(_state); }
                     catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] OrderUpdate broadcast failed"); }
                 }
                 if (_balancesDirty && (nowTicks - Interlocked.Read(ref _lastBalanceBroadcastTicks)) >= TimeSpan.FromSeconds(5).Ticks)
                 {
                     _balancesDirty = false;
                     Interlocked.Exchange(ref _lastBalanceBroadcastTicks, nowTicks);
-                    try { await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList()); }
+                    try { await _hub.BroadcastBalancesAsync(_state); }
                     catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] BalanceUpdate broadcast failed"); }
                 }
             });

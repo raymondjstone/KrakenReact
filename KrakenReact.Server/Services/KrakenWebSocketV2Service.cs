@@ -379,8 +379,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                             hasFill = true;
                     }
                     // Broadcast updated orders list (with recalculated fields) to all clients
-                    var ordersList = _state.Orders.Values.ToList();
-                    _ = _hub.Clients.All.SendAsync("OrderUpdate", ordersList)
+                    _ = _hub.BroadcastOrdersAsync(_state)
                         .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] OrderUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
                     _ = _hub.Clients.All.SendAsync("ExecutionUpdate", execMsg.Data)
                         .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] ExecutionUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
@@ -578,7 +577,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                             bal.PortfolioPercentage = Math.Round(bal.LatestValue / totalPortfolioValue * 100, 2);
                     }
 
-                    _ = _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList())
+                    _ = _hub.BroadcastBalancesAsync(_state)
                         .ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V2] BalanceUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
                 }
             }

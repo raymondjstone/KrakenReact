@@ -109,7 +109,7 @@ public class BackgroundTaskService : BackgroundService
         // Notify frontend that fresh trade/ledger/order data is available
         try { await _hub.Clients.All.SendAsync("TradesUpdated"); }
         catch (Exception ex) { _logger.LogWarning(ex, "[BG] TradesUpdated broadcast failed"); }
-        try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+        try { await _hub.BroadcastOrdersAsync(_state); }
         catch (Exception ex) { _logger.LogWarning(ex, "[BG] OrderUpdate broadcast failed"); }
 
         // Phase 3: Slow kline loading in background (doesn't block trades/orders)
@@ -155,7 +155,7 @@ public class BackgroundTaskService : BackgroundService
         await LoadBalances();
         try { await _hub.Clients.All.SendAsync("TradesUpdated"); }
         catch (Exception ex) { _logger.LogWarning(ex, "[BG] TradesUpdated broadcast failed"); }
-        try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
+        try { await _hub.BroadcastOrdersAsync(_state); }
         catch (Exception ex) { _logger.LogWarning(ex, "[BG] OrderUpdate broadcast failed"); }
     }
 
@@ -391,7 +391,7 @@ public class BackgroundTaskService : BackgroundService
                                     orderId, rewardAmount, asset, currentQty, newQty);
 
                                 // Broadcast updated orders
-                                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+                                await _hub.BroadcastOrdersAsync(_state);
 
                                 if (_state.StakingNotifications)
                                 {
@@ -525,7 +525,7 @@ public class BackgroundTaskService : BackgroundService
             _state.Balances[dto.Asset] = dto;
         }
 
-        try { await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList(), usdGbpRate); }
+        try { await _hub.BroadcastBalancesAsync(_state); }
         catch (Exception ex) { _logger.LogWarning(ex, "[BG] BalanceUpdate broadcast failed"); }
     }
 
@@ -537,7 +537,7 @@ public class BackgroundTaskService : BackgroundService
             try
             {
                 await LoadOrders(false);
-                await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+                await _hub.BroadcastOrdersAsync(_state);
             }
             catch (Exception ex) { _logger.LogError(ex, "[BG] Order refresh error"); }
         }

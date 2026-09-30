@@ -16,6 +16,11 @@ public class TradingHub : Hub
     {
         await base.OnConnectedAsync();
 
+        // Live updates are deltas, so a client needs the full lists once to build on. This also fires on every
+        // reconnect (a new connection), which heals any deltas missed while offline.
+        await Clients.Caller.SendAsync("OrderUpdate", _state.Orders.Values.ToList());
+        await Clients.Caller.SendAsync("BalanceUpdate", _state.Balances.Values.ToList());
+
         // Send current status to newly connected client
         if (!string.IsNullOrEmpty(_state.LastStatusMessage))
         {

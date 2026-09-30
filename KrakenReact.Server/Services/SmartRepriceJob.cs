@@ -265,7 +265,7 @@ public class SmartRepriceJob
         {
             _state.RecalculateBalanceCoveredAmounts();
             var usdGbpRate = _state.GetUsdGbpRate();
-            try { await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList(), usdGbpRate); }
+            try { await _hub.BroadcastBalancesAsync(_state); }
             catch (Exception ex) { _logger.LogWarning(ex, "[SmartReprice] BalanceUpdate broadcast failed"); }
         }
 

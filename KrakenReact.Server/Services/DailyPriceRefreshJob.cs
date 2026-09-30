@@ -202,7 +202,7 @@ public class DailyPriceRefreshJob
             _state.Balances[dto.Asset] = dto;
         }
 
-        try { await _hub.Clients.All.SendAsync("BalanceUpdate", _state.Balances.Values.ToList(), usdGbpRate); }
+        try { await _hub.BroadcastBalancesAsync(_state); }
         catch (Exception ex) { _logger.LogWarning(ex, "[PriceJob] BalanceUpdate broadcast failed"); }
     }
 }
