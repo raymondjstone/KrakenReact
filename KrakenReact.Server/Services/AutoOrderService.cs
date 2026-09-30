@@ -76,7 +76,11 @@ public class AutoOrderService
             return ao;
         }
 
-        var lastDay = klines.LastOrDefault(o => o.Interval == "OneDay");
+        // The volume rules are about YESTERDAY. The newest daily candle in memory is today's, still forming (every refresh fetches
+        // it), so using it compared the volume so far today against the thresholds - failing everything just after midnight UTC
+        // and passing the same pairs by evening.
+        var utcNow = DateTime.UtcNow;
+        var lastDay = klines.LastOrDefault(o => o.Interval == "OneDay" && KlineRules.IsClosed(o, utcNow));
         if (lastDay == null || (lastDay.Volume * lastDay.Close) < 20000)
         {
             ao.Reason = $"{rulename} Low Volume yesterday under 20k";
