@@ -402,6 +402,10 @@ does add is protection against *other websites* using your browser to reach it:
 - Every state-changing `/api` call must carry an `X-Requested-With: KrakenReact` header. The bundled client sends it; a script
   calling the API directly (curl, your own tooling) must send it too, or the call is refused. The Hangfire dashboard's own buttons
   are not covered by this check.
+- The live-updates hub (`/tradingHub`) refuses WebSocket connections from other websites, which CORS cannot stop: a page open in
+  your browser could otherwise read your balances and orders. Connections from the app's own address, the `Cors:AllowedOrigins`
+  list and the `ALLOWED_HOSTS` names are accepted. Behind a reverse proxy that rewrites the `Host` header, either forward the
+  original host in `X-Forwarded-Host` or add your public address to `Cors:AllowedOrigins`.
 - `ALLOWED_HOSTS` (compose) / `Security:AllowedHosts` (config, env `Security__AllowedHosts`) is a comma-separated list of the host
   names you reach the app by. Requests with any other `Host` header are refused, which blocks DNS-rebinding attacks. Unset means
   any host is accepted (a warning is logged at startup).

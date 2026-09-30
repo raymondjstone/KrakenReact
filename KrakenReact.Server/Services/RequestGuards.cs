@@ -67,3 +67,70 @@ public sealed class AllowedHostsMiddleware
         await _next(context);
     }
 }
+
+/// <summary>
+/// Refuses SignalR connections that come from another website.
+/// <para>
+/// CORS does not apply to WebSockets, so any page open in the user's browser could connect to the live-updates hub and receive
+/// balances and orders (the hub sends them the moment a client connects). Browsers always send an Origin header on a WebSocket
+/// handshake, and a page cannot forge it - so a connection whose origin is not this app is turned away. Requests with no Origin
+/// (scripts, tools, servers) are not a cross-site risk and pass. No login is involved.
+/// </para>
+/// </summary>
+public sealed class HubOriginMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly string[] _allowedOrigins;
+    private readonly string[] _allowedHosts;
+    private readonly string _hubPath;
+
+    public HubOriginMiddleware(RequestDelegate next, string hubPath, IEnumerable<string> allowedOrigins, IEnumerable<string> allowedHosts)
+    {
+        _next = next;
+        _hubPath = hubPath;
+        _allowedOrigins = allowedOrigins.Select(o => o.TrimEnd('/')).ToArray();
+        _allowedHosts = allowedHosts.ToArray();
+    }
+
+    /// <summary>
+    /// True if a request with this Origin may use the hub: no Origin; the same origin as the Host it was sent to (the normal
+    /// case, the app serving its own page); the same as X-Forwarded-Host (a reverse proxy in front); a configured CORS origin
+    /// (the Vite dev server); or a host named in Security:AllowedHosts.
+    /// </summary>
+    public static bool IsAllowed(string? origin, string? requestHost, string? forwardedHost, IEnumerable<string> allowedOrigins, IEnumerable<string> allowedHosts)
+    {
+        if (string.IsNullOrEmpty(origin)) return true;
+        // "null" is what sandboxed pages and file:// documents send - never this app
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https")) return false;
+
+        var trimmed = origin.TrimEnd('/');
+        if (allowedOrigins.Any(o => string.Equals(o.TrimEnd('/'), trimmed, StringComparison.OrdinalIgnoreCase))) return true;
+
+        var originHost = Normalize(uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}", uri.Scheme);
+        if (requestHost != null && string.Equals(Normalize(requestHost, uri.Scheme), originHost, StringComparison.OrdinalIgnoreCase)) return true;
+        var forwarded = forwardedHost?.Split(',')[0].Trim();
+        if (!string.IsNullOrEmpty(forwarded) && string.Equals(Normalize(forwarded, uri.Scheme), originHost, StringComparison.OrdinalIgnoreCase)) return true;
+
+        return allowedHosts.Any(h => string.Equals(h, uri.Host, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>A host[:port] with the scheme's default port removed, so "myhost:80" and "myhost" compare equal on http.</summary>
+    private static string Normalize(string hostPort, string scheme)
+    {
+        var defaultPort = scheme == "https" ? ":443" : ":80";
+        return hostPort.EndsWith(defaultPort, StringComparison.Ordinal) ? hostPort[..^defaultPort.Length] : hostPort;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        if (context.Request.Path.StartsWithSegments(_hubPath, StringComparison.OrdinalIgnoreCase) &&
+            !IsAllowed(context.Request.Headers.Origin.ToString(), context.Request.Host.Value,
+                       context.Request.Headers["X-Forwarded-Host"].ToString(), _allowedOrigins, _allowedHosts))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsync("Origin not allowed.");
+            return;
+        }
+        await _next(context);
+    }
+}

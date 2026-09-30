@@ -200,6 +200,9 @@ app.UseResponseCompression();
 app.UseCors();
 // State-changing API calls must carry the app's own header (blocks cross-site request forgery; no login needed)
 app.UseMiddleware<RequireClientHeaderMiddleware>();
+// CORS does not cover WebSockets: without this, any website open in the browser could connect to the live-updates hub and read
+// balances and orders. Only this app's own origins (and the configured CORS origins) may connect.
+app.UseMiddleware<HubOriginMiddleware>("/tradingHub", (IEnumerable<string>)allowedOrigins, (IEnumerable<string>)allowedHosts);
 
 // Hangfire dashboard — Authorization = [] allows access from Docker/reverse proxy (no localhost restriction)
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
