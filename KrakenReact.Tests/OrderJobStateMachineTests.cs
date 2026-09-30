@@ -22,6 +22,7 @@ public abstract class OrderJobTestBase
     protected OrderJobTestBase()
     {
         Notifier.Setup(n => n.Pushover(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        State.MarkFeedTick(); // a healthy live price feed, which the trading jobs now require
     }
 
     protected async Task<T> Seed<T>(T entity) where T : class

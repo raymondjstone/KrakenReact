@@ -173,6 +173,13 @@ public class MicroTradeJob
     {
         rule.LastCheckedAt = DateTime.UtcNow;
 
+        // The trigger and the buy price both come from the live price; with the feed down they are stale
+        if (!_state.IsPriceFeedAlive())
+        {
+            rule.LastResult = "Skip — live price feed is not delivering";
+            return;
+        }
+
         var priceItem = ResolvePriceItem(rule.Symbol);
         if (priceItem == null)
         {
@@ -727,7 +734,8 @@ public class MicroTradeJob
         // Stop loss — if enabled and not already triggered for this order, reprice the resting
         // profit-target sell down to near the current (lower) price so it can actually fill,
         // instead of sitting forever above a market that has since dropped further.
-        if (rule is { StopLossEnabled: true } && !order.StopLossTriggered && IsOrderStillOpen(order.SellOrderId))
+        if (rule is { StopLossEnabled: true } && !order.StopLossTriggered && IsOrderStillOpen(order.SellOrderId)
+            && _state.IsPriceFeedAlive())
         {
             var stopPrice = order.BuyPrice * (rule.StopLossPct / 100m);
             var priceItem = ResolvePriceItem(order.Symbol);

@@ -81,6 +81,16 @@ public class DcaJob
         var rule = await db.DcaRules.FindAsync([ruleId], ct);
         if (rule == null || !rule.Active) return;
 
+        // The buy is priced off the latest price; with the feed down that is a stale number and the order could be far from market
+        if (!_state.IsPriceFeedAlive())
+        {
+            rule.LastRunResult = "Skipped — live price feed is not delivering, so the current price is unknown";
+            rule.LastRunAt = DateTime.UtcNow;
+            _logger.LogWarning("[DCA] Rule {Id} skipped: price feed stale ({Age})", ruleId, _state.FeedAge);
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+
         _logger.LogInformation("[DCA] Executing rule {Id}: buy {Amt} USD of {Symbol}", ruleId, rule.AmountUsd, rule.Symbol);
 
         try

@@ -567,6 +567,9 @@ public class BackgroundTaskService : BackgroundService
 
     private async Task CheckPriceAlerts(CancellationToken ct)
     {
+        // An alert (and any auto-order attached to it) fires off the latest price; with the feed down that price is stale
+        if (!_state.IsPriceFeedAlive()) return;
+
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         var activeAlerts = await db.PriceAlerts
             .Where(a => a.Active)

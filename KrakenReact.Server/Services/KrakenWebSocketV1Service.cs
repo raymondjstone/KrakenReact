@@ -296,6 +296,7 @@ public class KrakenWebSocketV1Service : BackgroundService
             };
 
             priceItem.SetLiveKline(kline);
+            _state.MarkFeedTick(); // feed heartbeat: trading jobs refuse to act on prices if this goes quiet
 
             // Mutate the existing TickerData in place rather than replacing it outright — this V1
             // feed has no 24h-change fields of its own (Kraken's legacy ticker payload doesn't carry

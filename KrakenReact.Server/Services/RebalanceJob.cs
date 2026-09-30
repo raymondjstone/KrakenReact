@@ -62,6 +62,15 @@ public class RebalanceJob
                 return;
             }
 
+            if (!_state.IsPriceFeedAlive())
+            {
+                schedule.LastRunResult = "Skipped — live price feed is not delivering, so orders would be priced off stale data";
+                schedule.LastRunAt = DateTime.UtcNow;
+                await _notify.Pushover("Rebalance skipped", schedule.LastRunResult);
+                await db.SaveChangesAsync(ct);
+                return;
+            }
+
             var errors = new List<string>();
             foreach (var row in rows.Where(r => Math.Abs(r.DriftPct) >= schedule.DriftMinPct && r.Action != "HOLD"))
             {

@@ -49,10 +49,30 @@ public class StopLossTakeProfitJob
             return;
         }
 
+        // Every decision below compares a price to a threshold. If the live feed has gone quiet the "latest price" is
+        // whatever it was when it died, so do nothing rather than sell (or fail to sell) against a market that has moved on.
+        if (!_state.IsPriceFeedAlive())
+        {
+            _logger.LogWarning("[StopLoss] Skipping tick — no price ticks for {Age}", _state.FeedAge?.ToString() ?? "ever");
+            await NotifyFeedStaleAsync();
+            return;
+        }
+
         // The three checks are independent: a failure in one must not stop the others running this tick
         await RunCheckAsync("StopLoss", () => CheckStopLossTakeProfitAsync(ct));
         await RunCheckAsync("TrailingStop", () => CheckTrailingStopAsync(ct));
         await RunCheckAsync("ProfitLadder", () => CheckProfitLadderAsync(ct));
+    }
+
+    private static DateTime _feedStaleNotifiedAt = DateTime.MinValue;
+
+    /// <summary>Tells the user their protection is paused — at most once an hour, so a long outage isn't a flood.</summary>
+    private async Task NotifyFeedStaleAsync()
+    {
+        if (DateTime.UtcNow - _feedStaleNotifiedAt < TimeSpan.FromHours(1)) return;
+        _feedStaleNotifiedAt = DateTime.UtcNow;
+        await _notify.Pushover("Price feed stalled — protection paused",
+            "No live prices have arrived for over 5 minutes, so stop-loss / take-profit / trailing stop are not running until the feed recovers.");
     }
 
     private async Task RunCheckAsync(string name, Func<Task> check)

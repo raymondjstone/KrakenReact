@@ -95,6 +95,14 @@ public class SmartRepriceJob
 
     private async Task ProcessRule(AutoRepriceRule rule)
     {
+        // Cancelling and re-placing orders around a stale price could move them the wrong way
+        if (!_state.IsPriceFeedAlive())
+        {
+            rule.LastResult = "Skipped — live price feed is not delivering";
+            rule.LastRunAt = DateTime.UtcNow;
+            return;
+        }
+
         if (!rule.RepriceBuys && !rule.RepriceSells)
         {
             rule.LastResult = "Skipped — neither buys nor sells enabled";

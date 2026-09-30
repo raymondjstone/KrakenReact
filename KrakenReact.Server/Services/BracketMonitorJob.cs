@@ -191,7 +191,8 @@ public class BracketMonitorJob
             return; // legacy: nothing more to watch in software
         }
 
-        // Software stop
+        // Software stop — never judge it against a stale price (the take-profit above is a real order and needs no price)
+        if (!_state.IsPriceFeedAlive()) return;
         var price = CurrentPrice(bracket.Symbol);
         if (!IsStopHit(bracket.Side, price, bracket.StopPrice)) return;
 

@@ -1,3 +1,4 @@
+using KrakenReact.Server.Data;
 using Kraken.Net.Enums;
 using Kraken.Net.Objects.Models;
 using KrakenReact.Server.DTOs;
@@ -338,5 +339,118 @@ public class ProtectionJobTests : OrderJobTestBase
         var ids = StopLossTakeProfitJob.ParseDisarmedRules(" 3, 1 ,x,,-2");
         Assert.Equal("1,3", StopLossTakeProfitJob.SerializeDisarmedRules(ids));
         Assert.Empty(StopLossTakeProfitJob.ParseDisarmedRules(null));
+    }
+}
+
+/// <summary>Nothing that trades may act on a price once the live feed has gone quiet.</summary>
+public class FeedStalenessTests : OrderJobTestBase
+{
+    public FeedStalenessTests()
+    {
+        State.Symbols["XBT/USD"] = new KrakenSymbol { WebsocketName = "XBT/USD", BaseAsset = "XBT", QuoteAsset = "ZUSD", PriceDecimals = 1, LotDecimals = 8, OrderMin = 0.0001m, MinValue = 1m };
+        Gateway.Setup(g => g.PlaceOrderWithRecoveryAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .ReturnsAsync(new KrakenRestService.PlacementResult(true, "O1", null));
+        Gateway.Setup(g => g.PlaceOrderWithUserRefAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<uint>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .ReturnsAsync(new KrakenRestService.PlacementResult(true, "O1", null));
+    }
+
+    private void FeedDiedAMinutesAgo() => State.MarkFeedTick(DateTime.UtcNow.AddMinutes(-30));
+
+    private void NothingPlaced()
+    {
+        Gateway.Verify(g => g.PlaceOrderWithRecoveryAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+            It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+        Gateway.Verify(g => g.PlaceOrderWithUserRefAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+            It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<uint>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+    }
+
+    [Fact]
+    public void FeedState_NeverTicked_TickedRecently_AndTickedLongAgo()
+    {
+        var fresh = new TradingStateService(new DelistedPriceService(new Mock<ILogger<DelistedPriceService>>().Object));
+        Assert.False(fresh.IsPriceFeedAlive());   // nothing is known yet
+        Assert.Null(fresh.FeedAge);
+
+        fresh.MarkFeedTick();
+        Assert.True(fresh.IsPriceFeedAlive());
+
+        fresh.MarkFeedTick(DateTime.UtcNow.AddMinutes(-6));
+        Assert.False(fresh.IsPriceFeedAlive());
+        Assert.True(fresh.IsPriceFeedAlive(TimeSpan.FromMinutes(10)));
+    }
+
+    [Fact]
+    public async Task StopLoss_DoesNotSellOnAStalePrice()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        State.Balances["BTC"] = new BalanceDto { Asset = "BTC", Total = 1m, Available = 1m, LatestPrice = 50m, LatestValue = 50m, TotalCostBasis = 100m };
+        FeedDiedAMinutesAgo();
+
+        await new StopLossTakeProfitJob(State, Gateway.Object, Notifier.Object, Factory,
+            new Mock<ILogger<StopLossTakeProfitJob>>().Object, TestDiagnostics.Create()).ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced();
+    }
+
+    [Fact]
+    public async Task StopLoss_ResumesWhenTheFeedRecovers()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        State.Balances["BTC"] = new BalanceDto { Asset = "BTC", Total = 1m, Available = 1m, LatestPrice = 50m, LatestValue = 50m, TotalCostBasis = 100m };
+        var job = new StopLossTakeProfitJob(State, Gateway.Object, Notifier.Object, Factory,
+            new Mock<ILogger<StopLossTakeProfitJob>>().Object, TestDiagnostics.Create());
+
+        FeedDiedAMinutesAgo();
+        await job.ExecuteAsync(CancellationToken.None);
+        NothingPlaced();
+
+        State.MarkFeedTick(); // ticks are flowing again
+        await job.ExecuteAsync(CancellationToken.None);
+        Gateway.Verify(g => g.PlaceOrderWithRecoveryAsync("XBTUSD", OrderSide.Sell, OrderType.Market, 1m, 0m, It.IsAny<string?>(), It.IsAny<bool>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task MicroTrade_DoesNotBuyOnAStalePrice()
+    {
+        var item = new PriceDataItem { Symbol = "XBT/USD" };
+        item.TickerData = new TickerDataItem { LastTradePrice = 50_000m, ChangePct24h = -9m };
+        State.Prices["XBT/USD"] = item;
+        State.Balances["USD"] = new BalanceDto { Asset = "USD", Total = 10_000m, Available = 10_000m };
+        var rule = await Seed(new MicroTradeRule { Symbol = "XBT/USD", DropPct = 5m, DropIntervalHours = 24, RisePct = 10m, BuyOrderTotal = 100m, MaxOrdersPerWindow = 2, WindowHours = 2, CooldownHours = 1 });
+        FeedDiedAMinutesAgo();
+
+        var db = new DbMethods(new Mock<IDbContextFactory<KrakenDbContext>>().Object, new Mock<ILogger<DbMethods>>().Object, TestDiagnostics.Create());
+        var pc = new PriceChangeService(new KrakenRestService(db, State, new Mock<ILogger<KrakenRestService>>().Object), State, new Mock<ILogger<PriceChangeService>>().Object);
+        await new MicroTradeJob(Factory, Gateway.Object, State, pc, Notifier.Object, new Mock<ILogger<MicroTradeJob>>().Object, TestDiagnostics.Create())
+            .ExecuteRuleAsync(rule.Id, CancellationToken.None);
+
+        NothingPlaced();
+        await using var ctx = Factory.CreateDbContext();
+        Assert.Contains("feed", (await ctx.MicroTradeRules.AsNoTracking().SingleAsync()).LastResult);
+        Assert.Empty(await ctx.MicroTradeOrders.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Bracket_DoesNotTriggerItsStopOnAStalePrice()
+    {
+        var item = new PriceDataItem { Symbol = "XBT/USD" };
+        item.TickerData = new TickerDataItem { LastTradePrice = 50m };  // far below the 90 stop
+        State.Prices["XBT/USD"] = item;
+        await Seed(new BracketOrder
+        {
+            KrakenOrderId = "PARENT", Symbol = "XBT/USD", Side = "Buy", Quantity = 1m, EntryPrice = 100m, StopPrice = 90m,
+            TakeProfitPrice = 120m, TakeProfitOrderId = "TP1", Status = "Active",
+            CreatedAt = DateTime.UtcNow.AddMinutes(-10), ActivatedAt = DateTime.UtcNow.AddMinutes(-5),
+        });
+        Gateway.Setup(g => g.GetOrderInfoAsync("TP1")).ReturnsAsync(new CombinedOrder { Id = "TP1", Status = OrderStatus.Open });
+        FeedDiedAMinutesAgo();
+
+        await new BracketMonitorJob(Factory, Gateway.Object, State, Notifier.Object,
+            new Mock<ILogger<BracketMonitorJob>>().Object, TestDiagnostics.Create()).ExecuteAsync(CancellationToken.None);
+
+        Gateway.Verify(g => g.CancelOrderAsync(It.IsAny<string>()), Times.Never);
+        NothingPlaced();
     }
 }
