@@ -191,6 +191,8 @@ public class PricesController : ControllerBase
         return Ok(prices);
     }
 
+    internal static readonly KlineResponseCache<List<KlineDto>> ChartCache = new();
+
     [HttpGet("{symbol}/klines")]
     public async Task<ActionResult<List<KlineDto>>> GetKlines(string symbol, [FromQuery] string? interval = null)
     {
@@ -207,16 +209,23 @@ public class PricesController : ControllerBase
         var krakenInterval = ParseInterval(interval);
         if (krakenInterval != null)
         {
+            // The same chart is asked for repeatedly within seconds (open, tab switch, auto-refresh): serve it from a short cache
+            var cacheKey = KlineResponseCache<List<KlineDto>>.Key(cleanSymbol, krakenInterval.Value.ToString());
+            if (ChartCache.TryGet(cacheKey, out var cachedChart))
+                return Ok(cachedChart);
+
             var since = GetSinceForInterval(krakenInterval.Value);
             var result = await _kraken.GetKlinesAsync(cleanSymbol, krakenInterval.Value, since);
             _logger.LogInformation("Klines API result for {Clean}: {Count} candles", cleanSymbol, result.Count());
             if (result.Any())
             {
-                return Ok(result.Select(k => new KlineDto
+                var chart = result.Select(k => new KlineDto
                 {
                     OpenTime = k.OpenTime, Open = k.OpenPrice, High = k.HighPrice,
                     Low = k.LowPrice, Close = k.ClosePrice, Volume = k.Volume
-                }).ToList());
+                }).ToList();
+                ChartCache.Set(cacheKey, chart);
+                return Ok(chart);
             }
         }
 

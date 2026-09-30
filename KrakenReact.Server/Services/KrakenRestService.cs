@@ -153,47 +153,27 @@ public class KrakenRestService : IOrderGateway
         catch (Exception ex) { _logger.LogError(ex, "Exception fetching symbols"); }
     }
 
+    private readonly KlineLookup _klineLookup = new();
+
     public async Task<IEnumerable<KrakenKline>> GetKlinesAsync(string currencyPair, KlineInterval interval, DateTime? since)
     {
         if (string.IsNullOrWhiteSpace(currencyPair) || TradingStateService.BadPairs.Contains(currencyPair))
             return new List<KrakenKline>();
 
-        // Check cache for a previously resolved API pair name
-        if (_state.ApiPairNameCache.TryGetValue(currencyPair, out var cachedName))
-        {
-            var cached = await FetchKlinesInternal(cachedName, interval, since);
-            if (cached.Any()) return cached;
-            // Cache entry stale — remove and re-resolve
-            _state.ApiPairNameCache.TryRemove(currencyPair, out _);
-        }
+        var result = await _klineLookup.ResolveAsync(currencyPair,
+            name => FetchKlinesInternal(name, interval, since),
+            _state.ApiPairNameCache,
+            _state.GetApiPairCandidates);
 
-        // Try the original pair name first
-        var result = await FetchKlinesInternal(currencyPair, interval, since);
-        if (result.Any())
-        {
-            _state.ApiPairNameCache[currencyPair] = currencyPair;
-            return result;
-        }
-
-        // Try all candidate names (normalized, alternate, with/without slash)
-        var candidates = _state.GetApiPairCandidates(currencyPair);
-        foreach (var candidate in candidates)
-        {
-            if (candidate.Equals(currencyPair, StringComparison.OrdinalIgnoreCase)) continue; // already tried
-            result = await FetchKlinesInternal(candidate, interval, since);
-            if (result.Any())
-            {
-                _logger.LogInformation("Resolved API pair name: {Original} -> {Working}", currencyPair, candidate);
-                _state.ApiPairNameCache[currencyPair] = candidate;
-                return result;
-            }
-        }
-
-        _logger.LogWarning("No kline data found for {Pair} after trying {Count} candidates", currencyPair, candidates.Count + 1);
-        return new List<KrakenKline>();
+        if (result.Count == 0)
+            _logger.LogWarning("No kline data found for {Pair}", currencyPair);
+        return result;
     }
 
-    private async Task<IEnumerable<KrakenKline>> FetchKlinesInternal(string currencyPair, KlineInterval interval, DateTime? since)
+    private static bool IsUnknownPairError(string? message) =>
+        message == "EQuery:Unknown asset pair" || message == "EQuery:Invalid asset pair";
+
+    private async Task<KlineFetch> FetchKlinesInternal(string currencyPair, KlineInterval interval, DateTime? since)
     {
         var restClient = await UnAuthenticatedClient();
         int wait = 1000;
@@ -202,8 +182,8 @@ public class KrakenRestService : IOrderGateway
         try
         {
             var result = await restClient.SpotApi.ExchangeData.GetKlinesAsync(currencyPair, interval, since);
-            if (!result.Success && (result.Error?.Message == "EQuery:Unknown asset pair" || result.Error?.Message == "EQuery:Invalid asset pair"))
-                return new List<KrakenKline>();
+            if (!result.Success && IsUnknownPairError(result.Error?.Message))
+                return KlineFetch.Unknown;
 
             while (!result.Success && retryCount < maxRetries)
             {
@@ -211,15 +191,16 @@ public class KrakenRestService : IOrderGateway
                 await Task.Delay(wait);
                 wait = Math.Min(wait + 3000, 30000);
                 result = await restClient.SpotApi.ExchangeData.GetKlinesAsync(currencyPair, interval, since);
-                if (!result.Success && (result.Error?.Message == "EQuery:Unknown asset pair" || result.Error?.Message == "EQuery:Invalid asset pair"))
-                    return new List<KrakenKline>();
+                if (!result.Success && IsUnknownPairError(result.Error?.Message))
+                    return KlineFetch.Unknown;
             }
-            return result.Success ? result.Data.Data : new List<KrakenKline>();
+            // Retries ran out on a transient error: that is a failure, not proof the pair does not exist
+            return result.Success ? new KlineFetch(result.Data.Data.ToList(), false) : KlineFetch.Failed;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Exception fetching klines for {Pair}", currencyPair);
-            return new List<KrakenKline>();
+            return KlineFetch.Failed;
         }
     }
 
@@ -227,7 +208,7 @@ public class KrakenRestService : IOrderGateway
     public async Task<int> FetchKlinesInternalDirect(string currencyPair, KlineInterval interval, DateTime? since)
     {
         var result = await FetchKlinesInternal(currencyPair, interval, since);
-        return result.Count();
+        return result.Candles.Count;
     }
 
     public async Task<KrakenWebSocketToken?> GetWebSocketAsyncToken()
