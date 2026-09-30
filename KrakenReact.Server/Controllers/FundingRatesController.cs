@@ -33,7 +33,8 @@ public class FundingRatesController : ControllerBase
             if (!doc.RootElement.TryGetProperty("tickers", out var tickers))
                 return Ok(new List<object>());
 
-            var result = new List<object>();
+            // Rows are kept with their symbol so they can be sorted without reflection (this used to sort on ((dynamic)r).symbol)
+            var result = new List<(string Symbol, object Row)>();
             foreach (var ticker in tickers.EnumerateArray())
             {
                 if (!ticker.TryGetProperty("tag", out var tagEl)) continue;
@@ -61,7 +62,7 @@ public class FundingRatesController : ControllerBase
                     .Replace("XBT", "BTC")
                     .Insert(symbol.Length - "PI_".Length - 3, "/");
 
-                result.Add(new
+                result.Add((symbol, new
                 {
                     symbol,
                     displayName,
@@ -75,11 +76,10 @@ public class FundingRatesController : ControllerBase
                     lastPrice,
                     openInterest       = Math.Round(openInterest, 2),
                     vol24h             = Math.Round(vol24h, 2),
-                });
+                }));
             }
 
-            result = result.OrderBy(r => ((dynamic)r).symbol).ToList();
-            return Ok(result);
+            return Ok(result.OrderBy(r => r.Symbol, StringComparer.Ordinal).Select(r => r.Row).ToList());
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

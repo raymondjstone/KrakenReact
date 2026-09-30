@@ -412,6 +412,14 @@ public class SettingsController : ControllerBase
     [HttpPut("pinned-pairs")]
     public async Task<ActionResult> SavePinnedPairs([FromBody] List<string> pairs)
     {
+        // The list is stored comma-joined, so an entry containing a comma would split into several on the way back; and it was
+        // unbounded. Keep entries that look like a pair name, unique, at most 50.
+        pairs = (pairs ?? new List<string>())
+            .Select(p => (p ?? "").Trim())
+            .Where(p => p.Length is > 0 and <= 30 && p.All(c => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(50)
+            .ToList();
         await SaveSettingList("PinnedPairs", pairs);
         await _db.SaveChangesAsync();
         return Ok();

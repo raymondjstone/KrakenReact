@@ -92,6 +92,35 @@ public class SettingsControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task SavePinnedPairs_DropsEntriesThatWouldCorruptTheStoredList()
+    {
+        var ctrl = NewCtrl();
+        // "A/USD,B/USD" would come back as two entries; blanks, overlong names and odd characters are not pair names
+        var messy = new List<string> { "BTC/USD", "  eth/usd ", "A/USD,B/USD", "", "   ", new string('X', 60), "<script>", "BTC/USD", "SOL.F/USD" };
+        Assert.IsType<OkResult>(await ctrl.SavePinnedPairs(messy));
+
+        var saved = Assert.IsAssignableFrom<List<string>>(Assert.IsType<OkObjectResult>(await ctrl.GetPinnedPairs()).Value);
+        Assert.Equal(new[] { "BTC/USD", "eth/usd", "SOL.F/USD" }, saved);   // trimmed, de-duplicated, only sane names
+    }
+
+    [Fact]
+    public async Task SavePinnedPairs_IsCappedAtFifty()
+    {
+        var ctrl = NewCtrl();
+        await ctrl.SavePinnedPairs(Enumerable.Range(1, 500).Select(i => $"C{i}/USD").ToList());
+
+        var saved = Assert.IsAssignableFrom<List<string>>(Assert.IsType<OkObjectResult>(await ctrl.GetPinnedPairs()).Value);
+        Assert.Equal(50, saved.Count);
+    }
+
+    [Fact]
+    public async Task SavePinnedPairs_ANullBody_SavesAnEmptyList()
+    {
+        var ctrl = NewCtrl();
+        Assert.IsType<OkResult>(await ctrl.SavePinnedPairs(null!));
+    }
+
+    [Fact]
     public async Task SavePinnedPairs_UpdatesExistingSetting()
     {
         _db.AppSettings.Add(new AppSettings { Key = "PinnedPairs", Value = "OLD/USD" });
