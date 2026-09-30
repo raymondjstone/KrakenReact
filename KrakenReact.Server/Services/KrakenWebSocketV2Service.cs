@@ -269,6 +269,11 @@ public class KrakenWebSocketV2Service : BackgroundService
                 priceItem.TickerData.Change24h = data.Change;
                 priceItem.TickerData.ChangePct24h = data.ChangePct;
 
+                // At most one broadcast per pair per TickerBroadcastMinMs (this feed ticks on every trade)
+                var nowMs = Environment.TickCount64;
+                if (nowMs - _lastTickerBroadcastMs.GetOrAdd(internalKey, 0L) < TickerBroadcastMinMs) continue;
+                _lastTickerBroadcastMs[internalKey] = nowMs;
+
                 _ = _hub.Clients.All.SendAsync("TickerUpdate", new
                 {
                     symbol = internalKey,
@@ -282,6 +287,28 @@ public class KrakenWebSocketV2Service : BackgroundService
         }
         catch (Exception ex) { _logger.LogError(ex, "[WS V2 Public] Error parsing ticker"); }
     }
+
+    // Orders an auto-sell has already been issued for. Bounded FIFO so it can't grow without limit.
+    private readonly HashSet<string> _autoSold = new();
+    private readonly Queue<string> _autoSoldOrder = new();
+    private readonly object _autoSoldLock = new();
+    private const int MaxAutoSoldTracked = 2000;
+
+    /// <summary>True exactly once per order id.</summary>
+    private bool TryMarkAutoSold(string orderId)
+    {
+        lock (_autoSoldLock)
+        {
+            if (!_autoSold.Add(orderId)) return false;
+            _autoSoldOrder.Enqueue(orderId);
+            while (_autoSoldOrder.Count > MaxAutoSoldTracked)
+                _autoSold.Remove(_autoSoldOrder.Dequeue());
+            return true;
+        }
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _lastTickerBroadcastMs = new();
+    private const int TickerBroadcastMinMs = 500;
 
     private void ProcessMessage(string? message)
     {
@@ -324,7 +351,10 @@ public class KrakenWebSocketV2Service : BackgroundService
                             if (!string.IsNullOrEmpty(exec.OrderStatus)) existing.Status = exec.OrderStatus;
                             if (exec.LimitPrice != 0) existing.Price = exec.LimitPrice;
                             if (exec.OrderQty != 0) existing.Quantity = exec.OrderQty;
-                            if (exec.Timestamp != default) existing.CreateTime = exec.Timestamp;
+                            // An execution's timestamp is when THAT event happened, not when the order was created.
+                            // Overwriting CreateTime on every update made orders look brand new after each fill, which
+                            // broke the age checks in smart reprice and auto-cancel. Only fill it in if it's missing.
+                            if (exec.Timestamp != default && existing.CreateTime == default) existing.CreateTime = exec.Timestamp;
                             _state.RecalculateOrderFields(existing);
                         }
                         else
@@ -361,12 +391,17 @@ public class KrakenWebSocketV2Service : BackgroundService
                         foreach (var exec in execMsg.Data)
                         {
                             var status = (exec.OrderStatus ?? "").ToLower();
-                            var side = (exec.Side ?? "").ToLower();
-                            if (status == "filled" && side == "buy" && !string.IsNullOrEmpty(exec.Symbol))
+                            // Execution messages are deltas and may omit fields; fall back to the merged order state
+                            _state.Orders.TryGetValue(exec.OrderId ?? "", out var mergedAuto);
+                            var side = (!string.IsNullOrEmpty(exec.Side) ? exec.Side : mergedAuto?.Side ?? "").ToLower();
+                            var autoSymbol = !string.IsNullOrEmpty(exec.Symbol) ? exec.Symbol : mergedAuto?.Symbol;
+                            if (status == "filled" && side == "buy" && !string.IsNullOrEmpty(autoSymbol) && !string.IsNullOrEmpty(exec.OrderId))
                             {
-                                var buyPrice = exec.LimitPrice;
-                                var qty = exec.OrderQty;
-                                if (buyPrice > 0 && qty > 0)
+                                var buyPrice = exec.LimitPrice != 0 ? exec.LimitPrice : mergedAuto?.Price ?? 0m;
+                                var qty = exec.OrderQty != 0 ? exec.OrderQty : mergedAuto?.Quantity ?? 0m;
+                                // One auto-sell per order: a reconnect can replay filled orders, which would otherwise
+                                // place a second sell for the same fill
+                                if (buyPrice > 0 && qty > 0 && TryMarkAutoSold(exec.OrderId))
                                 {
                                     var sellPrice = Math.Round(buyPrice * (1 + _state.AutoSellPercentage / 100), 8);
                                     _ = Task.Run(async () =>
@@ -377,27 +412,27 @@ public class KrakenWebSocketV2Service : BackgroundService
                                             if (_state.DryRunJobs)
                                             {
                                                 _logger.LogInformation("[WS V2] DRY RUN — would auto-sell: {Symbol} {Qty} @ {Price} (+{Pct}% from {BuyPrice})",
-                                                    exec.Symbol, qty, sellPrice, _state.AutoSellPercentage, buyPrice);
-                                                await _notify.Pushover($"DRY RUN — Auto-Sell {exec.Symbol}",
+                                                    autoSymbol, qty, sellPrice, _state.AutoSellPercentage, buyPrice);
+                                                await _notify.Pushover($"DRY RUN — Auto-Sell {autoSymbol}",
                                                     $"Would sell {qty} @ {sellPrice:F4} (+{_state.AutoSellPercentage}% from buy {buyPrice:F4})");
                                                 return;
                                             }
                                             var clientOrderId = KrakenReact.Server.Utils.ClientOrderId.GenerateWithPrefix("AS");
                                             var result = await _kraken.PlaceOrderAsync(
-                                                exec.Symbol, Kraken.Net.Enums.OrderSide.Sell, Kraken.Net.Enums.OrderType.Limit,
+                                                autoSymbol, Kraken.Net.Enums.OrderSide.Sell, Kraken.Net.Enums.OrderType.Limit,
                                                 qty, sellPrice, clientOrderId);
                                             if (result.Success)
                                             {
                                                 _logger.LogInformation("[WS V2] Auto-sell created: {Symbol} {Qty} @ {Price} (+{Pct}% from {BuyPrice})",
-                                                    exec.Symbol, qty, sellPrice, _state.AutoSellPercentage, buyPrice);
+                                                    autoSymbol, qty, sellPrice, _state.AutoSellPercentage, buyPrice);
                                             }
                                             else
                                             {
                                                 _logger.LogWarning("[WS V2] Auto-sell failed for {Symbol}: {Error}",
-                                                    exec.Symbol, result.Error?.Message);
+                                                    autoSymbol, result.Error?.Message);
                                             }
                                         }
-                                        catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error creating auto-sell for {Symbol}", exec.Symbol); }
+                                        catch (Exception ex) { _logger.LogError(ex, "[WS V2] Error creating auto-sell for {Symbol}", autoSymbol); }
                                     });
                                 }
                             }
