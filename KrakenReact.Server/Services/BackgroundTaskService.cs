@@ -578,8 +578,10 @@ public class BackgroundTaskService : BackgroundService
 
         foreach (var alert in activeAlerts)
         {
-            if (!_state.Prices.TryGetValue(alert.Symbol, out var priceItem)) continue;
-            var latestPrice = priceItem.LatestKline?.Close;
+            // Resolve normalized names (an alert on "BTC/USD" must find the "XBT/USD" price entry) and prefer the live ticker
+            // over the last kline, which can be a stale daily bar
+            if (!_state.Prices.TryGetValue(_state.ResolveSymbolKey(alert.Symbol), out var priceItem)) continue;
+            var latestPrice = priceItem.BestKline?.Close;
             if (latestPrice == null || latestPrice == 0) continue;
 
             bool triggered = alert.Direction == "below"
@@ -588,8 +590,19 @@ public class BackgroundTaskService : BackgroundService
 
             if (!triggered) continue;
 
+            // Record the alert as fired BEFORE acting on it. It used to be saved once at the end of the loop, after any
+            // auto-order had been sent, so a failed save left the alert active and the next minute placed the order again.
+            // If it can't be recorded, don't act at all — better a late alert than a duplicated order.
             alert.Active = false;
             alert.TriggeredAt = DateTime.UtcNow;
+            try { await db.SaveChangesAsync(ct); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[PriceAlert] Could not record alert {Id} as triggered — not acting on it this time", alert.Id);
+                alert.Active = true;
+                alert.TriggeredAt = null;
+                continue;
+            }
 
             var dir = alert.Direction == "below" ? "dropped below" : "rose above";
             var title = $"Price alert: {alert.Symbol}";
@@ -626,18 +639,25 @@ public class BackgroundTaskService : BackgroundService
             }
 
             var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"alert-{alert.Id}-");
-            var result = await _kraken.PlaceOrderAsync(alert.Symbol, side, OrderType.Limit, qty, limitPrice, clientId);
+            // With recovery: an ambiguous failure (timeout) is looked up by userref before being called a failure
+            var result = await _kraken.PlaceOrderWithRecoveryAsync(alert.Symbol, side, OrderType.Limit, qty, limitPrice, clientId);
             if (result.Success)
             {
                 await _notify.Pushover(
                     $"Alert auto-order placed: {alert.Symbol}",
-                    $"{sideLabel} limit {qty} {alert.Symbol.Split('/')[0]} @ {limitPrice:F4} (order: {result.Data?.OrderIds?.FirstOrDefault()})");
+                    $"{sideLabel} limit {qty} {alert.Symbol.Split('/')[0]} @ {limitPrice:F4} (order: {result.OrderId})");
                 _logger.LogInformation("[PriceAlert] Auto-order placed for alert {Id}: {Side} {Qty} {Symbol} @ {Price}", alert.Id, sideLabel, qty, alert.Symbol, limitPrice);
+            }
+            else if (result.Unknown)
+            {
+                await _notify.Pushover($"Alert auto-order UNCONFIRMED: {alert.Symbol}",
+                    $"Could not confirm whether the {sideLabel} order was placed ({result.Error}). Check Kraken before re-creating it.");
+                _logger.LogError("[PriceAlert] Auto-order for alert {Id} unconfirmed: {Error}", alert.Id, result.Error);
             }
             else
             {
-                await _notify.Pushover($"Alert auto-order FAILED: {alert.Symbol}", result.Error?.Message ?? "Unknown error");
-                _logger.LogError("[PriceAlert] Auto-order failed for alert {Id}: {Error}", alert.Id, result.Error?.Message);
+                await _notify.Pushover($"Alert auto-order FAILED: {alert.Symbol}", result.Error ?? "Unknown error");
+                _logger.LogError("[PriceAlert] Auto-order failed for alert {Id}: {Error}", alert.Id, result.Error);
             }
         }
         catch (Exception ex)
