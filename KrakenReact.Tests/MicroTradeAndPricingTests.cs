@@ -238,3 +238,30 @@ public class DecimalMathTests
         Assert.Equal(KrakenReact.Server.Utils.DecimalMath.Pow10(28), KrakenReact.Server.Utils.DecimalMath.Pow10(40));
     }
 }
+
+public class CpuBoundWorkTests
+{
+    [Fact]
+    public async Task RunsOnADedicatedNonPoolThread_AtBelowNormalPriority()
+    {
+        var (isPoolThread, priority) = await PredictionJob.RunCpuBoundAsync(() => (Thread.CurrentThread.IsThreadPoolThread, Thread.CurrentThread.Priority));
+
+        Assert.False(isPoolThread);                       // the shared pool stays free for the price feeds and order handling
+        Assert.Equal(ThreadPriority.BelowNormal, priority);
+    }
+
+    [Fact]
+    public async Task ReturnsTheResult_AndPropagatesExceptions()
+    {
+        Assert.Equal(42, await PredictionJob.RunCpuBoundAsync(() => 42));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => PredictionJob.RunCpuBoundAsync<int>(() => throw new InvalidOperationException("boom")));
+    }
+
+    [Fact]
+    public async Task ThePriorityChangeDoesNotLeakToOtherWork()
+    {
+        await PredictionJob.RunCpuBoundAsync(() => 1);
+        var priorityElsewhere = await Task.Run(() => Thread.CurrentThread.Priority);
+        Assert.Equal(ThreadPriority.Normal, priorityElsewhere);
+    }
+}

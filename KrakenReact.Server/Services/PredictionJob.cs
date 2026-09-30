@@ -172,12 +172,16 @@ public class PredictionJob
                 "Initial refreshes backfill history automatically, but this market/interval may not have enough data yet.");
         }
 
-        // Build indicators once and share across all three horizon evaluations
-        var indicators = FeatureEngineering.BuildIndicators(klines);
-
-        var h1 = EvaluateHorizon(indicators, marketContext, 1, isBtcSelf);
-        var h3 = EvaluateHorizon(indicators, marketContext, 3, isBtcSelf);
-        var h6 = EvaluateHorizon(indicators, marketContext, 6, isBtcSelf);
+        // Indicators are built once and shared by all three horizon evaluations. This is minutes of CPU per run (model
+        // training plus walk-forward folds), so it goes on its own below-normal-priority thread: run inline it would sit on a
+        // thread-pool thread — which the price feeds and order handling also depend on — and take CPU from live trading.
+        var (h1, h3, h6) = await RunCpuBoundAsync(() =>
+        {
+            var indicators = FeatureEngineering.BuildIndicators(klines);
+            return (EvaluateHorizon(indicators, marketContext, 1, isBtcSelf),
+                    EvaluateHorizon(indicators, marketContext, 3, isBtcSelf),
+                    EvaluateHorizon(indicators, marketContext, 6, isBtcSelf));
+        });
 
         if (h1.Status != "success")
             return MakeResult(symbol, intervalStr, h1.Status, klines.Count, h1.TrainSamples, h1.TestSamples, h1.ErrorMessage);
@@ -245,6 +249,15 @@ public class PredictionJob
             TotalCandles = klines.Count,
         };
     }
+
+    /// <summary>Runs CPU-heavy work on a dedicated, below-normal-priority thread (created for this call and discarded after,
+    /// so changing its priority affects nothing else) instead of a shared thread-pool thread.</summary>
+    internal static Task<T> RunCpuBoundAsync<T>(Func<T> work) =>
+        Task.Factory.StartNew(() =>
+        {
+            Thread.CurrentThread.Priority = ThreadPriority.BelowNormal;
+            return work();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private HorizonEvaluation EvaluateHorizon(
         ComputedIndicators indicators,
