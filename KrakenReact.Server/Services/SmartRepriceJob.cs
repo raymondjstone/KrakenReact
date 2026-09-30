@@ -12,18 +12,18 @@ namespace KrakenReact.Server.Services;
 public class SmartRepriceJob
 {
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
-    private readonly KrakenRestService _kraken;
+    private readonly IOrderGateway _kraken;
     private readonly TradingStateService _state;
-    private readonly NotificationService _notify;
+    private readonly INotifier _notify;
     private readonly IHubContext<TradingHub> _hub;
     private readonly ILogger<SmartRepriceJob> _logger;
     private readonly SqlTimeoutDiagnostics _sqlDiag;
 
     public SmartRepriceJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
-        KrakenRestService kraken,
+        IOrderGateway kraken,
         TradingStateService state,
-        NotificationService notify,
+        INotifier notify,
         IHubContext<TradingHub> hub,
         ILogger<SmartRepriceJob> logger,
         SqlTimeoutDiagnostics sqlDiag)
@@ -232,14 +232,16 @@ public class SmartRepriceJob
                 existingOrder.Status = "Cancelled";
 
             var safeId = order.Id.Length > 8 ? order.Id[..8] : order.Id;
-            var result = await _kraken.PlaceOrderAsync(symKey, side, OrderType.Limit, newQty, newPrice,
+            // With recovery: the old order is already cancelled, so an ambiguous failure here must be looked up (the new order
+            // is often accepted even when the reply is lost) before it is reported as "cancelled and not re-placed"
+            var result = await _kraken.PlaceOrderWithRecoveryAsync(symKey, side, OrderType.Limit, newQty, newPrice,
                 $"repr-{safeId}-{DateTime.UtcNow:HHmm}");
 
             if (result.Success)
             {
                 repriced++;
                 // Add new order to state so balance calculations reflect it immediately
-                foreach (var newId in result.Data?.OrderIds ?? [])
+                foreach (var newId in new[] { result.OrderId }.Where(id => !string.IsNullOrEmpty(id)).Select(id => id!))
                 {
                     var dto = new OrderDto
                     {
@@ -258,7 +260,9 @@ public class SmartRepriceJob
             }
             else
             {
-                var err = result.Error?.Message ?? "unknown error";
+                var err = result.Unknown
+                    ? $"UNCONFIRMED — Kraken may or may not have accepted it ({result.Error}); check open orders"
+                    : result.Error ?? "unknown error";
                 _logger.LogError("[SmartReprice] Re-place failed for {Id} ({Side} {Qty}@{Price}): {Err}",
                     order.Id, order.Side, newQty, newPrice, err);
                 placeFailed.Add($"{order.Side} {newQty}@{newPrice} — {err}");
