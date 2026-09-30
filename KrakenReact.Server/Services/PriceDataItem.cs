@@ -131,11 +131,13 @@ public class PriceDataItem
         get { lock (_klineLock) { return _klineSnapshot.FirstOrDefault(l => l.OpenTime.Year > 1967); } }
     }
 
-    public string Age
+    public string Age => AgeFrom(null);
+
+    /// <summary>As <see cref="Age"/>, from an already-taken kline snapshot (avoids copying the list again).</summary>
+    public string AgeFrom(List<DerivedKline>? snapshot)
     {
-        get
         {
-            var min = MinKline;
+            var min = snapshot != null ? snapshot.FirstOrDefault(l => l.OpenTime.Year > 1967) : MinKline;
             if (min == null) return "Unknown";
             var t = DateTime.UtcNow - min.OpenTime; // OpenTime is UTC everywhere else; DateTime.Now skewed the age by the UTC offset
             if (t.TotalDays > 36500) return "Unknown";
@@ -150,9 +152,12 @@ public class PriceDataItem
         }
     }
 
-    public decimal? ClosePriceDiff(int days)
+    // The kline-derived figures below each used to take their own copy of the whole kline list (under its lock). Building a
+    // price row needs about twenty of them, so the overloads accept one snapshot that the caller takes once.
+
+    public decimal? ClosePriceDiff(int days, List<DerivedKline>? snapshot = null)
     {
-        var k = GetKlineSnapshot();
+        var k = snapshot ?? GetKlineSnapshot();
         if (k.Count < 2) return null;
         var last = k.LastOrDefault(l => l != null);
         if (last == null || last.OpenTime <= DateTime.MinValue) return null;
@@ -160,18 +165,18 @@ public class PriceDataItem
         return last.Close - (dayoldlist.Any() ? dayoldlist.First().Close : last.Close);
     }
 
-    public decimal CloseMovementDiff(int days)
+    public decimal CloseMovementDiff(int days, List<DerivedKline>? snapshot = null)
     {
-        var x = ClosePriceDiff(days);
+        var x = ClosePriceDiff(days, snapshot);
         if (x == null) return 0m;
-        var close = LatestKline?.Close ?? 0m;
+        var close = (snapshot != null ? snapshot.LastOrDefault() : LatestKline)?.Close ?? 0m;
         if (close == 0m) return 0m;
         return Math.Round((x.Value / (close / 100m)), 6);
     }
 
-    public decimal? ClosePriceAverage(int days)
+    public decimal? ClosePriceAverage(int days, List<DerivedKline>? snapshot = null)
     {
-        var k = GetKlineSnapshot();
+        var k = snapshot ?? GetKlineSnapshot();
         if (k.Count < 2) return null;
         var last = k.LastOrDefault(a => a.OpenTime > DateTime.MinValue);
         if (last == null) return null;
@@ -180,15 +185,16 @@ public class PriceDataItem
         return Math.Round(dayoldlist.Sum(a => a.Close) / dayoldlist.Count, 6);
     }
 
-    public decimal? WeightedPrice
+    public decimal? WeightedPrice => WeightedPriceFrom(null);
+
+    public decimal? WeightedPriceFrom(List<DerivedKline>? snapshot)
     {
-        get
         {
             decimal total = 0m; int weight = 0;
-            var avgDay = ClosePriceAverage(1);
-            var avgWeek = ClosePriceAverage(7);
-            var avgMonth = ClosePriceAverage(31);
-            var avgYear = ClosePriceAverage(365);
+            var avgDay = ClosePriceAverage(1, snapshot);
+            var avgWeek = ClosePriceAverage(7, snapshot);
+            var avgMonth = ClosePriceAverage(31, snapshot);
+            var avgYear = ClosePriceAverage(365, snapshot);
             if (avgDay.HasValue) { total += avgDay.Value * 6; weight += 6; }
             if (avgWeek.HasValue) { total += avgWeek.Value * 4; weight += 4; }
             if (avgMonth.HasValue) { total += avgMonth.Value * 2; weight += 2; }
@@ -198,14 +204,15 @@ public class PriceDataItem
         }
     }
 
-    public decimal? WeightedPricePercentage
+    public decimal? WeightedPricePercentage => WeightedPricePercentageFrom(null);
+
+    public decimal? WeightedPricePercentageFrom(List<DerivedKline>? snapshot)
     {
-        get
         {
-            var close = LatestKline?.Close;
-            var wp = WeightedPrice;
+            var close = (snapshot != null ? snapshot.LastOrDefault() : LatestKline)?.Close;
+            var wp = WeightedPriceFrom(snapshot);
             if (!KrakenNewPricesLoadedEver || close == null || wp == null || close <= 0 || wp < 0) return null;
-            if (Age != "Old") return 200.0m;
+            if (AgeFrom(snapshot) != "Old") return 200.0m;
             return Math.Round((wp.Value / close.Value) * 100, 2);
         }
     }

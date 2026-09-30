@@ -113,12 +113,27 @@ public class PricesController : ControllerBase
     public ActionResult<List<PriceDto>> GetAll()
     {
 
+        // Average buy price per pair, worked out once for the whole request. This used to scan EVERY order in state for EVERY
+        // pair with a culture-sensitive StartsWith (which also let "XBTUSD" match "XBTUSDT" orders). Each distinct order symbol
+        // is resolved once and matched exactly, and the base is normalized so Kraken's XBT orders line up with the BTC price row.
+        var pairOfSymbol = new Dictionary<string, string>();
+        string PairKey(string symbol)
+        {
+            if (!pairOfSymbol.TryGetValue(symbol, out var key))
+                pairOfSymbol[symbol] = key = _state.NormalizeOrderSymbolBase(symbol) + _state.NormalizeOrderSymbolQuote(symbol);
+            return key;
+        }
+        var avgBuyPriceByPair = _state.Orders.Values
+            .Where(o => o.Status == "Closed" && o.Side == "Buy")
+            .GroupBy(o => PairKey(o.Symbol))
+            .ToDictionary(g => g.Key, g => Math.Round(g.Sum(o => o.AveragePrice) / g.Count(), 9));
+
         var prices = _state.GetPriceSnapshot().Select(p =>
         {
-            var latest = p.LatestKline;
+            var k = p.GetKlineSnapshot(); // one copy of the kline list per pair, shared by everything below
+            var latest = k.LastOrDefault();
             var currentPrice = p.BestKline?.Close ?? latest?.Close ?? 0m;
-            var orders = _state.Orders.Values.Where(o => o.Symbol.StartsWith(p.SymbolNoSlash) && o.Status == "Closed" && o.Side == "Buy").ToList();
-            var avgBuyPrice = orders.Any() ? Math.Round(orders.Sum(o => o.AveragePrice) / orders.Count, 9) : 0m;
+            var avgBuyPrice = avgBuyPriceByPair.GetValueOrDefault(p.SymbolNoSlash, 0m);
 
             var normalizedBase = TradingStateService.NormalizeAsset(p.Base);
             var normalizedCcy = TradingStateService.NormalizeAsset(p.CCY);
@@ -133,8 +148,8 @@ public class PricesController : ControllerBase
             }
             else
             {
-                diff1d = p.ClosePriceDiff(1);
-                movement1d = p.CloseMovementDiff(1);
+                diff1d = p.ClosePriceDiff(1, k);
+                movement1d = p.CloseMovementDiff(1, k);
             }
 
             return new PriceDto
@@ -152,20 +167,20 @@ public class PricesController : ControllerBase
                 VolumeWeightedAveragePrice = latest?.VolumeWeightedAveragePrice,
                 TradeCount = latest?.TradeCount,
                 OpenTime = latest?.OpenTime,
-                Age = p.Age,
+                Age = p.AgeFrom(k),
                 KrakenNewPricesLoaded = p.KrakenNewPricesLoaded,
                 ClosePriceMovement = movement1d ?? 0m,
-                ClosePriceMovementWeek = p.CloseMovementDiff(7),
-                ClosePriceMovementMonth = p.CloseMovementDiff(31),
+                ClosePriceMovementWeek = p.CloseMovementDiff(7, k),
+                ClosePriceMovementMonth = p.CloseMovementDiff(31, k),
                 ClosePriceDifference = diff1d,
-                ClosePriceDifferenceWeek = p.ClosePriceDiff(7),
-                ClosePriceDifferenceMonth = p.ClosePriceDiff(31),
-                AvgPriceDay = p.ClosePriceAverage(1),
-                AvgPriceWeek = p.ClosePriceAverage(7),
-                AvgPriceMonth = p.ClosePriceAverage(31),
-                AvgPriceYear = p.ClosePriceAverage(365),
-                WeightedPrice = p.WeightedPrice,
-                WeightedPricePercentage = p.WeightedPricePercentage,
+                ClosePriceDifferenceWeek = p.ClosePriceDiff(7, k),
+                ClosePriceDifferenceMonth = p.ClosePriceDiff(31, k),
+                AvgPriceDay = p.ClosePriceAverage(1, k),
+                AvgPriceWeek = p.ClosePriceAverage(7, k),
+                AvgPriceMonth = p.ClosePriceAverage(31, k),
+                AvgPriceYear = p.ClosePriceAverage(365, k),
+                WeightedPrice = p.WeightedPriceFrom(k),
+                WeightedPricePercentage = p.WeightedPricePercentageFrom(k),
                 AverageBuyPrice = avgBuyPrice,
                 PriceLowerThanBuy = avgBuyPrice > 0 && avgBuyPrice >= (latest?.Close ?? 0) && p.KrakenNewPricesLoadedEver,
                 BestBid = p.TickerData?.BestBidPrice,

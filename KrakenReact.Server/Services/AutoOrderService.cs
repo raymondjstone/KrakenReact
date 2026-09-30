@@ -31,15 +31,18 @@ public class AutoOrderService
 
     private async Task<AutoTradeDto> CheckAsyncInternal(PriceDataItem instrument, string rulename, bool allowOrderAdd)
     {
+        // One copy of the kline list for the whole check (it used to take six)
+        var snap = instrument.GetKlineSnapshot();
+
         var ao = new AutoTradeDto
         {
             Symbol = instrument.Symbol,
             Base = instrument.Base,
             CCY = instrument.CCY,
             CoinType = instrument.CoinType,
-            ClosePriceMovement = instrument.CloseMovementDiff(1),
-            ClosePriceMovementWeek = instrument.CloseMovementDiff(7),
-            ClosePriceMovementMonth = instrument.CloseMovementDiff(31)
+            ClosePriceMovement = instrument.CloseMovementDiff(1, snap),
+            ClosePriceMovementWeek = instrument.CloseMovementDiff(7, snap),
+            ClosePriceMovementMonth = instrument.CloseMovementDiff(31, snap)
         };
 
         if (!instrument.KrakenNewPricesLoadedEver)
@@ -48,18 +51,16 @@ public class AutoOrderService
             return ao;
         }
 
-        var klines = instrument.GetKlineSnapshot();
+        var klines = snap;
         if (!klines.Any() || klines.Count < 60)
         {
             ao.Reason = $"{rulename} Too few Historic Prices";
             return ao;
         }
 
-        var monthend = DateTime.UtcNow.AddDays(-32);
-        var weekend = DateTime.UtcNow.AddDays(-7);
-        var closePrice = instrument.LatestKline?.Close ?? 0;
-        var avgDay = instrument.ClosePriceAverage(1);
-        var avgWeek = instrument.ClosePriceAverage(7);
+        var closePrice = snap.LastOrDefault()?.Close ?? 0;
+        var avgDay = instrument.ClosePriceAverage(1, snap);
+        var avgWeek = instrument.ClosePriceAverage(7, snap);
 
         var weekDayDiff = avgDay.HasValue && avgWeek.HasValue && avgWeek.Value != 0
             ? Math.Round(avgDay.Value * 100 / avgWeek.Value, 1)
