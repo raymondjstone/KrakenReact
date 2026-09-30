@@ -6,6 +6,7 @@ import { getConnection } from '../api/signalRService';
 import { useTheme } from '../context/ThemeContext';
 import OrderDialog from '../components/OrderDialog';
 import PortfolioHistoryChart from '../components/PortfolioHistoryChart';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -57,14 +58,14 @@ export default function BalancesPage({ hideAlmostZeroBalances }) {
     }).catch(() => {});
 
     api.get('/settings').then(r => { if (!disposed) setServerSettings(r.data); }).catch(() => {});
-    const refreshInterval = setInterval(loadBalances, 60000);
+    const refreshInterval = setVisibleInterval(loadBalances, 60000);
 
     const conn = getConnection();
     const handler = (data) => { if (!disposed) updateFromBalances(data); };
     conn.on('BalanceUpdate', handler);
     return () => {
       disposed = true;
-      clearInterval(refreshInterval);
+      refreshInterval();
       conn.off('BalanceUpdate', handler);
     };
   }, []);

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import api, { reportError, errorMessage } from '../api/apiClient';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 export default function AlertCentre() {
   const [open, setOpen] = useState(false);
@@ -18,8 +19,8 @@ export default function AlertCentre() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 30000);
-    return () => clearInterval(t);
+    const t = setVisibleInterval(load, 30000);
+    return () => t();
   }, []);
 
   useEffect(() => {

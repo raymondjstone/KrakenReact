@@ -3,6 +3,7 @@ import TabLayout from './components/TabLayout';
 import api from './api/apiClient';
 import { startConnection, getConnection } from './api/signalRService';
 import { ThemeProvider } from './context/ThemeContext';
+import { setVisibleInterval } from './utils/visibleInterval';
 
 export default function App() {
   const [totalValue, setTotalValue] = useState(0);
@@ -23,7 +24,7 @@ export default function App() {
     };
 
     fetchBalances();
-    const interval = setInterval(fetchBalances, 30000);
+    const interval = setVisibleInterval(fetchBalances, 300000);
 
     const conn = getConnection();
     const balanceHandler = (data) => { if (!disposed) updateFromBalances(data); };
@@ -37,7 +38,7 @@ export default function App() {
 
     return () => {
       disposed = true;
-      clearInterval(interval);
+      interval();
       conn.off('BalanceUpdate', balanceHandler);
       conn.off('AppShutdown', shutdownHandler);
     };

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api/apiClient';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 /** A sortable column header. Defined at module level: declared inside the page component it was a NEW component type on every
  *  render, so React unmounted and remounted every header each time the page updated. */
@@ -39,8 +40,8 @@ export default function FundingRatesPage() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 60000);
-    return () => clearInterval(interval);
+    const interval = setVisibleInterval(load, 60000);
+    return () => interval();
   }, [load]);
 
   const toggleSort = (col) => {

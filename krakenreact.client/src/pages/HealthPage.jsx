@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api/apiClient';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 export default function HealthPage() {
   const [health, setHealth] = useState(null);
@@ -16,8 +17,8 @@ export default function HealthPage() {
 
   useEffect(() => {
     check();
-    const interval = setInterval(check, 60000);
-    return () => clearInterval(interval);
+    const interval = setVisibleInterval(check, 60000);
+    return () => interval();
   }, [check]);
 
   const cardStyle = (ok) => ({

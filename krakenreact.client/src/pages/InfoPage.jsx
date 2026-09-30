@@ -6,6 +6,7 @@ import { getConnection } from '../api/signalRService';
 import { formatPrice, colorForValue } from '../utils/formatters';
 import OrderDialog from '../components/OrderDialog';
 import { useTheme } from '../context/ThemeContext';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -27,7 +28,7 @@ export default function InfoPage({ onSymbolClick, pinnedSet, onPin, onUnpin }) {
     loadPrices();
     api.get('/symbols').then(r => { if (!disposed) setSymbols(r.data.map(s => s.websocketName)); }).catch(console.error);
 
-    const refreshInterval = setInterval(loadPrices, 60000);
+    const refreshInterval = setVisibleInterval(loadPrices, 60000);
 
     const conn = getConnection();
     const handler = (data) => {
@@ -48,7 +49,7 @@ export default function InfoPage({ onSymbolClick, pinnedSet, onPin, onUnpin }) {
     conn.on('TickerUpdate', handler);
     return () => {
       disposed = true;
-      clearInterval(refreshInterval);
+      refreshInterval();
       conn.off('TickerUpdate', handler);
     };
   }, []);

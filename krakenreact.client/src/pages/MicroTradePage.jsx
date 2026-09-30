@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 const emptyRule = {
   symbol: '', dropPct: 5, dropIntervalHours: 24, risePct: 10, buyOrderTotal: 100,
@@ -132,8 +133,8 @@ export default function MicroTradePage() {
   useEffect(() => {
     fetchAll();
     fetchEmergencyStop();
-    const interval = setInterval(() => { fetchAll(); fetchEmergencyStop(); }, 15000);
-    return () => clearInterval(interval);
+    const interval = setVisibleInterval(() => { fetchAll(); fetchEmergencyStop(); }, 15000);
+    return () => interval();
   }, [fetchAll, fetchEmergencyStop]);
 
   const flash = (msg) => {
