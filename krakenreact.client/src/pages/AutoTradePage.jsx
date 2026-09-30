@@ -182,6 +182,7 @@ function BacktestPanel() {
       {result?.error && <div style={{ color: 'var(--red)', fontSize: 13 }}>{result.error}</div>}
       {result?.summary && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {result.summary.tradeCount != null && (
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
             {[
               ['Trades', result.summary.tradeCount],
@@ -195,6 +196,13 @@ function BacktestPanel() {
               </div>
             ))}
           </div>
+          )}
+          {result.summary.feePct != null && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Includes a {result.summary.feePct}% fee on every buy and sell.
+              {result.summary.openPosition && ' The run ended while holding a position; it is valued at the last close.'}
+            </div>
+          )}
           {result.trades?.length > 0 && (
             <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>

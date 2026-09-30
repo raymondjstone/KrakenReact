@@ -1,3 +1,4 @@
+using KrakenReact.Server.Models;
 using KrakenReact.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,73 +12,41 @@ public class BacktestController : ControllerBase
 
     public BacktestController(TradingStateService state) => _state = state;
 
+    /// <summary>The usual Kraken taker fee, charged on every simulated buy and sell unless the caller says otherwise.</summary>
+    public const decimal DefaultFeePct = 0.26m;
+
+    private List<DerivedKline>? DailyKlines(string symbol)
+    {
+        // "BTC/USD" and "XBT/USD" are the same market; every other endpoint resolves the name, so this one does too
+        if (!_state.Prices.TryGetValue(_state.ResolveSymbolKey(symbol), out var instrument)) return null;
+        return instrument.GetKlineSnapshot()
+            .Where(k => k.Interval == "OneDay")
+            .OrderBy(k => k.OpenTime)
+            .ToList();
+    }
+
     /// <summary>
     /// Simulates the auto-trade buy/sell rule against historical daily klines for a symbol.
-    /// Returns a list of simulated entry/exit pairs with P/L.
+    /// Returns a list of simulated entry/exit pairs with P/L. <c>feePct</c> (default 0.26) is charged on each buy and sell.
     /// </summary>
     [HttpGet]
-    public IActionResult RunBacktest([FromQuery] string symbol)
+    public IActionResult RunBacktest([FromQuery] string symbol, [FromQuery] decimal feePct = DefaultFeePct)
     {
         if (string.IsNullOrWhiteSpace(symbol))
             return BadRequest(new { message = "symbol is required" });
 
-        if (!_state.Prices.TryGetValue(symbol, out var instrument))
-            return NotFound(new { message = $"Symbol {symbol} not found" });
-
-        var klines = instrument.GetKlineSnapshot()
-            .Where(k => k.Interval == "OneDay")
-            .OrderBy(k => k.OpenTime)
-            .ToList();
+        var klines = DailyKlines(symbol);
+        if (klines == null) return NotFound(new { message = $"Symbol {symbol} not found" });
 
         if (klines.Count < 60)
             return Ok(new { symbol, trades = Array.Empty<object>(), summary = new { message = "Insufficient data (< 60 daily bars)" } });
 
-        // Simulate the auto-trade rule: buy when today's avg < 7-day avg (price dipped)
-        var trades = new List<object>();
-        decimal? entryPrice = null;
-        DateTime? entryDate = null;
-        decimal cash = 10000m;
-        decimal position = 0m;
+        var result = BacktestEngine.Run(klines, 30, klines.Count, feePct);
+        var trades = result.Trades;
 
-        for (int i = 30; i < klines.Count; i++)
-        {
-            var close = klines[i].Close;
-            var avg7 = klines.Skip(i - 7).Take(7).Average(k => k.Close);
-            var avg1 = close;
-            var weekDayDiff = avg7 > 0 ? (avg1 * 100 / avg7) : 100m;
-
-            if (entryPrice == null && close > 0 && weekDayDiff < 100m && cash > 0)
-            {
-                // Buy signal: today's price below 7-day average
-                position = cash / close;
-                entryPrice = close;
-                entryDate = klines[i].OpenTime;
-                cash = 0m;
-            }
-            else if (entryPrice != null && weekDayDiff >= 100m)
-            {
-                // Sell signal: today's price above 7-day average
-                var exitPrice = close;
-                var pl = (exitPrice - entryPrice.Value) / entryPrice.Value * 100;
-                cash = position * exitPrice;
-                trades.Add(new
-                {
-                    entryDate,
-                    entryPrice,
-                    exitDate = klines[i].OpenTime,
-                    exitPrice,
-                    plPct = Math.Round(pl, 2),
-                    cashAfter = Math.Round(cash, 2),
-                });
-                position = 0m;
-                entryPrice = null;
-                entryDate = null;
-            }
-        }
-
-        var totalPl = trades.Count > 0 ? Math.Round((cash - 10000m) / 10000m * 100, 2) : 0m;
-        var winTrades = trades.Cast<dynamic>().Count(t => (decimal)t.plPct > 0);
-        var winRate = trades.Count > 0 ? Math.Round((decimal)winTrades / trades.Count * 100, 1) : 0m;
+        // Measured on the final value, so a position still open at the end counts at the last close instead of reading as a total loss
+        var totalPl = Math.Round((result.FinalValue - BacktestEngine.StartingCash) / BacktestEngine.StartingCash * 100, 2);
+        var winRate = trades.Count > 0 ? Math.Round((decimal)trades.Count(t => t.PlPct > 0) / trades.Count * 100, 1) : 0m;
 
         return Ok(new
         {
@@ -88,7 +57,9 @@ public class BacktestController : ControllerBase
                 tradeCount = trades.Count,
                 winRate,
                 totalPlPct = totalPl,
-                finalCash = Math.Round(cash + position * (klines.LastOrDefault()?.Close ?? 0), 2),
+                finalCash = Math.Round(result.FinalValue, 2),
+                openPosition = result.OpenPosition,
+                feePct,
                 dataRange = new { from = klines.First().OpenTime, to = klines.Last().OpenTime },
             }
         });
@@ -96,86 +67,46 @@ public class BacktestController : ControllerBase
 
     /// <summary>GET /api/backtest/walkforward?symbol=X&amp;trainSize=60&amp;testSize=30 — rolling out-of-sample windows</summary>
     [HttpGet("walkforward")]
-    public IActionResult WalkForward([FromQuery] string symbol, [FromQuery] int trainSize = 60, [FromQuery] int testSize = 30)
+    public IActionResult WalkForward([FromQuery] string symbol, [FromQuery] int trainSize = 60, [FromQuery] int testSize = 30, [FromQuery] decimal feePct = DefaultFeePct)
     {
         if (string.IsNullOrWhiteSpace(symbol))
             return BadRequest(new { message = "symbol is required" });
 
-        if (!_state.Prices.TryGetValue(symbol, out var instrument))
-            return NotFound(new { message = $"Symbol {symbol} not found" });
+        var klines = DailyKlines(symbol);
+        if (klines == null) return NotFound(new { message = $"Symbol {symbol} not found" });
 
         trainSize = Math.Clamp(trainSize, 30, 365);
         testSize = Math.Clamp(testSize, 10, 90);
-
-        var klines = instrument.GetKlineSnapshot()
-            .Where(k => k.Interval == "OneDay")
-            .OrderBy(k => k.OpenTime)
-            .ToList();
 
         int windowSize = trainSize + testSize;
         if (klines.Count < windowSize + 10)
             return Ok(new { symbol, windows = Array.Empty<object>(), message = "Insufficient data" });
 
-        var windows = new List<object>();
-        int step = testSize;
-
-        for (int start = 0; start + windowSize <= klines.Count; start += step)
+        var windows = new List<WalkForwardWindow>();
+        for (int start = 0; start + windowSize <= klines.Count; start += testSize)
         {
-            var testKlines = klines.Skip(start + trainSize).Take(testSize).ToList();
-            if (testKlines.Count < 5) break;
+            var from = start + trainSize;
+            var to = start + windowSize;
+            if (to - from < 5) break;
 
-            // Run the buy/sell strategy on the test window (same logic as RunBacktest)
-            // Use training window end as context for 7-day avg
-            var allUpToTestEnd = klines.Take(start + windowSize).ToList();
-            decimal? entryPrice = null;
-            decimal cash2 = 10000m;
-            decimal position2 = 0m;
-            var tradePairs = new List<(decimal entry, decimal exit)>();
+            // The 7-candle average looks back into the training span for context; only the test span is traded
+            var result = BacktestEngine.Run(klines, from, to, feePct);
+            var winRate = result.Trades.Count > 0
+                ? Math.Round((double)result.Trades.Count(t => t.PlPct > 0) / result.Trades.Count * 100, 1) : 0.0;
+            var returnPct = Math.Round((double)(result.FinalValue - BacktestEngine.StartingCash) / (double)BacktestEngine.StartingCash * 100, 2);
 
-            for (int i = start + trainSize; i < start + windowSize && i < klines.Count; i++)
-            {
-                var close = klines[i].Close;
-                var avg7 = klines.Skip(Math.Max(0, i - 7)).Take(7).Average(k => k.Close);
-                var weekDayDiff = avg7 > 0 ? close * 100 / avg7 : 100m;
-
-                if (entryPrice == null && close > 0 && weekDayDiff < 100m && cash2 > 0)
-                {
-                    position2 = cash2 / close;
-                    entryPrice = close;
-                    cash2 = 0m;
-                }
-                else if (entryPrice != null && weekDayDiff >= 100m)
-                {
-                    tradePairs.Add((entryPrice.Value, close));
-                    cash2 = position2 * close;
-                    position2 = 0m;
-                    entryPrice = null;
-                }
-            }
-
-            var winCount = tradePairs.Count(t => t.exit > t.entry);
-            var winRate2 = tradePairs.Count > 0 ? Math.Round((double)winCount / tradePairs.Count * 100, 1) : 0.0;
-            var finalVal = cash2 + position2 * (testKlines.Last().Close);
-            var returnPct = Math.Round((double)(finalVal - 10000m) / 10000.0 * 100, 2);
-
-            windows.Add(new
-            {
-                from = testKlines.First().OpenTime,
-                to = testKlines.Last().OpenTime,
-                tradeCount = tradePairs.Count,
-                winRate = winRate2,
-                returnPct,
-            });
+            windows.Add(new WalkForwardWindow(klines[from].OpenTime, klines[to - 1].OpenTime, result.Trades.Count, winRate, returnPct));
         }
 
-        var avgWinRate = windows.Count > 0 ? windows.Cast<dynamic>().Average(w => (double)w.winRate) : 0.0;
-        var avgReturn = windows.Count > 0 ? windows.Cast<dynamic>().Average(w => (double)w.returnPct) : 0.0;
+        var avgWinRate = windows.Count > 0 ? windows.Average(w => w.WinRate) : 0.0;
+        var avgReturn = windows.Count > 0 ? windows.Average(w => w.ReturnPct) : 0.0;
 
         return Ok(new
         {
             symbol,
             trainSize,
             testSize,
+            feePct,
             windowCount = windows.Count,
             windows,
             summary = new
@@ -185,4 +116,6 @@ public class BacktestController : ControllerBase
             }
         });
     }
+
+    public sealed record WalkForwardWindow(DateTime From, DateTime To, int TradeCount, double WinRate, double ReturnPct);
 }
