@@ -1,0 +1,243 @@
+using Kraken.Net.Enums;
+using Kraken.Net.Objects.Models;
+using KrakenReact.Server.DTOs;
+using KrakenReact.Server.Models;
+using KrakenReact.Server.Services;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Moq;
+
+namespace KrakenReact.Tests;
+
+using Placement = KrakenRestService.PlacementResult;
+
+/// <summary>The stop-loss / take-profit / trailing-stop / profit-ladder job: it sells real holdings, so its decisions are pinned here.</summary>
+public class ProtectionJobTests : OrderJobTestBase
+{
+    public ProtectionJobTests()
+    {
+        State.Symbols["XBT/USD"] = new KrakenSymbol { WebsocketName = "XBT/USD", BaseAsset = "XBT", QuoteAsset = "ZUSD" };
+        State.Symbols["ETH/USD"] = new KrakenSymbol { WebsocketName = "ETH/USD", BaseAsset = "ETH", QuoteAsset = "ZUSD" };
+        Gateway.Setup(g => g.PlaceOrderWithRecoveryAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .ReturnsAsync(new Placement(true, "O1", null));
+    }
+
+    private StopLossTakeProfitJob NewJob() => new(State, Gateway.Object, Notifier.Object, Factory,
+        new Mock<ILogger<StopLossTakeProfitJob>>().Object, TestDiagnostics.Create());
+
+    /// <summary>A holding worth `price` per unit with an average cost of 100.</summary>
+    private BalanceDto Holding(string asset, decimal price, decimal total = 1m, decimal available = -1m, decimal? cost = 100m)
+    {
+        var b = new BalanceDto
+        {
+            Asset = asset, Total = total, Available = available < 0 ? total : available,
+            LatestPrice = price, LatestValue = price * total,
+            TotalCostBasis = cost is null ? null : cost * total,
+        };
+        State.Balances[asset] = b;
+        return b;
+    }
+
+    private void Sold(string symbol, OrderType type, decimal qty, Times times) =>
+        Gateway.Verify(g => g.PlaceOrderWithRecoveryAsync(symbol, OrderSide.Sell, type, qty, It.IsAny<decimal>(),
+            It.IsAny<string?>(), It.IsAny<bool>()), times);
+
+    private void NothingPlaced() =>
+        Gateway.Verify(g => g.PlaceOrderWithRecoveryAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+            It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+
+    // ── Stop-loss ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task StopLoss_DownMoreThanThreshold_MarketSellsTheAvailableBalance()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        Holding("BTC", price: 90m, total: 2m, available: 1.5m); // -10% from cost 100; 0.5 is locked in another order
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        Sold("XBTUSD", OrderType.Market, 1.5m, Times.Once());
+    }
+
+    [Fact]
+    public async Task StopLoss_WithinThreshold_DoesNothing()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        Holding("BTC", price: 97m); // -3%
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced();
+    }
+
+    [Fact]
+    public async Task StopLoss_WithoutCostBasis_DoesNothing()
+    {
+        // The situation the old code got into after every balance refresh: no cost basis, so protection silently off
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        Holding("BTC", price: 50m, cost: null);
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced();
+    }
+
+    [Fact]
+    public async Task StopLoss_Disabled_DoesNothing()
+    {
+        Holding("BTC", price: 10m);
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced();
+    }
+
+    [Fact]
+    public async Task StopLoss_ExcludedAsset_IsNeverSold()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        Holding("BTC", price: 50m);
+        await Seed(new AppSettings { Key = StopLossTakeProfitJob.ExcludedAssetsKey, Value = "btc" });
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced();
+    }
+
+    [Fact]
+    public async Task StopLoss_DryRun_NotifiesButDoesNotSell()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m; State.DryRunJobs = true;
+        Holding("BTC", price: 90m);
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced();
+        Notifier.Verify(n => n.Pushover(It.Is<string>(t => t.StartsWith("DRY RUN")), It.IsAny<string>(), It.IsAny<string>()), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task StopLoss_OneAssetThrowing_DoesNotStopTheOthersBeingProtected()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        Holding("BTC", price: 90m);
+        Holding("ETH", price: 90m);
+        Gateway.Setup(g => g.PlaceOrderWithRecoveryAsync("XBTUSD", It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .ThrowsAsync(new HttpRequestException("network down"));
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        Sold("ETHUSD", OrderType.Market, 1m, Times.Once());
+    }
+
+    [Fact]
+    public async Task StopLoss_UnconfirmedSell_SendsAnUnconfirmedAlert()
+    {
+        State.StopLossEnabled = true; State.StopLossPct = 5m;
+        Holding("BTC", price: 90m);
+        Gateway.Setup(g => g.PlaceOrderWithRecoveryAsync(It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<OrderType>(),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .ReturnsAsync(new Placement(false, null, "EService:Timeout", Unknown: true));
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        Notifier.Verify(n => n.Pushover(It.Is<string>(t => t.Contains("UNCONFIRMED")), It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+    }
+
+    // ── Take-profit ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task TakeProfit_LimitSellsAtMarket_NotPostOnly()
+    {
+        State.TakeProfitEnabled = true; State.TakeProfitPct = 15m;
+        Holding("BTC", price: 120m); // +20%
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        Gateway.Verify(g => g.PlaceOrderWithRecoveryAsync("XBTUSD", OrderSide.Sell, OrderType.Limit, 1m, 120m,
+            It.IsAny<string?>(), false), Times.Once);
+    }
+
+    // ── Trailing stop ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task TrailingStop_SellsAfterAFallFromTheHigh()
+    {
+        State.TrailingStopEnabled = true; State.TrailingStopPct = 5m;
+        var job = NewJob();
+
+        Holding("BTC", price: 100m);
+        await job.ExecuteAsync(CancellationToken.None);   // records the high
+        NothingPlaced();
+
+        Holding("BTC", price: 94m);                        // -6% from the high
+        await job.ExecuteAsync(CancellationToken.None);
+
+        Sold("XBTUSD", OrderType.Market, 1m, Times.Once());
+        Assert.False(State.TrailingHighPrices.ContainsKey("BTC")); // reset after selling
+    }
+
+    [Fact]
+    public async Task TrailingStop_HighIsForgottenWhenThePositionIsClosed_SoARebuyIsNotInstantlyStopped()
+    {
+        State.TrailingStopEnabled = true; State.TrailingStopPct = 5m;
+        var job = NewJob();
+
+        Holding("BTC", price: 100m);
+        await job.ExecuteAsync(CancellationToken.None);
+        Assert.Equal(100m, State.TrailingHighPrices["BTC"]);
+
+        Holding("BTC", price: 100m, total: 0m);            // sold by hand
+        await job.ExecuteAsync(CancellationToken.None);
+        Assert.False(State.TrailingHighPrices.ContainsKey("BTC"));
+
+        Holding("BTC", price: 60m);                        // bought again far lower
+        await job.ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced(); // the old high (100) must not make 60 look like a 40% collapse
+    }
+
+    [Fact]
+    public async Task TrailingStop_CoinsRestingInASellOrderStillCountAsHeld()
+    {
+        State.TrailingStopEnabled = true; State.TrailingStopPct = 5m;
+        var job = NewJob();
+
+        Holding("BTC", price: 100m);
+        await job.ExecuteAsync(CancellationToken.None);
+
+        Holding("BTC", price: 100m, total: 1m, available: 0m); // everything locked in a sell order
+        await job.ExecuteAsync(CancellationToken.None);
+
+        Assert.Equal(100m, State.TrailingHighPrices["BTC"]); // not forgotten
+    }
+
+    // ── Profit ladder ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ProfitLadder_SellsItsShareOnceThenWaitsOutTheCooldown()
+    {
+        await Seed(new ProfitLadderRule { Symbol = "BTC/USD", TriggerPct = 10m, SellPct = 50m, CooldownHours = 24 });
+        Holding("BTC", price: 120m, total: 2m); // +20%
+        var job = NewJob();
+
+        await job.ExecuteAsync(CancellationToken.None);
+        await job.ExecuteAsync(CancellationToken.None);
+
+        Gateway.Verify(g => g.PlaceOrderWithRecoveryAsync("XBTUSD", OrderSide.Sell, OrderType.Limit, 1m, 120m,
+            It.IsAny<string?>(), false), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProfitLadder_BelowTrigger_DoesNothing()
+    {
+        await Seed(new ProfitLadderRule { Symbol = "BTC/USD", TriggerPct = 10m, SellPct = 50m });
+        Holding("BTC", price: 105m); // +5%
+
+        await NewJob().ExecuteAsync(CancellationToken.None);
+
+        NothingPlaced();
+    }
+}

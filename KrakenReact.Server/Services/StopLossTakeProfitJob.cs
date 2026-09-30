@@ -20,15 +20,15 @@ public class StopLossTakeProfitJob
     private static bool _trailingHighsLoaded;
 
     private readonly TradingStateService _state;
-    private readonly KrakenRestService _kraken;
-    private readonly NotificationService _notify;
+    private readonly IOrderGateway _kraken;
+    private readonly INotifier _notify;
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly ILogger<StopLossTakeProfitJob> _logger;
     private readonly SqlTimeoutDiagnostics _sqlDiag;
     private static readonly HashSet<string> FIAT = new(StringComparer.OrdinalIgnoreCase)
         { "USD", "USDT", "USDC", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF" };
 
-    public StopLossTakeProfitJob(TradingStateService state, KrakenRestService kraken, NotificationService notify,
+    public StopLossTakeProfitJob(TradingStateService state, IOrderGateway kraken, INotifier notify,
         IDbContextFactory<KrakenDbContext> dbFactory, ILogger<StopLossTakeProfitJob> logger,
         SqlTimeoutDiagnostics sqlDiag)
     {
@@ -128,7 +128,7 @@ public class StopLossTakeProfitJob
             }
 
             var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("SL");
-            var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
+            var result = await _kraken.PlaceOrderWithRecoveryAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
             if (result.Success)
             {
                 await _notify.Pushover($"Stop-Loss Triggered — {bal.Asset}",
@@ -137,8 +137,11 @@ public class StopLossTakeProfitJob
             }
             else
             {
-                _logger.LogError("[StopLoss] Failed to place stop-loss for {Asset}: {Error}", bal.Asset, result.Error?.Message);
-                await _notify.Pushover($"Stop-Loss FAILED — {bal.Asset}", result.Error?.Message ?? "unknown error");
+                _logger.LogError("[StopLoss] Failed to place stop-loss for {Asset}: {Error}", bal.Asset, result.Error);
+                await _notify.Pushover(result.Unknown ? $"Stop-Loss UNCONFIRMED — {bal.Asset}" : $"Stop-Loss FAILED — {bal.Asset}",
+                    result.Unknown
+                        ? $"Could not confirm whether the market sell was placed ({result.Error}). Check Kraken before doing anything else."
+                        : result.Error ?? "unknown error");
             }
         }
         else if (_state.TakeProfitEnabled && changePct >= _state.TakeProfitPct)
@@ -158,7 +161,7 @@ public class StopLossTakeProfitJob
             }
 
             var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("TP");
-            var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, bal.Available, currentPrice, clientId, postOnly: false);
+            var result = await _kraken.PlaceOrderWithRecoveryAsync(sym, OrderSide.Sell, OrderType.Limit, bal.Available, currentPrice, clientId, postOnly: false);
             if (result.Success)
             {
                 await _notify.Pushover($"Take-Profit Triggered — {bal.Asset}",
@@ -167,7 +170,7 @@ public class StopLossTakeProfitJob
             }
             else
             {
-                _logger.LogError("[TakeProfit] Failed to place take-profit for {Asset}: {Error}", bal.Asset, result.Error?.Message);
+                _logger.LogError("[TakeProfit] Failed to place take-profit for {Asset}: {Error}", bal.Asset, result.Error);
             }
         }
     }
@@ -224,7 +227,7 @@ public class StopLossTakeProfitJob
                 }
 
                 var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("TS");
-                var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
+                var result = await _kraken.PlaceOrderWithRecoveryAsync(sym, OrderSide.Sell, OrderType.Market, bal.Available, 0, clientId);
                 if (result.Success)
                 {
                     await _notify.Pushover($"Trailing Stop Triggered — {bal.Asset}",
@@ -235,7 +238,10 @@ public class StopLossTakeProfitJob
                 }
                 else
                 {
-                    _logger.LogError("[TrailingStop] Failed to place order for {Asset}: {Error}", bal.Asset, result.Error?.Message);
+                    _logger.LogError("[TrailingStop] Failed to place order for {Asset}: {Error}", bal.Asset, result.Error);
+                    if (result.Unknown)
+                        await _notify.Pushover($"Trailing Stop UNCONFIRMED — {bal.Asset}",
+                            $"Could not confirm whether the market sell was placed ({result.Error}). Check Kraken.");
                 }
             }
             catch (Exception ex) { _logger.LogError(ex, "[TrailingStop] Error processing {Asset}", bal.Asset); }
@@ -301,7 +307,8 @@ public class StopLossTakeProfitJob
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         // Short timeout for the polling read — tiny table, runs every 5 min;
         // failing fast frees the pool slot for jobs that need it more.
-        db.Database.SetCommandTimeout(TimeSpan.FromSeconds(15));
+        if (db.Database.IsRelational()) // the in-memory test provider has no command timeout
+            db.Database.SetCommandTimeout(TimeSpan.FromSeconds(15));
         var rules = await db.ProfitLadderRules.Where(r => r.Active).ToListAsync(ct);
         if (rules.Count == 0) return;
 
@@ -359,12 +366,12 @@ public class StopLossTakeProfitJob
         }
 
         var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"PL{rule.Id}_");
-        var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, sellQty, bal.LatestPrice, clientId, postOnly: false);
+        var result = await _kraken.PlaceOrderWithRecoveryAsync(sym, OrderSide.Sell, OrderType.Limit, sellQty, bal.LatestPrice, clientId, postOnly: false);
 
         rule.LastTriggeredAt = DateTime.UtcNow;
         rule.LastResult = result.Success
             ? $"OK — sold {sellQty:F6} {bal.Asset} @ {bal.LatestPrice:F4} (up {changePct:F1}%)"
-            : $"FAIL: {result.Error?.Message ?? "unknown"}";
+            : $"FAIL: {result.Error ?? "unknown"}";
 
         if (result.Success)
         {
@@ -373,7 +380,7 @@ public class StopLossTakeProfitJob
         }
         else
         {
-            _logger.LogError("[ProfitLadder] Failed to place order for {Asset}: {Error}", bal.Asset, result.Error?.Message);
+            _logger.LogError("[ProfitLadder] Failed to place order for {Asset}: {Error}", bal.Asset, result.Error);
         }
     }
 
