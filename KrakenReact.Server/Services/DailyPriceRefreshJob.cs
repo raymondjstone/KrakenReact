@@ -131,6 +131,14 @@ public class DailyPriceRefreshJob
         var openOrders = _state.Orders.Values
             .Where(o => TradingStateService.IsOpenOrderStatus(o.Status))
             .ToList();
+        // Totals per asset, worked out once. Resolving each order's symbol scans the symbol table, so doing it inside the
+        // per-balance loop cost (balances x open orders x symbols) on every refresh.
+        var sellQtyByBase = openOrders.Where(o => o.Side == "Sell")
+            .GroupBy(o => _state.NormalizeOrderSymbolBase(o.Symbol))
+            .ToDictionary(g => g.Key, g => g.Sum(o => o.Quantity));
+        var buyCostByQuote = openOrders.Where(o => o.Side == "Buy")
+            .GroupBy(o => _state.NormalizeOrderSymbolQuote(o.Symbol))
+            .ToDictionary(g => g.Key, g => g.Sum(o => (o.Quantity - o.QuantityFilled) * o.Price));
 
         var usdGbpRate = _state.GetUsdGbpRate();
         var balanceDtos = new List<BalanceDto>();
@@ -153,16 +161,12 @@ public class DailyPriceRefreshJob
             decimal available;
             if (TradingStateService.Currency.Contains(b.Asset))
             {
-                coveredQty = openOrders
-                    .Where(o => o.Side == "Buy" && _state.NormalizeOrderSymbolQuote(o.Symbol) == b.Asset)
-                    .Sum(o => (o.Quantity - o.QuantityFilled) * o.Price);
+                coveredQty = buyCostByQuote.GetValueOrDefault(b.Asset);
                 available = Math.Max(b.Total - coveredQty, 0);
             }
             else
             {
-                coveredQty = openOrders
-                    .Where(o => o.Side == "Sell" && _state.NormalizeOrderSymbolBase(o.Symbol) == b.Asset)
-                    .Sum(o => o.Quantity);
+                coveredQty = sellQtyByBase.GetValueOrDefault(b.Asset);
                 available = b.Total - b.Locked;
             }
 
