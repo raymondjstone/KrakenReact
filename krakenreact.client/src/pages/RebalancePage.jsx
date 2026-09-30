@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import api from '../api/apiClient';
+import api, { reportError, errorMessage } from '../api/apiClient';
 
 const EMPTY_SCHED = { targets: '', cronExpression: '0 9 * * 1', driftMinPct: 5, autoExecute: false, note: '', active: true };
 
@@ -279,7 +279,7 @@ export default function RebalancePage() {
                       style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', fontSize: 13, padding: '0 8px 0 0' }}>Edit</button>
                     <button onClick={() => { api.post(`/rebalanceschedules/${s.id}/trigger`).then(() => flashSched('Triggered')).catch(() => flashSched('Error')); }}
                       style={{ background: 'none', border: 'none', color: 'var(--yellow)', cursor: 'pointer', fontSize: 13, padding: '0 8px 0 0' }}>Run</button>
-                    <button onClick={() => { if (confirm('Delete schedule?')) api.delete(`/rebalanceschedules/${s.id}`).then(loadSchedules).catch(() => {}); }}
+                    <button onClick={() => { if (confirm('Delete schedule?')) api.delete(`/rebalanceschedules/${s.id}`).then(loadSchedules).catch(e => reportError(errorMessage(e, "Could not delete the schedule"))); }}
                       style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 13, padding: 0 }}>Delete</button>
                   </td>
                 </tr>

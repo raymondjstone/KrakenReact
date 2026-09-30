@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import api from '../api/apiClient';
+import api, { reportError, errorMessage } from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
 
 const INTERVAL_LABELS = {
@@ -291,7 +291,7 @@ export default function PredictionPage({ onSymbolClick }) {
             onDelete={() => {
               api.delete(`/predictions?symbol=${encodeURIComponent(r.symbol)}`)
                 .then(() => setResults(prev => prev.filter(x => x.symbol !== r.symbol)))
-                .catch(() => {});
+                .catch(e => reportError(errorMessage(e, 'Could not delete the prediction')));
             }}
           />
         ))}

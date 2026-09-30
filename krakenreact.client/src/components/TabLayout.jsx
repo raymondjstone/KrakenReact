@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import Dashboard from './Dashboard';
 import AlertCentre from './AlertCentre';
 import SettingsPage, { loadSettings, saveSettings } from '../pages/SettingsPage';
-import api from '../api/apiClient';
+import api, { reportError, errorMessage } from '../api/apiClient';
 
 // Every other page loads on first visit, so the initial bundle only carries the dashboard, alert centre and
 // settings (the charting and grid libraries used by the rest were all downloaded up front).
@@ -94,7 +94,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
 
   const savePinned = (list) => {
     setPinnedSymbols(list);
-    api.put('/settings/pinned-pairs', list).catch(() => {});
+    api.put('/settings/pinned-pairs', list).catch(e => reportError(errorMessage(e, 'Could not save pinned pairs')));
   };
   const pinSymbol = (symbol) => {
     if (!pinnedSymbols.includes(symbol)) savePinned([...pinnedSymbols, symbol]);

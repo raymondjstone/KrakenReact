@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { themeAlpine, colorSchemeDark, colorSchemeLight } from 'ag-grid-community';
-import api from '../api/apiClient';
+import api, { reportError, errorMessage } from '../api/apiClient';
 
 const ThemeContext = createContext();
 
@@ -54,7 +54,7 @@ export function ThemeProvider({ children }) {
   const toggleTheme = () => {
     setTheme(prev => {
       const next = prev === 'dark' ? 'light' : 'dark';
-      api.post('/settings', { theme: next }).catch(() => {});
+      api.post('/settings', { theme: next }).catch(e => reportError(errorMessage(e, 'Could not save the theme')));
       return next;
     });
   };

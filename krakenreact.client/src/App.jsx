@@ -43,9 +43,35 @@ export default function App() {
     };
   }, []);
 
+  // Banner for failures reported through reportError()
+  const [errorText, setErrorText] = useState('');
+  useEffect(() => {
+    let timer;
+    const handler = (e) => {
+      setErrorText(String(e.detail || 'Something went wrong'));
+      clearTimeout(timer);
+      timer = setTimeout(() => setErrorText(''), 6000);
+    };
+    window.addEventListener('app-error', handler);
+    return () => { window.removeEventListener('app-error', handler); clearTimeout(timer); };
+  }, []);
+
   return (
     <ThemeProvider>
       <TabLayout totalValue={totalValue} totalValueGbp={totalValueGbp} />
+      {errorText && (
+        <div
+          role="alert"
+          onClick={() => setErrorText('')}
+          style={{
+            position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 10000,
+            maxWidth: '80vw', padding: '10px 16px', borderRadius: 6, cursor: 'pointer',
+            background: 'var(--red, #ef4444)', color: '#fff', fontSize: 13, boxShadow: '0 4px 14px rgba(0,0,0,.35)',
+          }}
+        >
+          {errorText}
+        </div>
+      )}
     </ThemeProvider>
   );
 }

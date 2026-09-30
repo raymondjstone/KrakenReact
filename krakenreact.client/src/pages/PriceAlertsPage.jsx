@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import api from '../api/apiClient';
+import api, { reportError, errorMessage } from '../api/apiClient';
 
 const EMPTY_FORM = {
   symbol: 'XBT/USD',
@@ -85,7 +85,7 @@ export default function PriceAlertsPage() {
 
   const handleDelete = (id) => {
     if (!confirm('Delete this alert?')) return;
-    api.delete(`/pricealerts/${id}`).then(load).catch(() => {});
+    api.delete(`/pricealerts/${id}`).then(load).catch(e => reportError(errorMessage(e, "Could not delete the price alert")));
   };
 
   const handleReset = (id) => {

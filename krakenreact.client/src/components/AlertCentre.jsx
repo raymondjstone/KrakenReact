@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import api from '../api/apiClient';
+import api, { reportError, errorMessage } from '../api/apiClient';
 
 export default function AlertCentre() {
   const [open, setOpen] = useState(false);
@@ -32,11 +32,11 @@ export default function AlertCentre() {
   }, [open]);
 
   const dismiss = (id) => {
-    api.delete(`/alerts/${id}`).then(load).catch(() => {});
+    api.delete(`/alerts/${id}`).then(load).catch(e => reportError(errorMessage(e, "Could not dismiss the alert")));
   };
 
   const clearAll = () => {
-    api.delete('/alerts').then(() => { setAlerts([]); setUnread(0); }).catch(() => {});
+    api.delete('/alerts').then(() => { setAlerts([]); setUnread(0); }).catch(e => reportError(errorMessage(e, 'Could not clear the alerts')));
   };
 
   const fmt = (dt) => {
