@@ -17,3 +17,29 @@ public class BracketMonitorTests
         Assert.Equal(expected, BracketMonitorJob.IsStopHit(side, (decimal)price, (decimal)stop));
     }
 }
+
+public class SmartRepriceQuantityTests
+{
+    [Fact]
+    public void Buy_KeepsTotalSpend_AndNeverExceedsIt()
+    {
+        // 10 coins @ 100 = 1000 spend; new price 110 -> 9.09090909 coins, floored at 8 dp
+        var qty = SmartRepriceJob.ComputeRepriceQuantity(true, 10m, 100m, 110m, 8);
+        Assert.Equal(9.09090909m, qty);
+        Assert.True(qty * 110m <= 1000m);
+    }
+
+    [Fact]
+    public void Sell_KeepsItsQuantity_WhateverThePriceDoes()
+    {
+        // The old logic would have turned 10 into 11.11 when the price fell 100 -> 90
+        Assert.Equal(10m, SmartRepriceJob.ComputeRepriceQuantity(false, 10m, 100m, 90m, 8));
+        Assert.Equal(10m, SmartRepriceJob.ComputeRepriceQuantity(false, 10m, 100m, 110m, 8));
+    }
+
+    [Fact]
+    public void Quantity_IsFlooredToLotPrecision()
+    {
+        Assert.Equal(1.23m, SmartRepriceJob.ComputeRepriceQuantity(false, 1.239m, 5m, 5m, 2));
+    }
+}

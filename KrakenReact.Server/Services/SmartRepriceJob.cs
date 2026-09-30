@@ -74,6 +74,19 @@ public class SmartRepriceJob
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>
+    /// Quantity for the replacement order. A BUY keeps its total spend, so the quantity scales with the price change
+    /// (floored, so the new order never costs more than the old one). A SELL keeps its quantity: it is a fixed
+    /// amount of coins, and scaling it by price would sell more than the order held (or more than is owned) when the
+    /// price has fallen.
+    /// </summary>
+    internal static decimal ComputeRepriceQuantity(bool isBuy, decimal remainingQty, decimal oldPrice, decimal newPrice, int lotDecimals)
+    {
+        if (!isBuy || oldPrice <= 0 || newPrice <= 0)
+            return KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(remainingQty, lotDecimals);
+        return KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(remainingQty * oldPrice / newPrice, lotDecimals);
+    }
+
     private static bool IsOpenStatus(string status) =>
         status.Equals("Open", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("new", StringComparison.OrdinalIgnoreCase) ||
@@ -194,9 +207,7 @@ public class SmartRepriceJob
             // Adjust quantity so the total order value (price × qty) stays the same as the original.
             // This prevents "Insufficient funds" when the price has risen for a buy order.
             var remainingQty = order.Quantity - order.QuantityFilled;
-            var newQty = order.Price > 0
-                ? Math.Round(remainingQty * order.Price / newPrice, lotDecimals)
-                : remainingQty;
+            var newQty = ComputeRepriceQuantity(isBuy, remainingQty, order.Price, newPrice, lotDecimals);
 
             _logger.LogInformation("[SmartReprice] {Symbol} {Side} order {Id} deviates {Dev:F2}% — repricing {Old}×{OldQty} → {New}×{NewQty}",
                 rule.Symbol, order.Side, order.Id, deviation, order.Price, remainingQty, newPrice, newQty);
