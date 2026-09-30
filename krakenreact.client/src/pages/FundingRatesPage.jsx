@@ -157,7 +157,7 @@ export default function FundingRatesPage() {
       <div style={{ marginTop: 20, padding: 14, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7 }}>
         <strong style={{ color: 'var(--text-primary)' }}>Understanding Funding Rates</strong><br />
         <strong>Funding Rate</strong>: 8-hour charge paid between long and short traders. Positive = longs pay shorts (bullish sentiment); negative = shorts pay longs (bearish).<br />
-        <strong>Annualised</strong>: Funding rate × 3 (per day) × 365 — indicative annual cost of holding the position.<br />
+        <strong>Annualised</strong>: Funding rate × 3 (per day) × 365 — indicative annual cost of holding the position. This assumes 8-hour funding periods; if the exchange's rate is quoted per hour instead, the true annual figure is about 8 times larger, so treat it as a rough comparison between rows, not an exact yield.<br />
         <strong>Premium</strong>: (Mark − Index) / Index — positive premium means futures trade above spot (contango); negative means backwardation.<br />
         <strong>Interpretation</strong>: High positive funding + contango often signals crowded longs and potential for a squeeze. Strongly negative funding may indicate over-leveraged shorts.
         Data sourced from Kraken Futures public API (perpetuals only).
