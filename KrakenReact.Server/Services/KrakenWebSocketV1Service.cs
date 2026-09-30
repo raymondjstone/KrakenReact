@@ -19,6 +19,8 @@ public class KrakenWebSocketV1Service : BackgroundService
     private System.Timers.Timer? _pingTimer;
     private long _lastBalanceBroadcastTicks = DateTime.MinValue.Ticks;
     private long _lastOrderBroadcastTicks = DateTime.MinValue.Ticks;
+    private long _lastFullResyncTicks = DateTime.UtcNow.Ticks; // first resync one interval after start (clients get a snapshot on connect)
+    private static readonly TimeSpan FullResyncInterval = TimeSpan.FromMinutes(5);
     private volatile bool _balancesDirty;
     private volatile bool _ordersDirty;
     private string? _currentBookPair;
@@ -426,6 +428,15 @@ public class KrakenWebSocketV1Service : BackgroundService
                     Interlocked.Exchange(ref _lastBalanceBroadcastTicks, nowTicks);
                     try { await _hub.BroadcastBalancesAsync(_state); }
                     catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] BalanceUpdate broadcast failed"); }
+                }
+
+                // Safety net: updates are deltas, so a client that silently missed one would stay wrong until it
+                // reconnected. A full resync every few minutes bounds that (ticks arrive constantly, so this runs on time).
+                if (nowTicks - Interlocked.Read(ref _lastFullResyncTicks) >= FullResyncInterval.Ticks &&
+                    Interlocked.Exchange(ref _lastFullResyncTicks, nowTicks) != nowTicks)
+                {
+                    try { await _hub.BroadcastFullResyncAsync(_state); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] Full resync broadcast failed"); }
                 }
             });
         }

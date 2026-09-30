@@ -30,11 +30,10 @@ export default function OrdersPage() {
     loadOrders();
     api.get('/symbols').then(r => setSymbols(r.data.map(s => s.websocketName))).catch(console.error);
     const conn = getConnection();
-    conn.on('ExecutionUpdate', loadOrders);
+    // Order changes arrive as deltas merged into the full list; refetching everything on each execution was redundant
     const orderHandler = (data) => setRowData(data);
     conn.on('OrderUpdate', orderHandler);
     return () => {
-      conn.off('ExecutionUpdate', loadOrders);
       conn.off('OrderUpdate', orderHandler);
     };
   }, [loadOrders]);
