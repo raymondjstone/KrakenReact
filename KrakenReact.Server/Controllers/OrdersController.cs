@@ -29,6 +29,18 @@ public class OrdersController : ControllerBase
         _dbFactory = dbFactory;
     }
 
+    /// <summary>Pushes the new order and balance state to the clients without holding up the response. A failure is logged - a
+    /// silent one leaves the screens stale with nothing to explain why.</summary>
+    private void BroadcastInBackground() => _ = Task.Run(async () =>
+    {
+        try
+        {
+            await _hub.BroadcastOrdersAsync(_state);
+            await _hub.BroadcastBalancesAsync(_state);
+        }
+        catch (Exception ex) { Serilog.Log.Warning(ex, "Order/balance broadcast failed"); }
+    });
+
     [HttpGet]
     public ActionResult<List<OrderDto>> GetAll()
     {
@@ -154,15 +166,7 @@ public class OrdersController : ControllerBase
         }
 
         // Broadcast updates to all clients
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _hub.BroadcastOrdersAsync(_state);
-                await _hub.BroadcastBalancesAsync(_state);
-            }
-            catch { /* Ignore broadcast errors */ }
-        });
+        BroadcastInBackground();
 
         return Ok(new { orderIds = result.Data.OrderIds });
     }
@@ -214,15 +218,7 @@ public class OrdersController : ControllerBase
         _state.RecalculateBalanceCoveredAmounts();
 
         // Broadcast updates to all clients
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _hub.BroadcastOrdersAsync(_state);
-                await _hub.BroadcastBalancesAsync(_state);
-            }
-            catch { /* Ignore broadcast errors */ }
-        });
+        BroadcastInBackground();
 
         return Ok();
     }
@@ -352,15 +348,7 @@ public class OrdersController : ControllerBase
         _state.RecalculateBalanceCoveredAmounts();
 
         // Broadcast order and balance updates to all clients
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _hub.BroadcastOrdersAsync(_state);
-                await _hub.BroadcastBalancesAsync(_state);
-            }
-            catch { /* Ignore broadcast errors */ }
-        });
+        BroadcastInBackground();
 
         return Ok();
     }
