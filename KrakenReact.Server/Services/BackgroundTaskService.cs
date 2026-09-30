@@ -377,16 +377,28 @@ public class BackgroundTaskService : BackgroundService
                             // Wait 2 minutes for the balance to settle on Kraken's side
                             await Task.Delay(TimeSpan.FromMinutes(2));
 
+                            // Re-read the order NOW: two minutes have passed, and it may have filled, been cancelled or been
+                            // amended since it was picked. Working from the quantity captured back then would overwrite a
+                            // partial fill (or amend an order that no longer exists).
+                            if (!_state.Orders.TryGetValue(orderId, out var current) || !TradingStateService.IsOpenOrderStatus(current.Status))
+                            {
+                                _logger.LogInformation("[BG] Staking reward for {Asset} not added: sell order {OrderId} is no longer open", asset, orderId);
+                                return;
+                            }
+                            currentQty = current.Quantity;
+                            price = current.Price;
+
                             var newQty = currentQty + rewardAmount;
                             var result = await _kraken.AmendOrderValues(orderId, symbol, price, newQty);
                             if (result.Success)
                             {
-                                // Update the order in state
-                                if (_state.Orders.TryGetValue(orderId, out var order))
-                                {
-                                    order.Quantity = newQty;
-                                    _state.RecalculateOrderFields(order);
-                                }
+                                // Kraken's amend gives the order a NEW id; keep state keyed by it so later updates find the order
+                                var newId = result.Data?.OrderId ?? orderId;
+                                _state.Orders.TryRemove(orderId, out _);
+                                current.Id = newId;
+                                current.Quantity = newQty;
+                                _state.RecalculateOrderFields(current);
+                                _state.Orders[newId] = current;
                                 _logger.LogInformation("[BG] Auto-amended sell order {OrderId}: added {Amount} {Asset} staking reward (qty {OldQty} -> {NewQty})",
                                     orderId, rewardAmount, asset, currentQty, newQty);
 
