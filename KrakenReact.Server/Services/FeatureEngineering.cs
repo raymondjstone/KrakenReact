@@ -229,11 +229,7 @@ public static class FeatureEngineering
             float vol20 = 0f;
             if (i >= 20)
             {
-                float sum = 0f, sumSq = 0f;
-                for (int j = i - 19; j <= i; j++) { sum += logRet[j]; sumSq += logRet[j] * logRet[j]; }
-                float mean = sum / 20f;
-                float variance = sumSq / 20f - mean * mean;
-                vol20 = variance > 0 ? MathF.Sqrt(variance) : 0f;
+                vol20 = Std20(logRet, i);
             }
 
             map[openTimes[i]] = new MarketContextPoint
@@ -270,11 +266,7 @@ public static class FeatureEngineering
         float vol20 = 0f;
         if (i >= 20)
         {
-            float sum = 0f, sumSq = 0f;
-            for (int j = i - 19; j <= i; j++) { sum += logRet[j]; sumSq += logRet[j] * logRet[j]; }
-            float mean = sum / 20f;
-            float variance = sumSq / 20f - mean * mean;
-            vol20 = variance > 0 ? MathF.Sqrt(variance) : 0f;
+            vol20 = Std20(logRet, i);
         }
 
         float bbRange   = bbUp[i] - bbDn[i];
@@ -329,6 +321,17 @@ public static class FeatureEngineering
             Adx14              = Safe(ind.Adx14[i]),
             Roc10              = Safe(ind.Roc10[i]),
         };
+    }
+
+    /// <summary>Population standard deviation of the 20 values ending at <paramref name="i"/>. Summed in double: the single-precision
+    /// sum-of-squares form (E[x^2] - E[x]^2) loses most of its digits when returns are around 0.001.</summary>
+    internal static float Std20(float[] values, int i)
+    {
+        double sum = 0, sumSq = 0;
+        for (int j = i - 19; j <= i; j++) { sum += values[j]; sumSq += (double)values[j] * values[j]; }
+        double mean = sum / 20.0;
+        double variance = sumSq / 20.0 - mean * mean;
+        return variance > 0 ? (float)Math.Sqrt(variance) : 0f;
     }
 
     private static float Safe(float v) => float.IsFinite(v) ? v : 0f;
