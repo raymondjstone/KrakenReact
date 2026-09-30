@@ -71,6 +71,14 @@ public class PricesController : ControllerBase
         key = _state.ResolveSymbolKey(pair);
         if (_state.Prices.TryGetValue(key, out var p)) return p;
 
+        // Price keys are upper-case; tolerate a rule or caller that stored the symbol in another case
+        var upper = pair.ToUpperInvariant();
+        if (upper != pair)
+        {
+            key = _state.ResolveSymbolKey(upper);
+            if (_state.Prices.TryGetValue(key, out p)) return p;
+        }
+
         // Handles no-slash input like "SOLUSD" — extract base/quote then re-resolve
         var noPunctuation = pair.Replace("/", "");
         var baseAsset = _state.NormalizeOrderSymbolBase(noPunctuation);

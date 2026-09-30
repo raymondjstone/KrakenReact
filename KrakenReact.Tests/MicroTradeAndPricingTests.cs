@@ -134,6 +134,52 @@ public class LiveKlineTests
     }
 }
 
+public class PricesMarketEndpointTests
+{
+    private static (KrakenReact.Server.Controllers.PricesController Ctrl, TradingStateService State) Create()
+    {
+        var state = new TradingStateService(new DelistedPriceService(new Moq.Mock<Microsoft.Extensions.Logging.ILogger<DelistedPriceService>>().Object));
+        var db = new KrakenReact.Server.Data.DbMethods(
+            new Moq.Mock<Microsoft.EntityFrameworkCore.IDbContextFactory<KrakenReact.Server.Data.KrakenDbContext>>().Object,
+            new Moq.Mock<Microsoft.Extensions.Logging.ILogger<KrakenReact.Server.Data.DbMethods>>().Object, TestDiagnostics.Create());
+        var kraken = new KrakenRestService(db, state, new Moq.Mock<Microsoft.Extensions.Logging.ILogger<KrakenRestService>>().Object);
+        var priceChange = new PriceChangeService(kraken, state, new Moq.Mock<Microsoft.Extensions.Logging.ILogger<PriceChangeService>>().Object);
+        return (new KrakenReact.Server.Controllers.PricesController(state, kraken, priceChange, db), state);
+    }
+
+    [Fact]
+    public async Task GetMarket_ReturnsPriceKeyedByUpperCaseSymbol_AndOmitsNothingRequested()
+    {
+        var (ctrl, state) = Create();
+        var item = new PriceDataItem { Symbol = "SOL/USD" };
+        item.TickerData = new TickerDataItem { LastTradePrice = 150m, ChangePct24h = -2.5m };
+        state.Prices["SOL/USD"] = item;
+
+        var result = await ctrl.GetMarket("sol/usd,NOPE/USD");
+
+        var ok = Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(result);
+        var dict = Assert.IsAssignableFrom<System.Collections.IDictionary>(ok.Value);
+        Assert.True(dict.Contains("SOL/USD"));
+        Assert.True(dict.Contains("NOPE/USD")); // unknown pairs still get an entry, with a null price
+        var sol = dict["SOL/USD"]!;
+        Assert.Equal(150m, (decimal?)sol.GetType().GetProperty("price")!.GetValue(sol));
+        var nope = dict["NOPE/USD"]!;
+        Assert.Null(nope.GetType().GetProperty("price")!.GetValue(nope));
+    }
+
+    [Fact]
+    public void GetQuote_StillResolvesAfterRefactor()
+    {
+        var (ctrl, state) = Create();
+        var item = new PriceDataItem { Symbol = "SOL/USD" };
+        item.TickerData = new TickerDataItem { LastTradePrice = 150m };
+        state.Prices["SOL/USD"] = item;
+
+        Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(ctrl.GetQuote("SOL-USD").Result);
+        Assert.IsType<Microsoft.AspNetCore.Mvc.NotFoundObjectResult>(ctrl.GetQuote("NOPE-USD").Result);
+    }
+}
+
 public class ProximityAlertTests
 {
     private static TradingStateService NewState() =>
