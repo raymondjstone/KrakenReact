@@ -38,7 +38,7 @@ public class CorrelationController : ControllerBase
         if (symbolArray.Length > 20) return BadRequest("Maximum 20 symbols");
 
         var since = DateTime.UtcNow.Date.AddDays(-days - 5); // extra buffer for alignment
-        var returns = new Dictionary<string, List<double>>();
+        var returns = new Dictionary<string, Dictionary<DateTime, double>>();
 
         foreach (var sym in symbolArray)
         {
@@ -52,15 +52,8 @@ public class CorrelationController : ControllerBase
 
             if (klines.Count < 3) continue;
 
-            var dailyReturns = new List<double>();
-            for (int i = 1; i < klines.Count; i++)
-            {
-                var prev = (double)klines[i - 1].Close;
-                var curr = (double)klines[i].Close;
-                if (prev > 0) dailyReturns.Add((curr - prev) / prev);
-            }
-
-            if (dailyReturns.Count >= 5)
+            var dailyReturns = CorrelationMath.DailyReturns(klines);
+            if (dailyReturns.Count >= CorrelationMath.MinimumOverlap)
                 returns[sym] = dailyReturns;
         }
 
@@ -73,7 +66,7 @@ public class CorrelationController : ControllerBase
             matrix[i] = new double[keys.Length];
             for (int j = 0; j < keys.Length; j++)
             {
-                matrix[i][j] = i == j ? 1.0 : Pearson(returns[keys[i]], returns[keys[j]]);
+                matrix[i][j] = i == j ? 1.0 : CorrelationMath.Pearson(returns[keys[i]], returns[keys[j]]);
             }
         }
 
@@ -82,23 +75,4 @@ public class CorrelationController : ControllerBase
 
     private static bool IsStablecoin(string asset) =>
         asset is "USD" or "USDT" or "USDC" or "USDQ" or "EUR" or "GBP" or "CAD" or "AUD" or "JPY" or "CHF";
-
-    private static double Pearson(List<double> xs, List<double> ys)
-    {
-        int n = Math.Min(xs.Count, ys.Count);
-        if (n < 3) return 0;
-        var xArr = xs.TakeLast(n).ToArray();
-        var yArr = ys.TakeLast(n).ToArray();
-        double xMean = xArr.Average(), yMean = yArr.Average();
-        double num = 0, denX = 0, denY = 0;
-        for (int i = 0; i < n; i++)
-        {
-            double dx = xArr[i] - xMean, dy = yArr[i] - yMean;
-            num += dx * dy;
-            denX += dx * dx;
-            denY += dy * dy;
-        }
-        double den = Math.Sqrt(denX * denY);
-        return den < 1e-10 ? 0 : Math.Round(num / den, 4);
-    }
 }

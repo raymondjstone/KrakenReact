@@ -41,6 +41,10 @@ public static class UkTime
             catch (TimeZoneNotFoundException) { }
             catch (InvalidTimeZoneException) { }
         }
+        // Reports would still run, but every trade near midnight during British Summer Time would land on the wrong UK day - and
+        // possibly in the wrong tax year or matching bucket - so this must not pass unnoticed
+        Serilog.Log.Warning("[Tax] No UK time zone found on this system (tried GMT Standard Time and Europe/London); falling back to UTC. " +
+                            "Tax reports may misplace trades made between 23:00 and midnight UTC in summer - install tzdata.");
         return TimeZoneInfo.Utc;
     }
 

@@ -522,16 +522,17 @@ function PortfolioMetrics() {
                 )}
                 {metricCard(
                   'Annualised Return',
-                  metrics.annualReturnPct !== null ? `${metrics.annualReturnPct >= 0 ? '+' : ''}${metrics.annualReturnPct.toFixed(1)}%` : '—',
+                  metrics.annualReturnPct != null ? `${metrics.annualReturnPct >= 0 ? '+' : ''}${metrics.annualReturnPct.toFixed(1)}%` : '—',
                   `from ${metrics.sampleDays} daily snapshots`,
                   retColor(metrics.annualReturnPct)
                 )}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, maxWidth: 540 }}>
                 <strong style={{ color: 'var(--text-primary)' }}>How these are calculated</strong><br />
-                Sharpe = annualised daily return ÷ daily return volatility (risk-free rate = 0).<br />
+                Sharpe = annualised (×√365) daily return ÷ daily return volatility (risk-free rate = 0), using only consecutive-day snapshots.<br />
                 Max drawdown = largest peak-to-trough decline in portfolio USD value.<br />
-                Annualised return = geometric extrapolation of the observed {metrics.sampleDays}-day return.
+                Annualised return = geometric extrapolation of the return over the {metrics.spanDays ?? metrics.sampleDays} days the history spans; shown only once it spans 90 days or more, because shorter spans make it meaningless.<br />
+                All three are computed from total portfolio value, so money paid in or taken out counts as gain or loss.
               </div>
             </>
           )}
