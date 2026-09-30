@@ -382,7 +382,6 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
   const hasError  = result.status === 'error';
   const isExpired = !refreshing && (Date.now() - parseUtc(result.computedAt)) > predictionExpiryMs(result.interval, 1);
   const pct = v => `${((v ?? 0) * 100).toFixed(1)}%`;
-  const intervalLabel = INTERVAL_LABELS[result.interval] || result.interval;
 
   // Re-render every minute so age label and expired flag stay current
   useEffect(() => {
@@ -414,7 +413,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
       const r = await api.get(`/predictions/multitf/${encodeURIComponent(result.symbol)}`);
       setMultiTfData(r.data || []);
       setShowMultiTf(true);
-    } catch {}
+    } catch { /* fall through to the background refresh below */ }
     // Trigger background job to refresh
     if (!multiTfRunning) {
       setMultiTfRunning(true);
@@ -425,7 +424,7 @@ function PredictionCard({ result, onSymbolClick, onRefreshDone, onDelete }) {
             try {
               const r = await api.get(`/predictions/multitf/${encodeURIComponent(result.symbol)}`);
               if (r.data?.length > 0) { setMultiTfData(r.data); }
-            } catch {}
+            } catch { /* transient — next poll retries */ }
           }, 5000);
           setTimeout(() => { clearInterval(poll); setMultiTfRunning(false); }, 300000);
         })
@@ -722,7 +721,7 @@ function accuracyColor(acc) {
   return 'var(--red)';
 }
 
-function ConfidenceSparkline({ symbol, currentProb, currentUp }) {
+function ConfidenceSparkline({ symbol }) {
   const [history, setHistory] = useState(null);
 
   useEffect(() => {

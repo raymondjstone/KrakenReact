@@ -75,37 +75,25 @@ export default function MicroTradePage() {
     }
   };
 
-  // One call per unique symbol across all rules; the server caches the underlying kline fetch, so
-  // polling this every 15s doesn't multiply into a Kraken REST call per poll.
+  // One request for every unique symbol across all rules (price + % changes + reference prices); the server
+  // caches the underlying kline fetch, so polling this every 15s doesn't hit Kraken per poll.
   const fetchChanges = useCallback((ruleList) => {
     const symbols = [...new Set(ruleList.map(r => r.symbol).filter(Boolean))];
-    Promise.all(symbols.map(sym =>
-      api.get(`/prices/quote/${encodeURIComponent(sym.replace('/', '-'))}`).then(r => [sym.toUpperCase(), r.data.price]).catch(() => [sym.toUpperCase(), null])
-    )).then(pairs => {
-      setPrices(prev => {
+    if (symbols.length === 0) return;
+    api.get(`/prices/market?symbols=${encodeURIComponent(symbols.join(','))}`).then(r => {
+      const data = r.data || {};
+      const merge = (pick) => prev => {
         const next = { ...prev };
-        pairs.forEach(([key, val]) => { if (val) next[key] = val; });
+        for (const [key, entry] of Object.entries(data)) {
+          const val = pick(entry);
+          if (val) next[key] = val;
+        }
         return next;
-      });
-    });
-    Promise.all(symbols.map(sym =>
-      api.get(`/prices/${encodeURIComponent(sym)}/changes`).then(r => [sym.toUpperCase(), r.data]).catch(() => [sym.toUpperCase(), null])
-    )).then(pairs => {
-      setChanges(prev => {
-        const next = { ...prev };
-        pairs.forEach(([key, val]) => { if (val) next[key] = val; });
-        return next;
-      });
-    });
-    Promise.all(symbols.map(sym =>
-      api.get(`/prices/${encodeURIComponent(sym)}/references`).then(r => [sym.toUpperCase(), r.data]).catch(() => [sym.toUpperCase(), null])
-    )).then(pairs => {
-      setReferences(prev => {
-        const next = { ...prev };
-        pairs.forEach(([key, val]) => { if (val) next[key] = val; });
-        return next;
-      });
-    });
+      };
+      setPrices(merge(e => e.price));
+      setChanges(merge(e => e.changes));
+      setReferences(merge(e => e.references));
+    }).catch(() => {});
   }, []);
 
   const fetchAll = useCallback(() => {

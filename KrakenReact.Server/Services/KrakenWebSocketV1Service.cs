@@ -23,6 +23,12 @@ public class KrakenWebSocketV1Service : BackgroundService
     private volatile bool _ordersDirty;
     private string? _currentBookPair;
 
+    private static readonly JsonSerializerOptions TickerJsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private const int TickerBroadcastMinMs = 500;
+    private const int AutoCheckMinMs = 30_000;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _lastTickBroadcastMs = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _lastAutoCheckMs = new();
+
     public KrakenWebSocketV1Service(TradingStateService state, AutoOrderService autoOrder, NotificationService notifications, IHubContext<TradingHub> hub, ILogger<KrakenWebSocketV1Service> logger)
     {
         _state = state;
@@ -197,13 +203,15 @@ public class KrakenWebSocketV1Service : BackgroundService
     {
         if (string.IsNullOrEmpty(message)) return;
 
-        // Skip non-array messages (system/control messages)
+        // Skip non-array messages (system/control messages). Parsed once; the ticker path reuses this document.
+        JsonDocument doc;
         try
         {
-            using var doc = JsonDocument.Parse(message);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return;
+            doc = JsonDocument.Parse(message);
         }
         catch { return; }
+        using var docScope = doc;
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return;
 
         // Process order book messages
         if (message.Contains("\"book-"))
@@ -257,12 +265,12 @@ public class KrakenWebSocketV1Service : BackgroundService
 
         try
         {
-            var elements = JsonSerializer.Deserialize<List<object>>(message);
-            if (elements == null || elements.Count < 4) return;
+            var root = doc.RootElement;
+            if (root.GetArrayLength() < 4) return;
 
-            var tickerData = JsonSerializer.Deserialize<TickerRawData>(elements[1].ToString()!, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            var channelName = elements[2].ToString();
-            var pair = elements[3].ToString();
+            var tickerData = root[1].Deserialize<TickerRawData>(TickerJsonOptions);
+            var channelName = root[2].GetString();
+            var pair = root[3].GetString();
 
             if (channelName != "ticker" || tickerData == null || pair == null) return;
 
@@ -285,7 +293,7 @@ public class KrakenWebSocketV1Service : BackgroundService
                 Key = $"{pair}_{now.Ticks}"
             };
 
-            priceItem.AddKline(kline);
+            priceItem.SetLiveKline(kline);
 
             // Mutate the existing TickerData in place rather than replacing it outright — this V1
             // feed has no 24h-change fields of its own (Kraken's legacy ticker payload doesn't carry
@@ -304,9 +312,13 @@ public class KrakenWebSocketV1Service : BackgroundService
             priceItem.TickerData.VolumeWeightedAvgPrice = tickerData.p?.FirstOrDefault() ?? 0;
             priceItem.TickerData.TradeCount = tickerData.t?.FirstOrDefault() ?? 0;
 
-            // Push to SignalR clients
+            // Push to SignalR clients — at most one TickerUpdate per pair per TickerBroadcastMinMs
+            var nowMs = Environment.TickCount64;
+            var lastMs = _lastTickBroadcastMs.GetOrAdd(pair, 0L);
+            var broadcast = nowMs - lastMs >= TickerBroadcastMinMs;
+            if (broadcast) _lastTickBroadcastMs[pair] = nowMs;
             var latest = priceItem.LatestKline;
-            _ = _hub.Clients.All.SendAsync("TickerUpdate", new
+            if (broadcast) _ = _hub.Clients.All.SendAsync("TickerUpdate", new
             {
                 symbol = pair,
                 closePrice = latest?.Close,
@@ -319,17 +331,22 @@ public class KrakenWebSocketV1Service : BackgroundService
                 bestBid = tickerData.b?.FirstOrDefault()
             }).ContinueWith(t => { if (t.IsFaulted) _logger.LogWarning(t.Exception, "[WS V1] TickerUpdate broadcast failed"); }, TaskContinuationOptions.OnlyOnFaulted);
 
-            // Run auto-order check
-            _ = Task.Run(async () =>
+            // Run auto-order check — it copies the kline history several times, so cap it per pair
+            var lastAutoMs = _lastAutoCheckMs.GetOrAdd(pair, 0L);
+            if (nowMs - lastAutoMs >= AutoCheckMinMs)
             {
-                try
+                _lastAutoCheckMs[pair] = nowMs;
+                _ = Task.Run(async () =>
                 {
-                    var result = await _autoOrder.CheckAsync(priceItem, "Default Rule");
-                    _state.AutoOrders[result.Symbol] = result;
-                    await _hub.Clients.All.SendAsync("AutoTradeUpdate", result);
-                }
-                catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] Auto-order check failed for {Symbol}", pair); }
-            });
+                    try
+                    {
+                        var result = await _autoOrder.CheckAsync(priceItem, "Default Rule");
+                        _state.AutoOrders[result.Symbol] = result;
+                        await _hub.Clients.All.SendAsync("AutoTradeUpdate", result);
+                    }
+                    catch (Exception ex) { _logger.LogWarning(ex, "[WS V1] Auto-order check failed for {Symbol}", pair); }
+                });
+            }
 
             // Update order distances in memory
             var tickerBase = TradingStateService.NormalizeAsset(priceItem.Base);
@@ -349,21 +366,29 @@ public class KrakenWebSocketV1Service : BackgroundService
                     _ordersDirty = true;
 
                     // Pushover notification when order is within configured threshold of current price
+                    var absDistance = Math.Abs(order.DistancePercentage);
                     if (_state.OrderProximityNotifications
-                        && Math.Abs(order.DistancePercentage) < _state.OrderProximityThreshold
-                        && !_state.HasNotified(order.Id))
+                        && absDistance < _state.OrderProximityThreshold
+                        && _state.TryMarkProximityAlerted(order.Id))
                     {
-                        _state.AddNotified(order.Id);
                         _ = _notifications.Pushover(
                             $"{order.Symbol} {tickerClose} is <{_state.OrderProximityThreshold}% from order price",
                             $"{order.Symbol} {order.Side} @{order.Price} near");
+                    }
+                    else if (absDistance >= _state.OrderProximityThreshold * 1.5m)
+                    {
+                        _state.ClearProximityAlerted(order.Id); // moved away — re-arm for the next approach
                     }
                 }
 
                 // Recalculate balance values with updated price
                 var usdGbpRate = _state.GetUsdGbpRate();
+                // Only balances of the asset that just ticked can have changed — re-pricing every balance on
+                // every tick was O(balances x symbols).
+                var changedAny = false;
                 foreach (var balance in _state.Balances.Values)
                 {
+                    if (TradingStateService.NormalizeAsset(balance.Asset) != tickerBase) continue;
                     var latestPrice = _state.LatestPrice(balance.Asset);
                     if (latestPrice != null)
                     {
@@ -371,11 +396,12 @@ public class KrakenWebSocketV1Service : BackgroundService
                         balance.LatestValue = Math.Round(balance.Total * latestPrice.Close, 2);
                         balance.LatestValueGbp = usdGbpRate > 0 ? Math.Round(balance.LatestValue * usdGbpRate, 2) : 0;
                         _balancesDirty = true;
+                        changedAny = true;
                     }
                 }
 
                 // Recalculate portfolio percentages
-                var totalPortfolioValue = _state.Balances.Values.Sum(b => b.LatestValue);
+                var totalPortfolioValue = changedAny ? _state.Balances.Values.Sum(b => b.LatestValue) : 0m;
                 if (totalPortfolioValue > 0)
                 {
                     foreach (var balance in _state.Balances.Values)

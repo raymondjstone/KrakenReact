@@ -17,8 +17,7 @@ public class KrakenRestService
 
     private const int MAX_RECORDS_RETURNED_PER_CALL = 50;
     private const int MAX_RECORDS_WANTED = 3501;
-    private DateTime _lastUnauthCall = DateTime.Now;
-    private int _sleep = 0;
+    private DateTime _lastUnauthCall = DateTime.MinValue;
 
     private ApiCredentials? _creds;
     private KrakenRestClient? _authClient;
@@ -35,39 +34,52 @@ public class KrakenRestService
         _logger = logger;
     }
 
+    private readonly SemaphoreSlim _rateLimitLock = new(1, 1);
+
+    /// <summary>Spaces unauthenticated calls at least 1s apart. Serialized so concurrent callers queue up
+    /// rather than racing on the timestamp, and the timestamp is taken after any delay.</summary>
     private async Task RateLimitUnAuthenticatedCalls()
     {
-        var now = DateTime.Now;
-        if (now < _lastUnauthCall.AddSeconds(2))
-            await Task.Delay(1000);
-        _lastUnauthCall = now;
+        await _rateLimitLock.WaitAsync();
+        try
+        {
+            var wait = _lastUnauthCall.AddSeconds(1) - DateTime.UtcNow;
+            if (wait > TimeSpan.Zero) await Task.Delay(wait);
+            _lastUnauthCall = DateTime.UtcNow;
+        }
+        finally { _rateLimitLock.Release(); }
     }
 
-    private void ResetSleep() => _sleep = 2000;
-    private void MoreSleep() => _sleep += 2000;
+    private const int MaxErrorRetries = 8;
+    private const int MaxBackoffMs = 30000;
 
-    private async Task<bool> HandleErrors(CryptoExchange.Net.Objects.Error? error)
+    /// <summary>Decides whether a failed call should be retried. <paramref name="attempt"/> is per-call so
+    /// concurrent callers no longer share (and inflate) one back-off counter; gives up after MaxErrorRetries.</summary>
+    private async Task<bool> HandleErrors(CryptoExchange.Net.Objects.Error? error, int attempt)
     {
-        if (error?.Message == "EAPI:Rate limit exceeded")
+        if (attempt >= MaxErrorRetries)
         {
-            await Task.Delay(_sleep);
-            MoreSleep();
-            return true;
+            _logger.LogError("Giving up after {Attempts} retries: {Error}", attempt, error);
+            return false;
         }
-        if (error?.Message?.Contains("timed out") == true)
+        if (error?.Message == "EAPI:Rate limit exceeded" || error?.Message?.Contains("timed out") == true)
         {
-            MoreSleep();
-            await Task.Delay(_sleep);
-            MoreSleep();
+            await Task.Delay(Math.Min(2000 * (attempt + 1), MaxBackoffMs));
             return true;
         }
         _logger.LogError("Error fetching data: {Error}", error);
         return false;
     }
 
+    /// <summary>Forgets cached API credentials so the next call re-reads them (call after Settings saves keys).</summary>
+    public void InvalidateCredentials()
+    {
+        _creds = null;
+        _authClientWhen = DateTime.MinValue;
+    }
+
     public async Task<KrakenRestClient> AuthenticatedClient()
     {
-        ResetSleep();
         await _authLock.WaitAsync();
         try
         {
@@ -236,21 +248,24 @@ public class KrakenRestService
         var krakenClient = await AuthenticatedClient();
         var data = new Dictionary<string, KrakenLedgerEntry>(MAX_RECORDS_WANTED);
         int recs = MAX_RECORDS_RETURNED_PER_CALL;
+        int attempt = 0;
         while (recs >= MAX_RECORDS_RETURNED_PER_CALL && data.Count < MAX_RECORDS_WANTED)
         {
             var result = await krakenClient.SpotApi.Account.GetLedgerInfoAsync(null, null, null, starttime, null, data.Count);
             if (result.Success)
             {
+                attempt = 0;
                 recs = result.Data.Ledger.Count;
-                data = data.Concat(result.Data.Ledger).GroupBy(kvp => kvp.Key).ToDictionary(g => g.Key, g => g.Last().Value);
+                foreach (var kvp in result.Data.Ledger) data[kvp.Key] = kvp.Value;
             }
             else
             {
-                if (!(await HandleErrors(result.Error))) return dbItems;
+                if (!(await HandleErrors(result.Error, attempt++))) return dbItems;
                 recs = MAX_RECORDS_RETURNED_PER_CALL;
             }
         }
-        var newrecs = data.Values.Where(rec => !dbItems.Any(i => i.Id == rec.Id)).ToList();
+        var knownIds = dbItems.Select(i => i.Id).ToHashSet();
+        var newrecs = data.Values.Where(rec => !knownIds.Contains(rec.Id)).ToList();
         dbItems.AddRange(newrecs);
         if (newrecs.Any()) await _db.AddLedgersAsync(newrecs);
         return dbItems;
@@ -271,23 +286,15 @@ public class KrakenRestService
     {
         if (initialLoad) return new List<CombinedOrder>();
         var krakenClient = await AuthenticatedClient();
-        var data = new Dictionary<string, KrakenOrder>(MAX_RECORDS_WANTED);
-        int recs = MAX_RECORDS_RETURNED_PER_CALL;
-        while (recs >= MAX_RECORDS_RETURNED_PER_CALL && data.Count < MAX_RECORDS_WANTED)
+        // OpenOrders is not paginated: Kraken returns every open order in one response. (Looping while the
+        // count was >= 50 re-requested the same page forever once 50+ orders were open.)
+        for (var attempt = 0; ; attempt++)
         {
             var result = await krakenClient.SpotApi.Trading.GetOpenOrdersAsync();
             if (result.Success)
-            {
-                recs = result.Data.Open.Count;
-                data = data.Concat(result.Data.Open).GroupBy(kvp => kvp.Key).ToDictionary(g => g.Key, g => g.Last().Value);
-            }
-            else
-            {
-                if (!(await HandleErrors(result.Error))) return new List<CombinedOrder>();
-                recs = MAX_RECORDS_RETURNED_PER_CALL;
-            }
+                return result.Data.Open.Select(kv => new CombinedOrder(kv.Value)).ToList();
+            if (!(await HandleErrors(result.Error, attempt))) return new List<CombinedOrder>();
         }
-        return data.Values.Select(rec => new CombinedOrder(rec)).ToList();
     }
 
     public async Task<List<CombinedOrder>> GetClosedOrdersAsync(bool initialLoad)
@@ -298,24 +305,26 @@ public class KrakenRestService
         var krakenClient = await AuthenticatedClient();
         var data = new Dictionary<string, KrakenOrder>(MAX_RECORDS_WANTED);
         int recs = MAX_RECORDS_RETURNED_PER_CALL;
+        int attempt = 0;
         while (recs >= MAX_RECORDS_RETURNED_PER_CALL && data.Count < MAX_RECORDS_WANTED)
         {
             var result = await krakenClient.SpotApi.Trading.GetClosedOrdersAsync(null, null, null, data.Count);
             if (result.Success)
             {
+                attempt = 0;
                 recs = result.Data.Closed.Count;
-                data = data.Concat(result.Data.Closed).GroupBy(kvp => kvp.Key).ToDictionary(g => g.Key, g => g.Last().Value);
+                foreach (var kvp in result.Data.Closed) data[kvp.Key] = kvp.Value;
             }
             else
             {
-                if (!(await HandleErrors(result.Error))) return dbItems;
+                if (!(await HandleErrors(result.Error, attempt++))) return dbItems;
                 recs = MAX_RECORDS_RETURNED_PER_CALL;
             }
         }
         return data.Values.Select(rec => new CombinedOrder(rec)).ToList();
     }
 
-    public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string? clientOrderId = null, uint? userReference = null)
+    public async Task<WebCallResult<KrakenPlacedOrder>> PlaceOrderAsync(string symbol, OrderSide side, OrderType orderType, decimal qty, decimal price, string? clientOrderId = null, uint? userReference = null, bool postOnly = true)
     {
         // Round price to the symbol's required decimal precision
         if (price > 0)
@@ -339,7 +348,7 @@ public class KrakenRestService
         var result = await krakenClient.SpotApi.Trading.PlaceOrderAsync(
             symbol, side, orderType, qty, price,
             null, null, null, null, false, userReference, safeClientOrderId,
-            new List<OrderFlags> { OrderFlags.PostOnly },
+            postOnly ? new List<OrderFlags> { OrderFlags.PostOnly } : null,
             null, TimeInForce.GTC);
 
         if (!result.Success)
@@ -363,21 +372,24 @@ public class KrakenRestService
         var krakenClient = await AuthenticatedClient();
         var data = new Dictionary<string, KrakenUserTrade>(MAX_RECORDS_WANTED);
         int recs = MAX_RECORDS_RETURNED_PER_CALL;
+        int attempt = 0;
         while (recs >= MAX_RECORDS_RETURNED_PER_CALL && data.Count < MAX_RECORDS_WANTED)
         {
             var result = await krakenClient.SpotApi.Trading.GetUserTradesAsync(starttime, null, data.Count);
             if (result.Success)
             {
+                attempt = 0;
                 recs = result.Data.Trades.Count;
-                data = data.Concat(result.Data.Trades).GroupBy(kvp => kvp.Key).ToDictionary(g => g.Key, g => g.Last().Value);
+                foreach (var kvp in result.Data.Trades) data[kvp.Key] = kvp.Value;
             }
             else
             {
-                if (!(await HandleErrors(result.Error))) return dbItems;
+                if (!(await HandleErrors(result.Error, attempt++))) return dbItems;
                 recs = MAX_RECORDS_RETURNED_PER_CALL;
             }
         }
-        var newrecs = data.Values.Where(rec => !dbItems.Any(i => i.Id == rec.Id)).ToList();
+        var knownIds = dbItems.Select(i => i.Id).ToHashSet();
+        var newrecs = data.Values.Where(rec => !knownIds.Contains(rec.Id)).ToList();
         dbItems.AddRange(newrecs);
         if (newrecs.Any()) await _db.AddTradesAsync(newrecs);
         return dbItems;

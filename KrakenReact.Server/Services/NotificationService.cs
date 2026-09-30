@@ -10,6 +10,8 @@ public class NotificationService
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly ILogger<NotificationService> _logger;
     private const int MaxAlertLogRows = 500;
+    private const int PruneEvery = 20;
+    private int _insertsSincePrune;
 
     public NotificationService(DbMethods db, IDbContextFactory<KrakenDbContext> dbFactory, ILogger<NotificationService> logger)
     {
@@ -55,8 +57,14 @@ public class NotificationService
                 "INSERT INTO [AlertLogs] ([Title],[Text],[Type],[CreatedAt]) VALUES ({0},{1},{2},{3})",
                 title, text, type, DateTime.UtcNow);
 
-            await db.Database.ExecuteSqlRawAsync(
-                $"DELETE FROM [AlertLogs] WHERE [Id] NOT IN (SELECT TOP({MaxAlertLogRows}) [Id] FROM [AlertLogs] ORDER BY [CreatedAt] DESC)");
+            // Trim only every PruneEvery-th insert — the log is allowed to overshoot slightly, and this avoids a
+            // second statement (with a sort) on every single alert.
+            if (Interlocked.Increment(ref _insertsSincePrune) % PruneEvery == 0)
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    "DELETE FROM [AlertLogs] WHERE [Id] NOT IN (SELECT TOP({0}) [Id] FROM [AlertLogs] ORDER BY [CreatedAt] DESC)",
+                    MaxAlertLogRows);
+            }
         }
         catch (Exception ex)
         {

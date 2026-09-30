@@ -16,9 +16,14 @@ public class SettingsController : ControllerBase
     private readonly TradingStateService _state;
     private readonly IRecurringJobManager _jobManager;
     private readonly ILogger<SettingsController> _logger;
+    private readonly KrakenRestService _kraken;
+    private readonly DbMethods _dbMethods;
 
-    public SettingsController(KrakenDbContext db, TradingStateService state, IRecurringJobManager jobManager, ILogger<SettingsController> logger)
+    public SettingsController(KrakenDbContext db, TradingStateService state, IRecurringJobManager jobManager, ILogger<SettingsController> logger,
+        KrakenRestService kraken, DbMethods dbMethods)
     {
+        _kraken = kraken;
+        _dbMethods = dbMethods;
         _db = db;
         _state = state;
         _jobManager = jobManager;
@@ -49,7 +54,7 @@ public class SettingsController : ControllerBase
                 DefaultPairs = GetList("DefaultPairs"),
                 AssetNormalizations = await _db.AssetNormalizations.AsNoTracking()
                     .ToDictionaryAsync(a => a.KrakenName, a => a.NormalizedName),
-                KrakenApiKey = Get("KrakenApiKey") ?? "",
+                KrakenApiKey = Get("KrakenApiKey") is { } key ? MaskSecret(key) : "",
                 KrakenApiSecret = Get("KrakenApiSecret") is { } sec ? MaskSecret(sec) : "",
                 PushoverUserKey = Get("PushoverUserKey") is { } pu ? MaskSecret(pu) : "",
                 PushoverApiToken = Get("PushoverAppToken") is { } pt ? MaskSecret(pt) : "",
@@ -120,6 +125,10 @@ public class SettingsController : ControllerBase
             {
                 await SaveOrUpdateSetting("PushoverAppToken", request.PushoverApiToken, "Pushover App Token");
             }
+
+            // Credentials are cached in-process; drop the caches so changed keys apply without a restart
+            _kraken.InvalidateCredentials();
+            _dbMethods.InvalidatePushoverCredentials();
 
             // Save lists
             if (request.BaseCurrencies != null)

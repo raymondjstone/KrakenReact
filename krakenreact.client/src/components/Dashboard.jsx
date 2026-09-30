@@ -108,21 +108,33 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
     }, 60000);
 
     const conn = getConnection();
+    // Ticks arrive per trade across hundreds of pairs; applying each one as its own setState copied the whole
+    // tickers array every time. Buffer the latest tick per symbol and apply them all in one update every 250ms.
+    const pendingTicks = new Map();
     const tickerHandler = (data) => {
+      if (!data?.symbol) return;
+      const prev = pendingTicks.get(data.symbol);
+      pendingTicks.set(data.symbol, prev ? { ...prev, ...data } : data);
+    };
+    const flushTicks = setInterval(() => {
+      if (disposed || pendingTicks.size === 0) return;
+      const batch = new Map(pendingTicks);
+      pendingTicks.clear();
       setTickers(prev => {
-        const idx = prev.findIndex(p => p.symbol === data.symbol);
-        if (idx >= 0) {
-          const updated = [...prev];
-          const merged = { ...updated[idx] };
+        let updated = null;
+        for (let i = 0; i < prev.length; i++) {
+          const data = batch.get(prev[i].symbol);
+          if (!data) continue;
+          const merged = { ...prev[i] };
           for (const [key, value] of Object.entries(data)) {
             if (value != null) merged[key] = value;
           }
-          updated[idx] = merged;
-          return updated;
+          updated = updated || [...prev];
+          updated[i] = merged;
         }
-        return prev;
+        return updated || prev;
       });
-    };
+    }, 250);
     const balanceHandler = (data) => { if (!disposed) setBalances(data); };
     // OrderUpdate already fires alongside ExecutionUpdate — no REST call needed here
     const orderHandler = (data) => { if (!disposed) setOrders(data); };
@@ -134,6 +146,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
     return () => {
       disposed = true;
       clearInterval(refreshInterval);
+      clearInterval(flushTicks);
       conn.off('TickerUpdate', tickerHandler);
       conn.off('BalanceUpdate', balanceHandler);
       conn.off('OrderUpdate', orderHandler);

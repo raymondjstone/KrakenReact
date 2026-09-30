@@ -150,8 +150,11 @@ public class DbMethods
         return new AppCreds { id = efCreds.id, appkey = efCreds.appkey, appsecret = efCreds.appsecret };
     }
 
-    private AppCreds? _pushover;
+    private volatile AppCreds? _pushover;
     private readonly SemaphoreSlim _pushoverLock = new(1, 1);
+
+    /// <summary>Drops the cached Pushover credentials so the next notification re-reads them.</summary>
+    public void InvalidatePushoverCredentials() => _pushover = null;
     public async Task<AppCreds?> GetPushoverCredentialsAsync(string id = "Pushover")
     {
         if (_pushover != null) return _pushover;

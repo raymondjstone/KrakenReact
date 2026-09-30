@@ -88,7 +88,9 @@ public class AutoOrderService
         if (weekDayDiff < 2) { ao.Reason = $"{rulename} Week/Day difference under 2%"; return ao; }
 
         // Check symbol status
-        if (_state.Symbols.TryGetValue(instrument.Symbol + "/USD", out var symbolInfo))
+        // instrument.Symbol is already the pair ("XBT/USD"); appending "/USD" made this lookup never match,
+        // silently skipping the cancel-only / delisted / maintenance guards below.
+        if (_state.Symbols.TryGetValue(instrument.Symbol, out var symbolInfo))
         {
             if (symbolInfo.Status == SymbolStatus.CancelOnly) { ao.Reason = $"{rulename} Cancel only SELL IT!!!"; return ao; }
             if (symbolInfo.Status == SymbolStatus.Delisted) { ao.Reason = $"{rulename} Delisted SELL IT!!!"; return ao; }

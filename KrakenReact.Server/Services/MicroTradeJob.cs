@@ -164,8 +164,12 @@ public class MicroTradeJob
         if (changePct > -rule.DropPct)
         {
             rule.LastResult = $"No trigger — {intervalHours}h change {changePct:F2}% (need <= -{rule.DropPct}%)";
+            await CheckNearingBuyAsync(rule, intervalHours, changePct.Value);
             return;
         }
+
+        // Triggered — re-arm the nearing alert so it fires again next time the price approaches from above
+        _nearingNotified.TryRemove(rule.Id, out _);
 
         // Cooldown — no order on this pair (from any rule) within the last CooldownHours,
         // regardless of the window/max-orders limit below.
@@ -333,6 +337,36 @@ public class MicroTradeJob
         await PersistAsync(db, order, "buy");
     }
 
+    /// <summary>Rules already alerted as "nearing a buy"; re-armed once the change moves back out of the
+    /// proximity zone or the rule triggers. Static because Hangfire creates a new job instance per run.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, bool> _nearingNotified = new();
+
+    /// <summary>True when the change is still above the trigger (-dropPct) but within <paramref name="threshold"/>
+    /// percentage points of it.</summary>
+    internal static bool IsNearingBuy(decimal changePct, decimal dropPct, decimal threshold)
+    {
+        var distance = changePct + dropPct; // > 0 while not yet triggered
+        return distance > 0 && distance < threshold;
+    }
+
+    /// <summary>Sends a Pushover when the interval change is within the system-wide order proximity
+    /// threshold (percentage points) of the rule's drop trigger. Uses the same settings as order proximity alerts.</summary>
+    private async Task CheckNearingBuyAsync(MicroTradeRule rule, int intervalHours, decimal changePct)
+    {
+        var threshold = _state.OrderProximityThreshold;
+
+        if (!_state.OrderProximityNotifications || !IsNearingBuy(changePct, rule.DropPct, threshold))
+        {
+            _nearingNotified.TryRemove(rule.Id, out _);
+            return;
+        }
+
+        if (!_nearingNotified.TryAdd(rule.Id, true)) return;
+
+        await NotifySafe($"Micro Trade nearing buy — {rule.Symbol}",
+            $"{intervalHours}h change {changePct:F2}% is <{threshold}% from the -{rule.DropPct}% buy trigger");
+    }
+
     // ── Placement helpers ─────────────────────────────────────────────────────────────────────────
 
     private sealed record PlaceOutcome(bool Success, string? OrderId, string? Error, bool Unknown = false, bool Recovered = false);
@@ -341,7 +375,10 @@ public class MicroTradeJob
 
     /// <summary>Kraken API rejections carry a code such as "EOrder:Insufficient funds" — the order
     /// definitely does not exist. Anything else ("Request timed out", connection errors…) is ambiguous.</summary>
-    private static bool IsDefiniteRejection(string? message) =>
+    internal static bool IsPostOnlyRejection(string? message) =>
+        !string.IsNullOrEmpty(message) && message.Contains("post only", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsDefiniteRejection(string? message) =>
         !string.IsNullOrEmpty(message) && System.Text.RegularExpressions.Regex.IsMatch(message, @"\bE(Order|General|Service|Trade|Funding|Query|API|Auth)\w*:");
 
     /// <summary>
@@ -350,9 +387,9 @@ public class MicroTradeJob
     /// even though the response is lost. Not found twice in a row => genuinely not placed; Kraken unreachable =>
     /// Unknown (caller must keep a record and re-check, not retry blindly).
     /// </summary>
-    private async Task<PlaceOutcome> PlaceAndConfirmAsync(string symbol, OrderSide side, decimal qty, decimal price, uint userRef)
+    private async Task<PlaceOutcome> PlaceAndConfirmAsync(string symbol, OrderSide side, decimal qty, decimal price, uint userRef, bool postOnly = true)
     {
-        var result = await _kraken.PlaceOrderAsync(symbol, side, OrderType.Limit, qty, price, null, userRef);
+        var result = await _kraken.PlaceOrderAsync(symbol, side, OrderType.Limit, qty, price, null, userRef, postOnly);
         if (result.Success)
             return new PlaceOutcome(true, result.Data?.OrderIds?.FirstOrDefault(), null);
 
@@ -581,7 +618,7 @@ public class MicroTradeJob
     /// and retried. One userref is persisted BEFORE the first attempt so a sell that Kraken accepted but whose
     /// response/record was lost can be found again (see <see cref="TryAdoptExistingSellAsync"/>).
     /// </summary>
-    private async Task<(PlaceOutcome Outcome, decimal Quantity)> PlaceSellWithRetryAsync(KrakenDbContext db, MicroTradeOrder order, decimal quantity, decimal price)
+    private async Task<(PlaceOutcome Outcome, decimal Quantity)> PlaceSellWithRetryAsync(KrakenDbContext db, MicroTradeOrder order, decimal quantity, decimal price, bool postOnly = true)
     {
         var symbol = order.Symbol;
         var lotDecimals = GetLotDecimals(symbol);
@@ -604,8 +641,17 @@ public class MicroTradeJob
         PlaceOutcome outcome;
         for (var attempt = 1; ; attempt++)
         {
-            outcome = await PlaceAndConfirmAsync(symbol, OrderSide.Sell, qty, price, userRef);
+            outcome = await PlaceAndConfirmAsync(symbol, OrderSide.Sell, qty, price, userRef, postOnly);
             if (outcome.Success || outcome.Unknown || attempt >= MaxSellAttempts) return (outcome, qty);
+
+            // A post-only rejection means the price would cross the book — a quantity change can't fix that.
+            // Retry the same quantity as a normal limit order (it then fills immediately at >= our price).
+            if (postOnly && IsPostOnlyRejection(outcome.Error))
+            {
+                _logger.LogWarning("[MicroTrade] Sell of {Qty} {Symbol} rejected as post-only — retrying as a taker limit", qty, symbol);
+                postOnly = false;
+                continue;
+            }
 
             var shrunk = ShrinkQuantitySlightly(qty, lotDecimals);
             _logger.LogWarning("[MicroTrade] Sell of {Qty} {Symbol} failed ({Error}) — retrying with {Shrunk}",
@@ -621,7 +667,7 @@ public class MicroTradeJob
     /// value when trailing digits are zero, which never actually reduces precision and just burns
     /// retries). Once it's already at the pair's precision, one unit at that precision is subtracted
     /// instead, which is the right move for a small balance/ledger mismatch.</summary>
-    private static decimal ShrinkQuantitySlightly(decimal qty, int lotDecimals)
+    internal static decimal ShrinkQuantitySlightly(decimal qty, int lotDecimals)
     {
         var str = qty.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var dotIdx = str.IndexOf('.');
@@ -630,7 +676,7 @@ public class MicroTradeJob
         if (currentDecimals > lotDecimals)
             return FloorToDecimals(qty, lotDecimals);
 
-        var step = 1m / (decimal)Math.Pow(10, Math.Max(lotDecimals, 0));
+        var step = DecimalPow10(Math.Max(lotDecimals, 0)) is var f && f > 0 ? 1m / f : 0m;
         var shrunk = qty - step;
         return shrunk > 0 ? shrunk : 0;
     }
@@ -647,10 +693,18 @@ public class MicroTradeJob
         return sym?.PriceDecimals > 0 ? sym.PriceDecimals : 8;
     }
 
-    private static decimal FloorToDecimals(decimal value, int decimals)
+    /// <summary>Exact 10^n as a decimal (Math.Pow goes through double). Clamped to decimal's 28-digit range.</summary>
+    private static decimal DecimalPow10(int n)
+    {
+        var f = 1m;
+        for (var i = 0; i < Math.Min(n, 28); i++) f *= 10m;
+        return f;
+    }
+
+    internal static decimal FloorToDecimals(decimal value, int decimals)
     {
         if (decimals < 0) return value;
-        var factor = (decimal)Math.Pow(10, decimals);
+        var factor = DecimalPow10(decimals);
         return Math.Floor(value * factor) / factor;
     }
 
@@ -673,7 +727,8 @@ public class MicroTradeJob
                 if (cancelled)
                 {
                     var newSellPrice = Math.Round(currentPrice * 1.001m, GetPriceDecimals(order.Symbol));
-                    var (outcome, soldQty) = await PlaceSellWithRetryAsync(db, order, order.Quantity, newSellPrice);
+                    // Not post-only: a stop-loss must get out even if the market has already moved through the price
+                    var (outcome, soldQty) = await PlaceSellWithRetryAsync(db, order, order.Quantity, newSellPrice, postOnly: false);
                     order.StopLossTriggered = true;
 
                     if (outcome.Success)

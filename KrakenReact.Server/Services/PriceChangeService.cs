@@ -81,14 +81,26 @@ public class PriceChangeService
         return result;
     }
 
-    private static decimal? FindReferencePrice(List<KrakenKline> klines, int hours)
+    private static decimal? FindReferencePrice(List<KrakenKline> klines, int hours) =>
+        PriceAt(klines, DateTime.UtcNow.AddHours(-hours));
+
+    /// <summary>
+    /// Estimated price at <paramref name="target"/>: the hourly candle containing that moment, interpolated
+    /// linearly from its open (at OpenTime) to its close (an hour later). Using the candle's CLOSE outright — as
+    /// this did before — pointed at a moment up to an hour AFTER the target, so a "1h" change could really be
+    /// a 20-minute one.
+    /// </summary>
+    internal static decimal? PriceAt(List<KrakenKline> klines, DateTime target)
     {
-        var target = DateTime.UtcNow.AddHours(-hours);
-        var reference = klines
+        var candle = klines
             .Where(k => k.OpenTime <= target)
             .OrderByDescending(k => k.OpenTime)
             .FirstOrDefault();
-        return reference == null || reference.ClosePrice <= 0 ? null : reference.ClosePrice;
+        if (candle == null || candle.OpenPrice <= 0 || candle.ClosePrice <= 0) return null;
+
+        var elapsed = (decimal)(target - candle.OpenTime).TotalSeconds;
+        var frac = Math.Clamp(elapsed / 3600m, 0m, 1m);
+        return candle.OpenPrice + (candle.ClosePrice - candle.OpenPrice) * frac;
     }
 
     /// <summary>Returns % change for a single window. Prefer this over GetChangesAsync when only one is needed.</summary>
@@ -106,14 +118,10 @@ public class PriceChangeService
 
     private static decimal? ComputeChange(decimal currentPrice, List<KrakenKline> klines, int hours)
     {
-        var target = DateTime.UtcNow.AddHours(-hours);
-        var reference = klines
-            .Where(k => k.OpenTime <= target)
-            .OrderByDescending(k => k.OpenTime)
-            .FirstOrDefault();
-        if (reference == null || reference.ClosePrice <= 0) return null;
+        var reference = PriceAt(klines, DateTime.UtcNow.AddHours(-hours));
+        if (reference is not > 0) return null;
 
-        return Math.Round((currentPrice - reference.ClosePrice) / reference.ClosePrice * 100m, 4);
+        return Math.Round((currentPrice - reference.Value) / reference.Value * 100m, 4);
     }
 
     private async Task<List<KrakenKline>> GetHourlyKlinesAsync(string symbol)
@@ -132,10 +140,13 @@ public class PriceChangeService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[PriceChange] Failed to fetch hourly klines for {Symbol}", symbol);
-            return new List<KrakenKline>();
+            klines = new List<KrakenKline>();
         }
 
-        _klineCache[symbol] = (DateTime.UtcNow, klines);
+        // Cache failures/empty results too (briefly) so a struggling API isn't re-hit by every caller.
+        // Only a non-empty result gets the full TTL; empties are backdated so they expire after ~30s.
+        var cachedAt = klines.Count > 0 ? DateTime.UtcNow : DateTime.UtcNow - KlineCacheTtl + TimeSpan.FromSeconds(30);
+        _klineCache[symbol] = (cachedAt, klines);
         return klines;
     }
 

@@ -604,7 +604,7 @@ public class BackgroundTaskService : BackgroundService
         {
             var side = alert.AutoOrderSide == "Sell" ? OrderSide.Sell : OrderSide.Buy;
             var offsetFactor = 1m + (alert.AutoOrderOffsetPct / 100m);
-            var limitPrice = Math.Round(currentPrice * offsetFactor, 2);
+            var limitPrice = Math.Round(currentPrice * offsetFactor, 8); // PlaceOrderAsync rounds to the pair's PriceDecimals
             var qty = alert.AutoOrderQty;
 
             var sideLabel = alert.AutoOrderSide == "Sell" ? "Sell" : "Buy";

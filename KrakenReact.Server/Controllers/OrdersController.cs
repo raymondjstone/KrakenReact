@@ -38,6 +38,13 @@ public class OrdersController : ControllerBase
     [HttpPost]
     public async Task<ActionResult> Create([FromBody] CreateOrderRequest req)
     {
+        if (req == null || string.IsNullOrWhiteSpace(req.Symbol) || string.IsNullOrWhiteSpace(req.Side))
+            return BadRequest(new { error = "Symbol and side are required" });
+        if (req.Price <= 0 || req.Quantity <= 0)
+            return BadRequest(new { error = "Price and quantity must be positive" });
+        if (!req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) && !req.Side.Equals("Sell", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = "Side must be Buy or Sell" });
+
         var side = req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell;
         var clientOrderId = KrakenReact.Server.Utils.ClientOrderId.GenerateWithPrefix("UI");
         var result = await _kraken.PlaceOrderAsync(req.Symbol.Replace("/", ""), side, OrderType.Limit, req.Quantity, req.Price, clientOrderId);
@@ -73,10 +80,10 @@ public class OrdersController : ControllerBase
             foreach (var orderId in result.Data.OrderIds)
             {
                 var stopPrice = req.BracketStopPct.HasValue
-                    ? Math.Round(req.Price * (1 - req.BracketStopPct.Value / 100m), 2)
+                    ? Math.Round(req.Price * (1 - req.BracketStopPct.Value / 100m), 8) // exact pair precision applied at placement
                     : 0m;
                 var tpPrice = req.BracketTakeProfitPct.HasValue
-                    ? Math.Round(req.Price * (1 + req.BracketTakeProfitPct.Value / 100m), 2)
+                    ? Math.Round(req.Price * (1 + req.BracketTakeProfitPct.Value / 100m), 8)
                     : 0m;
 
                 if (stopPrice > 0 || tpPrice > 0)
@@ -188,8 +195,8 @@ public class OrdersController : ControllerBase
 
         for (int i = 0; i < req.Count; i++)
         {
-            var price = Math.Round(req.StartPrice + priceStep * i, 2);
-        var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"ladder{i}-");
+            var price = Math.Round(req.StartPrice + priceStep * i, 8); // PlaceOrderAsync rounds to the pair's PriceDecimals
+            var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"ladder{i}-");
             var result = await _kraken.PlaceOrderAsync(symbol, side, OrderType.Limit, qtyEach, price, clientId);
             if (result.Success)
                 placed.AddRange(result.Data.OrderIds ?? []);

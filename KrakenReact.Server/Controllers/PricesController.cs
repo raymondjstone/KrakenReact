@@ -43,22 +43,50 @@ public class PricesController : ControllerBase
         return Ok(await _priceChange.GetReferencePricesAsync(symbol));
     }
 
+    /// <summary>
+    /// Price, % changes and reference prices for many symbols in one call (comma-separated <c>symbols</c>,
+    /// e.g. <c>XBT/USD,ETH/USD</c>). Replaces three requests per symbol from the Micro Trade page's poll.
+    /// Result is keyed by the upper-cased symbol as requested; symbols with no data are omitted.
+    /// </summary>
+    [HttpGet("market")]
+    public async Task<ActionResult> GetMarket([FromQuery] string symbols)
+    {
+        var list = (symbols ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(100).ToList();
+
+        var entries = await Task.WhenAll(list.Select(async sym =>
+        {
+            var priceItem = TryResolvePrice(sym, out _);
+            var price = priceItem?.BestKline?.Close ?? 0m;
+            var changes = await _priceChange.GetChangesAsync(sym);
+            var references = await _priceChange.GetReferencePricesAsync(sym);
+            return (Key: sym.ToUpperInvariant(), Price: price > 0 ? price : (decimal?)null, Changes: changes, References: references);
+        }));
+
+        return Ok(entries.ToDictionary(e => e.Key, e => new { price = e.Price, changes = e.Changes, references = e.References }));
+    }
+
+    private PriceDataItem? TryResolvePrice(string pair, out string key)
+    {
+        key = _state.ResolveSymbolKey(pair);
+        if (_state.Prices.TryGetValue(key, out var p)) return p;
+
+        // Handles no-slash input like "SOLUSD" — extract base/quote then re-resolve
+        var noPunctuation = pair.Replace("/", "");
+        var baseAsset = _state.NormalizeOrderSymbolBase(noPunctuation);
+        var quoteAsset = _state.NormalizeOrderSymbolQuote(noPunctuation);
+        if (!string.IsNullOrEmpty(baseAsset) && !string.IsNullOrEmpty(quoteAsset))
+            key = _state.ResolveSymbolKey($"{baseAsset}/{quoteAsset}");
+        return _state.Prices.TryGetValue(key, out p) ? p : null;
+    }
+
     [HttpGet("quote/{pair}")]
     public ActionResult<object> GetQuote(string pair)
     {
         pair = Uri.UnescapeDataString(pair).Replace("-", "/");
-        var key = _state.ResolveSymbolKey(pair);
-        if (!_state.Prices.TryGetValue(key, out var p))
-        {
-            // Handles no-slash input like "SOLUSD" — extract base/quote then re-resolve
-            var noPunctuation = pair.Replace("/", "");
-            var baseAsset = _state.NormalizeOrderSymbolBase(noPunctuation);
-            var quoteAsset = _state.NormalizeOrderSymbolQuote(noPunctuation);
-            if (!string.IsNullOrEmpty(baseAsset) && !string.IsNullOrEmpty(quoteAsset))
-                key = _state.ResolveSymbolKey($"{baseAsset}/{quoteAsset}");
-            if (!_state.Prices.TryGetValue(key, out p))
-                return NotFound(new { error = $"Pair '{pair}' not found" });
-        }
+        var p = TryResolvePrice(pair, out var key);
+        if (p == null)
+            return NotFound(new { error = $"Pair '{pair}' not found" });
 
         var price = p.BestKline?.Close ?? 0m;
         if (price <= 0)

@@ -27,8 +27,14 @@ public class SettingsControllerTests : IDisposable
     }
     public void Dispose() => _db.Dispose();
 
-    private SettingsController NewCtrl() =>
-        new(_db, _state, _jobs.Object, new Mock<ILogger<SettingsController>>().Object);
+    private SettingsController NewCtrl()
+    {
+        // Neither collaborator touches the database during construction or in the paths these tests exercise
+        var dbMethods = new DbMethods(new Mock<IDbContextFactory<KrakenDbContext>>().Object,
+            new Mock<ILogger<DbMethods>>().Object, TestDiagnostics.Create());
+        var kraken = new KrakenRestService(dbMethods, _state, new Mock<ILogger<KrakenRestService>>().Object);
+        return new(_db, _state, _jobs.Object, new Mock<ILogger<SettingsController>>().Object, kraken, dbMethods);
+    }
 
     // ── MaskSecret (via reflection) ─────────────────────────────────────────
 

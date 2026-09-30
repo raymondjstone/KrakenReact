@@ -57,6 +57,32 @@ public class PriceDataItem
         KrakenNewPricesLoadedTime = DateTime.UtcNow;
     }
 
+    private DerivedKline? _liveKline;
+
+    /// <summary>
+    /// Records the latest live tick. Unlike <see cref="AddKline"/> this REPLACES the previous live tick rather
+    /// than appending, so a busy pair can't fill the 10,000-slot list with one-minute ticks and evict its
+    /// daily history (which broke Age, WeightedPrice and the auto-order "older than a year" check).
+    /// </summary>
+    public void SetLiveKline(DerivedKline kline)
+    {
+        if (kline == null) return;
+        lock (_klineLock)
+        {
+            if (_liveKline != null)
+            {
+                // Usually last, but a history merge can sort a newer bar after it — search from the end.
+                for (var i = _klineSnapshot.Count - 1; i >= 0 && i >= _klineSnapshot.Count - 5; i--)
+                    if (ReferenceEquals(_klineSnapshot[i], _liveKline)) { _klineSnapshot.RemoveAt(i); break; }
+            }
+            _klineSnapshot.Add(kline);
+            _liveKline = kline;
+            if (_klineSnapshot.Count > MaxKlines)
+                _klineSnapshot.RemoveRange(0, _klineSnapshot.Count - MaxKlines);
+        }
+        KrakenNewPricesLoadedTime = DateTime.UtcNow;
+    }
+
     public void AddKlineHistory(List<DerivedKline> klines)
     {
         if (!klines.Any()) return;
@@ -377,6 +403,31 @@ public class TradingStateService
                 _notifiedOrders.Clear();
             _notifiedOrders.Add(orderId);
         }
+    }
+
+    // Proximity alerts: atomic check-and-mark, FIFO eviction (no wholesale clear → no re-alert storm),
+    // and re-arming once the order has moved away from the price again.
+    private readonly HashSet<string> _proximityAlerted = new();
+    private readonly Queue<string> _proximityOrder = new();
+    private readonly object _proximityLock = new();
+
+    /// <summary>True exactly once per approach: marks the order alerted and returns true if it wasn't already.</summary>
+    public bool TryMarkProximityAlerted(string orderId)
+    {
+        lock (_proximityLock)
+        {
+            if (!_proximityAlerted.Add(orderId)) return false;
+            _proximityOrder.Enqueue(orderId);
+            while (_proximityOrder.Count > MaxNotifiedOrders)
+                _proximityAlerted.Remove(_proximityOrder.Dequeue());
+            return true;
+        }
+    }
+
+    /// <summary>Re-arms an order's proximity alert (call once it has moved back out of the zone).</summary>
+    public void ClearProximityAlerted(string orderId)
+    {
+        lock (_proximityLock) { _proximityAlerted.Remove(orderId); }
     }
 
     public DerivedKline? LatestPrice(string asset)
