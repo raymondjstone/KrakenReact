@@ -24,11 +24,26 @@ public class DcaController : ControllerBase
     public async Task<IActionResult> GetAll() =>
         Ok(await _db.DcaRules.AsNoTracking().OrderBy(r => r.Id).ToListAsync());
 
+    /// <summary>Rules for a DCA rule, applied to Create AND Update (Update used to accept an empty symbol, a zero amount, and any
+    /// text as the schedule — which the job scheduler then rejected after the rule was already saved).</summary>
+    internal static string? Validate(DcaRule rule)
+    {
+        if (string.IsNullOrWhiteSpace(rule.Symbol)) return "Symbol required";
+        if (rule.AmountUsd <= 0) return "AmountUsd must be positive";
+        if (!InputRules.IsValidCron(rule.CronExpression, out var cronError)) return cronError;
+        if (rule.ConditionalEnabled && rule.ConditionalMaPeriod is < 2 or > 400) return "The moving-average period must be between 2 and 400 days";
+        if (rule.AtrSizingEnabled && rule.AtrRiskUsd <= 0) return "AtrRiskUsd must be positive when ATR sizing is on";
+        if (rule.FearGreedEnabled && rule.FearGreedMaxIndex is < 0 or > 100) return "The Fear & Greed limit must be between 0 and 100";
+        return null;
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] DcaRule rule)
     {
-        if (string.IsNullOrWhiteSpace(rule.Symbol)) return BadRequest("Symbol required");
-        if (rule.AmountUsd <= 0) return BadRequest("AmountUsd must be positive");
+        var problem = Validate(rule);
+        if (problem != null) return BadRequest(problem);
+
+        rule.Symbol = rule.Symbol.Trim();
         rule.Id = 0;
         rule.CreatedAt = DateTime.UtcNow;
         rule.LastRunAt = null;
@@ -44,7 +59,11 @@ public class DcaController : ControllerBase
     {
         var rule = await _db.DcaRules.FindAsync(id);
         if (rule == null) return NotFound();
-        rule.Symbol = updated.Symbol;
+
+        var problem = Validate(updated);
+        if (problem != null) return BadRequest(problem);
+
+        rule.Symbol = updated.Symbol.Trim();
         rule.AmountUsd = updated.AmountUsd;
         rule.CronExpression = updated.CronExpression;
         rule.Active = updated.Active;
