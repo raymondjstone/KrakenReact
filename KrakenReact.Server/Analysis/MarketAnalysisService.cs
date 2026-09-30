@@ -50,6 +50,21 @@ public class MarketAnalysisService
     /// <summary>The symbols and intervals that have enough stored candles to analyse.</summary>
     public async Task<List<AnalysisSymbolOption>> ListAnalysableAsync(int minimumCandles, CancellationToken ct)
     {
+        // The aggregate below groups the whole kline table (tens of millions of rows once minute candles are
+        // collected) and is called every time the analysis page opens. The answer changes slowly, so reuse it briefly.
+        if (_analysableCache is { } cached && cached.MinimumCandles == minimumCandles && DateTime.UtcNow - cached.At < AnalysableCacheTtl)
+            return cached.Items;
+
+        var items = await LoadAnalysableAsync(minimumCandles, ct);
+        _analysableCache = (DateTime.UtcNow, minimumCandles, items);
+        return items;
+    }
+
+    private static readonly TimeSpan AnalysableCacheTtl = TimeSpan.FromMinutes(5);
+    private (DateTime At, int MinimumCandles, List<AnalysisSymbolOption> Items)? _analysableCache;
+
+    private async Task<List<AnalysisSymbolOption>> LoadAnalysableAsync(int minimumCandles, CancellationToken ct)
+    {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         var groups = await db.DerivedKlines
             .AsNoTracking()
