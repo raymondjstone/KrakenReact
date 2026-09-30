@@ -1,3 +1,4 @@
+using Hangfire;
 using Kraken.Net.Enums;
 using KrakenReact.Server.Data;
 using Microsoft.EntityFrameworkCore;
@@ -6,13 +7,18 @@ namespace KrakenReact.Server.Services;
 
 public class RebalanceJob
 {
+    /// <summary>Quote/cash assets. They can appear in a target list ("USD:30") as the share to leave uninvested, but there is
+    /// nothing to trade for them — they are simply what buys spend and sells produce.</summary>
+    private static readonly HashSet<string> CashAssets = new(StringComparer.OrdinalIgnoreCase)
+        { "USD", "USDT", "USDC", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF" };
+
     private readonly TradingStateService _state;
-    private readonly KrakenRestService _kraken;
-    private readonly NotificationService _notify;
+    private readonly IOrderGateway _kraken;
+    private readonly INotifier _notify;
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly ILogger<RebalanceJob> _logger;
 
-    public RebalanceJob(TradingStateService state, KrakenRestService kraken, NotificationService notify,
+    public RebalanceJob(TradingStateService state, IOrderGateway kraken, INotifier notify,
         IDbContextFactory<KrakenDbContext> dbFactory, ILogger<RebalanceJob> logger)
     {
         _state = state;
@@ -22,6 +28,10 @@ public class RebalanceJob
         _logger = logger;
     }
 
+    // No automatic retry: the orders are placed before the result is saved, so a retry after a failed save would rebalance a
+    // second time. The lock stops a scheduled run and a "run now" from overlapping and double-trading.
+    [AutomaticRetry(Attempts = 0)]
+    [DisableConcurrentExecution(timeoutInSeconds: 120)]
     public async Task ExecuteAsync(int scheduleId, CancellationToken ct = default)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
@@ -72,17 +82,49 @@ public class RebalanceJob
             }
 
             var errors = new List<string>();
-            foreach (var row in rows.Where(r => Math.Abs(r.DriftPct) >= schedule.DriftMinPct && r.Action != "HOLD"))
+            var cash = _state.Balances.TryGetValue("USD", out var usd) ? usd.Available : 0m;
+
+            // Sells first: they are what free the cash the buys spend
+            var toTrade = rows
+                .Where(r => Math.Abs(r.DriftPct) >= schedule.DriftMinPct && r.Action != "HOLD" && !CashAssets.Contains(r.Asset))
+                .OrderBy(r => r.Action == "SELL" ? 0 : 1);
+
+            foreach (var row in toTrade)
             {
                 var sym = FindSymbol(row.Asset);
                 if (sym == null) { errors.Add($"{row.Asset}: no symbol found"); continue; }
 
                 var side = row.Action == "BUY" ? OrderSide.Buy : OrderSide.Sell;
-                var qty = Math.Abs(row.DiffQty);
-                if (qty <= 0) continue;
-
                 var price = row.CurrentPrice;
                 if (price <= 0) continue;
+                var qty = Math.Abs(row.DiffQty);
+
+                if (side == OrderSide.Sell)
+                {
+                    // Can't sell coins that are already committed to other orders
+                    var available = _state.Balances.TryGetValue(row.Asset, out var held) ? held.Available : 0m;
+                    if (qty > available)
+                    {
+                        _logger.LogInformation("[Rebalance] {Asset}: selling {Available} rather than {Wanted} (the rest is in open orders)", row.Asset, available, qty);
+                        qty = available;
+                    }
+                }
+                else
+                {
+                    // Never spend more cash than is free
+                    var cost = qty * price;
+                    if (cost > cash)
+                    {
+                        qty = KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(cash / price, 8);
+                        _logger.LogInformation("[Rebalance] {Asset}: buying {Qty} rather than the full amount (only ${Cash:F2} free)", row.Asset, qty, cash);
+                    }
+                }
+
+                if (qty <= 0)
+                {
+                    errors.Add($"{row.Asset}: nothing available to {(side == OrderSide.Sell ? "sell" : "spend")}");
+                    continue;
+                }
 
                 var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"REB{scheduleId}_{row.Asset}_");
                 var result = await _kraken.PlaceOrderWithRecoveryAsync(sym, side, OrderType.Limit, qty, price, clientId, postOnly: false); // rebalancing wants the fill, not a resting order
@@ -90,6 +132,8 @@ public class RebalanceJob
                     errors.Add($"{row.Asset}: UNCONFIRMED ({result.Error}) — check Kraken");
                 else if (!result.Success)
                     errors.Add($"{row.Asset}: {result.Error}");
+                else if (side == OrderSide.Buy)
+                    cash -= qty * price;
             }
 
             schedule.LastRunResult = errors.Any()
@@ -104,7 +148,9 @@ public class RebalanceJob
         }
 
         schedule.LastRunAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
+        // Must not throw: the orders may already be on Kraken, and nothing should re-run them because the result couldn't be saved
+        try { await db.SaveChangesAsync(ct); }
+        catch (Exception ex) { _logger.LogCritical(ex, "[Rebalance] Could not record the result of schedule {Id}: {Result}", scheduleId, schedule.LastRunResult); }
     }
 
     private List<RebalanceRow> CalculateRebalance(string targets)
