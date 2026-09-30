@@ -8,6 +8,9 @@ namespace KrakenReact.Server.Services;
 
 public class ScheduledOrderJob
 {
+    /// <summary>How long a row may sit in "Placing" before it is assumed to have been orphaned by a crash.</summary>
+    private static readonly TimeSpan StalePlacing = TimeSpan.FromMinutes(5);
+
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
     private readonly KrakenRestService _kraken;
     private readonly TradingStateService _state;
@@ -50,7 +53,7 @@ public class ScheduledOrderJob
         try
         {
             pending = await db.ScheduledOrders
-                .Where(o => o.Status == "Pending" && o.ScheduledAt <= DateTime.UtcNow)
+                .Where(o => (o.Status == "Pending" && o.ScheduledAt <= DateTime.UtcNow) || o.Status == "Placing")
                 .ToListAsync(ct);
         }
         catch (Exception ex)
@@ -59,6 +62,20 @@ public class ScheduledOrderJob
             throw;
         }
 
+        if (pending.Count == 0) return;
+
+        // A row still "Placing" from an earlier run means the process stopped between sending the order and
+        // recording the result. It may well exist on Kraken, so it is never re-sent: flag it for a human.
+        foreach (var stale in pending.Where(o => o.Status == "Placing" && DateTime.UtcNow - (o.ExecutedAt ?? o.ScheduledAt) > StalePlacing).ToList())
+        {
+            stale.Status = "Unconfirmed";
+            stale.ExecutedAt = null;
+            stale.ErrorMessage = "Placement was interrupted before the result was recorded — check Kraken for this order before re-creating it";
+            _logger.LogError("[ScheduledOrders] Order {Id} was interrupted mid-placement — marked Unconfirmed", stale.Id);
+            await _notify.Pushover($"Scheduled Order Unconfirmed — {stale.Symbol}", stale.ErrorMessage);
+        }
+        pending = pending.Where(o => o.Status == "Pending").ToList();
+        await db.SaveChangesAsync(ct);
         if (pending.Count == 0) return;
 
         _logger.LogInformation("[ScheduledOrders] Processing {Count} pending order(s)", pending.Count);
@@ -76,6 +93,7 @@ public class ScheduledOrderJob
                     await _notify.Pushover(
                         $"DRY RUN — Scheduled {order.Side} {order.Symbol}",
                         $"Would place {order.Side} {order.Quantity} {order.Symbol} @ {order.Price:F4}");
+                    await db.SaveChangesAsync(ct);
                     continue;
                 }
 
@@ -83,8 +101,14 @@ public class ScheduledOrderJob
                     ? OrderSide.Sell
                     : OrderSide.Buy;
 
+                // Write-ahead: persist "Placing" BEFORE talking to Kraken. If the save after the order fails (or the
+                // process dies) the row is no longer "Pending", so the next tick cannot place the same order again.
+                order.Status = "Placing";
+                order.ExecutedAt = DateTime.UtcNow; // placing timestamp for the stale check; cleared unless it really executes
+                await db.SaveChangesAsync(ct);
+
                 var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"sched-{order.Id}-");
-                var result = await _kraken.PlaceOrderAsync(
+                var result = await _kraken.PlaceOrderWithRecoveryAsync(
                     order.Symbol, side, OrderType.Limit,
                     order.Quantity, order.Price, clientId);
 
@@ -96,12 +120,21 @@ public class ScheduledOrderJob
                         order.Id, order.Side, order.Symbol, order.Quantity, order.Price);
                     await _notify.Pushover(
                         $"Scheduled {order.Side} Executed — {order.Symbol}",
-                        $"{order.Side} {order.Quantity} {order.Symbol} @ {order.Price:F4} (order id: {result.Data?.OrderIds?.FirstOrDefault()})");
+                        $"{order.Side} {order.Quantity} {order.Symbol} @ {order.Price:F4} (order id: {result.OrderId})");
+                }
+                else if (result.Unknown)
+                {
+                    order.Status = "Unconfirmed";
+                    order.ExecutedAt = null;
+                    order.ErrorMessage = $"Could not confirm whether Kraken accepted the order ({result.Error}) — check Kraken before re-creating it";
+                    _logger.LogError("[ScheduledOrders] Order {Id} placement unconfirmed: {Error}", order.Id, result.Error);
+                    await _notify.Pushover($"Scheduled Order Unconfirmed — {order.Symbol}", order.ErrorMessage);
                 }
                 else
                 {
                     order.Status = "Failed";
-                    order.ErrorMessage = result.Error?.Message ?? "Unknown error";
+                    order.ExecutedAt = null;
+                    order.ErrorMessage = result.Error ?? "Unknown error";
                     _logger.LogError("[ScheduledOrders] Order {Id} failed: {Error}", order.Id, order.ErrorMessage);
                     await _notify.Pushover(
                         $"Scheduled Order Failed — {order.Symbol}",
@@ -110,12 +143,16 @@ public class ScheduledOrderJob
             }
             catch (Exception ex)
             {
-                order.Status = "Failed";
+                // The order may have reached Kraken before the exception, so this is not a definite failure
+                order.Status = order.Status == "Placing" ? "Unconfirmed" : "Failed";
+                order.ExecutedAt = null;
                 order.ErrorMessage = ex.Message;
                 _logger.LogError(ex, "[ScheduledOrders] Exception processing order {Id}", order.Id);
             }
-        }
 
-        await db.SaveChangesAsync(ct);
+            // Record each order as soon as it is done rather than once at the end of the batch
+            try { await db.SaveChangesAsync(ct); }
+            catch (Exception ex) { _logger.LogCritical(ex, "[ScheduledOrders] Could not record result for order {Id} ({Status})", order.Id, order.Status); }
+        }
     }
 }

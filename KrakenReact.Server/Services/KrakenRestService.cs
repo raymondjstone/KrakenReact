@@ -372,6 +372,42 @@ public class KrakenRestService
         return result;
     }
 
+    /// <summary>Outcome of <see cref="PlaceOrderWithRecoveryAsync"/>. <c>Unknown</c> means Kraken could not be asked, so the
+    /// order may or may not exist — the caller must record that and not blindly retry.</summary>
+    public sealed record PlacementResult(bool Success, string? OrderId, string? Error, bool Unknown = false, bool Recovered = false);
+
+    /// <summary>
+    /// Places a limit/market order tagged with a fresh userref. If the call fails ambiguously (timeout, dropped
+    /// connection) the order is often accepted anyway, so Kraken is asked for that userref before anything is called
+    /// a failure. Prevents a lost response turning into a second, duplicate order on the caller's retry.
+    /// </summary>
+    public async Task<PlacementResult> PlaceOrderWithRecoveryAsync(string symbol, OrderSide side, OrderType orderType,
+        decimal qty, decimal price, string? clientOrderId = null, bool postOnly = true)
+    {
+        var userRef = (uint)Random.Shared.Next(1, int.MaxValue);
+        var result = await PlaceOrderAsync(symbol, side, orderType, qty, price, clientOrderId, userRef, postOnly);
+        if (result.Success)
+            return new PlacementResult(true, result.Data?.OrderIds?.FirstOrDefault(), null);
+
+        var error = result.Error?.Message;
+        if (MicroTradeJob.IsDefiniteRejection(error))
+            return new PlacementResult(false, null, error);
+
+        _logger.LogWarning("Placement of {Side} {Symbol} failed ambiguously ({Error}) — checking Kraken for userref {UserRef}", side, symbol, error, userRef);
+        var notFoundChecks = 0;
+        foreach (var delayMs in new[] { 3000, 6000 })
+        {
+            await Task.Delay(delayMs);
+            var (isChecked, found) = await FindOrderByUserRefAsync(userRef);
+            if (found != null) return new PlacementResult(true, found.Id, null, Recovered: true);
+            if (isChecked) notFoundChecks++;
+        }
+
+        return notFoundChecks >= 2
+            ? new PlacementResult(false, null, error)
+            : new PlacementResult(false, null, error, Unknown: true);
+    }
+
     public async Task<List<KrakenUserTrade>> GetTradesAsync(bool initialLoad)
     {
         var dbItems = (await _db.GetTradesAsync()).ToList();

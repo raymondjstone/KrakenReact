@@ -72,7 +72,9 @@ public class DcaJob
         return trs.TakeLast(period).Average();
     }
 
-    [AutomaticRetry(Attempts = 1)]
+    // No automatic retry: the order is placed before the result is saved, so a retry after a failed final save
+    // would buy a second time.
+    [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(int ruleId, CancellationToken ct)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
@@ -199,17 +201,23 @@ public class DcaJob
 
             var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"dca-{ruleId}-");
             // The buy is priced 0.2% above market so it fills promptly — that crosses the book, so it must not be post-only
-            var result = await _kraken.PlaceOrderAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, price, clientId, postOnly: false);
+            var result = await _kraken.PlaceOrderWithRecoveryAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, price, clientId, postOnly: false);
 
             if (result.Success)
             {
-                rule.LastRunResult = $"OK — {qty} @ {price} (orderId={result.Data?.OrderIds?.FirstOrDefault()})";
+                rule.LastRunResult = $"OK — {qty} @ {price} (orderId={result.OrderId})";
                 await _notify.Pushover($"DCA Buy {rule.Symbol}", $"Bought {qty} {rule.Symbol.Split('/')[0]} @ {price:F2} USD (${rule.AmountUsd:F2} DCA)");
+            }
+            else if (result.Unknown)
+            {
+                rule.LastRunResult = $"UNCONFIRMED — {result.Error}; check Kraken before assuming it did not buy";
+                _logger.LogError("[DCA] Order placement unconfirmed for rule {Id}: {Error}", ruleId, result.Error);
+                await _notify.Pushover($"DCA Unconfirmed {rule.Symbol}", rule.LastRunResult);
             }
             else
             {
-                rule.LastRunResult = $"Error: {result.Error?.Message}";
-                _logger.LogError("[DCA] Order failed for rule {Id}: {Error}", ruleId, result.Error?.Message);
+                rule.LastRunResult = $"Error: {result.Error}";
+                _logger.LogError("[DCA] Order failed for rule {Id}: {Error}", ruleId, result.Error);
             }
         }
         catch (Exception ex)
@@ -219,6 +227,8 @@ public class DcaJob
         }
 
         rule.LastRunAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
+        // A failure here must not throw: the buy may already be on Kraken and nothing may re-run it
+        try { await db.SaveChangesAsync(ct); }
+        catch (Exception ex) { _logger.LogCritical(ex, "[DCA] Could not record the result of rule {Id}: {Result}", ruleId, rule.LastRunResult); }
     }
 }

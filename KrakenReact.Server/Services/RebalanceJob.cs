@@ -76,15 +76,17 @@ public class RebalanceJob
                 if (price <= 0) continue;
 
                 var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"REB{scheduleId}_{row.Asset}_");
-                var result = await _kraken.PlaceOrderAsync(sym, side, OrderType.Limit, qty, price, clientId, postOnly: false); // rebalancing wants the fill, not a resting order
-                if (!result.Success)
-                    errors.Add($"{row.Asset}: {result.Error?.Message}");
+                var result = await _kraken.PlaceOrderWithRecoveryAsync(sym, side, OrderType.Limit, qty, price, clientId, postOnly: false); // rebalancing wants the fill, not a resting order
+                if (result.Unknown)
+                    errors.Add($"{row.Asset}: UNCONFIRMED ({result.Error}) — check Kraken");
+                else if (!result.Success)
+                    errors.Add($"{row.Asset}: {result.Error}");
             }
 
             schedule.LastRunResult = errors.Any()
                 ? $"Partial — errors: {string.Join("; ", errors)}"
                 : $"OK — rebalanced: {summary}";
-            await _notify.Pushover("Rebalance Executed", schedule.LastRunResult);
+            await _notify.Pushover(errors.Any() ? "Rebalance Partially Executed" : "Rebalance Executed", schedule.LastRunResult);
         }
         catch (Exception ex)
         {

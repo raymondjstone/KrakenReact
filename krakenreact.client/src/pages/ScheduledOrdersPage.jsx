@@ -11,6 +11,8 @@ const EMPTY_TWAP = {
 
 const STATUS_COLORS = {
   Pending: '#f59e0b',
+  Placing: '#f59e0b',
+  Unconfirmed: 'var(--red)',
   Executed: 'var(--green)',
   Failed: 'var(--red)',
   Cancelled: 'var(--text-muted)',
@@ -304,7 +306,7 @@ export default function ScheduledOrdersPage() {
 }
 
 function OrderRow({ order, onEdit, onCancel, onDelete }) {
-  const STATUS_COLORS = { Pending: '#f59e0b', Executed: 'var(--green)', Failed: 'var(--red)', Cancelled: 'var(--text-muted)' };
+  const STATUS_COLORS = { Pending: '#f59e0b', Placing: '#f59e0b', Unconfirmed: 'var(--red)', Executed: 'var(--green)', Failed: 'var(--red)', Cancelled: 'var(--text-muted)' };
   return (
     <div style={{
       background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
