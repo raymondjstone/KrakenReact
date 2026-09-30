@@ -216,8 +216,14 @@ public class DbMethods
             cached = read();
             if (cached is not null) return cached;
 
+            // Note the version first: if a sync invalidates the caches while this query is running, the rows it read may already be
+            // out of date, and caching them would keep them (and a matching ETag) until the next change. Serve them, but don't keep them.
+            var versionBefore = Volatile.Read(ref _transactionVersion);
             var loaded = await load();
-            write(loaded);
+            lock (_cacheSwap)   // check-and-store must not interleave with an invalidation
+            {
+                if (versionBefore == _transactionVersion) write(loaded);
+            }
             return loaded;
         }
         finally
@@ -230,15 +236,19 @@ public class DbMethods
     // endpoints returning those lists can answer "304 Not Modified" instead of rebuilding and resending them.
     private static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
     private int _transactionVersion;
+    private readonly object _cacheSwap = new();
     public string TransactionEtag => $"\"{InstanceId}-{Volatile.Read(ref _transactionVersion)}\"";
 
     /// <summary>Drops the cached copies, so the next read reloads from the database.</summary>
     public void InvalidateTransactionCaches()
     {
-        Interlocked.Increment(ref _transactionVersion);
-        _tradesCache = null;
-        _ledgersCache = null;
-        _combinedOrdersCache = null;
+        lock (_cacheSwap)
+        {
+            Interlocked.Increment(ref _transactionVersion);
+            _tradesCache = null;
+            _ledgersCache = null;
+            _combinedOrdersCache = null;
+        }
     }
 
     public Task<List<KrakenUserTrade>> GetTradesAsync() =>
