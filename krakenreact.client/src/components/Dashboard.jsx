@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import GridLayout, { WidthProvider } from 'react-grid-layout/legacy';
 import api from '../api/apiClient';
 import { getConnection } from '../api/signalRService';
+import { setVisibleInterval } from '../utils/visibleInterval';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry } from 'ag-grid-community';
 
@@ -102,7 +103,8 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
     loadBalances();
     api.get('/symbols').then(r => { if (!disposed) setSymbols(r.data.map(s => s.websocketName)); }).catch(() => {});
 
-    const refreshInterval = setInterval(() => {
+    // Balances also arrive by SignalR push, so the poll is only a safety net; it pauses while the tab is hidden
+    const refreshInterval = setVisibleInterval(() => {
       loadPrices();
       loadBalances();
     }, 60000);
@@ -145,7 +147,7 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
 
     return () => {
       disposed = true;
-      clearInterval(refreshInterval);
+      refreshInterval();
       clearInterval(flushTicks);
       conn.off('TickerUpdate', tickerHandler);
       conn.off('BalanceUpdate', balanceHandler);
@@ -158,19 +160,24 @@ export default function Dashboard({ config, pinnedSymbols, pinnedSet, onPin, onU
     localStorage.setItem('kraken_selected_pair', symbol);
   };
 
-  const heldAssets = new Set(balances.filter(b => b.total > 0).map(b => b.asset));
+  // These are rebuilt on every 250ms tick flush; memoize so the sorts run only when their inputs change
+  const heldAssets = useMemo(() => new Set(balances.filter(b => b.total > 0).map(b => b.asset)), [balances]);
 
-  // Sort pinned items by percentage (largest positive to largest negative)
-  const topTickers = (pinnedSymbols || [])
-    .map(sym => tickers.find(t => t.symbol === sym))
-    .filter(Boolean)
-    .sort((a, b) => (b.closePriceMovement || 0) - (a.closePriceMovement || 0));
+  // Pinned items sorted by percentage (largest positive to largest negative)
+  const topTickers = useMemo(() => {
+    const bySymbol = new Map(tickers.map(t => [t.symbol, t]));
+    return (pinnedSymbols || [])
+      .map(sym => bySymbol.get(sym))
+      .filter(Boolean)
+      .sort((a, b) => (b.closePriceMovement || 0) - (a.closePriceMovement || 0));
+  }, [tickers, pinnedSymbols]);
 
-  const tempPinned = tickers
+  const tempPinned = useMemo(() => tickers
     .filter(t => !pinnedSet.has(t.symbol) && t.closePriceMovement != null && Math.abs(t.closePriceMovement) >= largeMovementThreshold)
-    .sort((a, b) => Math.abs(b.closePriceMovement) - Math.abs(a.closePriceMovement));
+    .sort((a, b) => Math.abs(b.closePriceMovement) - Math.abs(a.closePriceMovement)),
+  [tickers, pinnedSet, largeMovementThreshold]);
 
-  const allSorted = [...tickers].sort((a, b) => (b.volume || 0) - (a.volume || 0));
+  const allSorted = useMemo(() => [...tickers].sort((a, b) => (b.volume || 0) - (a.volume || 0)), [tickers]);
 
   const loadOrders2 = () => api.get('/orders').then(r => setOrders(r.data)).catch(() => {});
 
