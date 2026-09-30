@@ -62,6 +62,9 @@ public class NotificationService : INotifier
                     Sound = sound
                 };
                 var result = await client.SendMessage(message);
+                if (!result.Status)
+                    _logger.LogWarning("Pushover rejected the message \"{Title}\": {Errors} - check the Pushover keys on the Settings page",
+                        title, result.Errors == null ? "no reason given" : string.Join("; ", result.Errors));
                 return result.Status;
             }
         }
