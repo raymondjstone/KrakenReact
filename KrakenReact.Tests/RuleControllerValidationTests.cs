@@ -303,3 +303,38 @@ public class LadderSideValidationTests
         Assert.IsType<BadRequestObjectResult>(result);   // it used to place up to 20 SELL orders
     }
 }
+
+public class OrderTemplateValidationTests : IDisposable
+{
+    private readonly KrakenDbContext _db = new(new DbContextOptionsBuilder<KrakenDbContext>().UseInMemoryDatabase($"tpl-{Guid.NewGuid()}").Options);
+    public void Dispose() => _db.Dispose();
+
+    private OrderTemplateController Ctrl() => new(_db);
+    private static OrderTemplate Good() => new() { Name = "Dip buy", Symbol = "XBT/USD", Side = "Buy", PriceOffsetPct = -2m, QtyPct = 10m };
+
+    [Fact]
+    public async Task TheSideIsNormalized()
+    {
+        var t = Good(); t.Side = "sell ";
+        var saved = (OrderTemplate)((OkObjectResult)await Ctrl().Create(t)).Value!;
+        Assert.Equal("Sell", saved.Side);
+    }
+
+    [Theory]
+    [InlineData("", "XBT/USD", "Buy", null, null)]
+    [InlineData("n", "", "Buy", null, null)]
+    [InlineData("n", "XBT/USD", "Hold", null, null)]
+    [InlineData("n", "XBT/USD", "Buy", -1.0, null)]      // quantity
+    [InlineData("n", "XBT/USD", "Buy", null, 0.0)]       // % of balance
+    [InlineData("n", "XBT/USD", "Buy", null, 250.0)]
+    public async Task Create_And_Update_RejectTheSameBadTemplates(string name, string symbol, string side, double? qty, double? qtyPct)
+    {
+        var ctrl = Ctrl();
+        var bad = new OrderTemplate { Name = name, Symbol = symbol, Side = side, Quantity = (decimal?)qty, QtyPct = (decimal?)qtyPct };
+        Assert.IsType<BadRequestObjectResult>(await ctrl.Create(bad));
+
+        var created = (OrderTemplate)((OkObjectResult)await ctrl.Create(Good())).Value!;
+        Assert.IsType<BadRequestObjectResult>(await ctrl.Update(created.Id, bad));
+        Assert.Equal("Dip buy", (await _db.OrderTemplates.AsNoTracking().SingleAsync()).Name);
+    }
+}
