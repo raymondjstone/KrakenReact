@@ -336,7 +336,9 @@ public class KrakenRestService
         {
             if (price > 0 && sym.PriceDecimals > 0)
                 price = Math.Round(price, sym.PriceDecimals);
-            if (sym.LotDecimals > 0)
+            // 0 is a real lot precision (whole-unit coins), but it is also what an unpopulated symbol row looks like;
+            // trust it only when the row has clearly been filled in (it has a price precision).
+            if (sym.LotDecimals > 0 || (sym.LotDecimals == 0 && sym.PriceDecimals > 0))
             {
                 var floored = KrakenReact.Server.Utils.DecimalMath.FloorToDecimals(qty, sym.LotDecimals);
                 if (floored > 0) qty = floored; // if flooring would zero it, let Kraken report the real problem
