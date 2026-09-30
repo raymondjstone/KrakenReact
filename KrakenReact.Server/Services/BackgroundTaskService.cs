@@ -207,7 +207,9 @@ public class BackgroundTaskService : BackgroundService
     {
         var old = priceItem.GetKlineSnapshot();
         // Load from DB first
-        if (!old.Any())
+        // Only DAILY bars count as loaded history: a live tick (or minute bar) arriving first must not stop the stored
+        // daily history and the delisted-CSV fallback from loading.
+        if (!old.Any(k => k.Interval == "OneDay"))
         {
             var dbKlines = await _db.GetKlineAsync(priceItem.Symbol);
             if (dbKlines.Any()) priceItem.AddKlineHistory(dbKlines);
@@ -225,7 +227,7 @@ public class BackgroundTaskService : BackgroundService
                 TaskContinuationOptions.OnlyOnFaulted);
             priceItem.AddKlineHistory(temp);
         }
-        else if (!old.Any())
+        else if (!old.Any(k => k.Interval == "OneDay"))
         {
             // Kraken API returned no data and we have nothing in DB — try delisted CSV fallback
             var pairNoSlash = cleanSymbol.Replace("/", "");

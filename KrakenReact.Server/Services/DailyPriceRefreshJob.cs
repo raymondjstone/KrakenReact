@@ -84,7 +84,7 @@ public class DailyPriceRefreshJob
     internal async Task LoadLatestPriceData(PriceDataItem priceItem)
     {
         var old = priceItem.GetKlineSnapshot();
-        if (!old.Any())
+        if (!old.Any(k => k.Interval == "OneDay"))
         {
             var dbKlines = await _db.GetKlineAsync(priceItem.Symbol);
             if (dbKlines.Any()) priceItem.AddKlineHistory(dbKlines);
@@ -103,7 +103,7 @@ public class DailyPriceRefreshJob
             _ = _db.AddKlineAsync(temp);
             priceItem.AddKlineHistory(temp);
         }
-        else if (!old.Any())
+        else if (!old.Any(k => k.Interval == "OneDay"))
         {
             var pairNoSlash = cleanSymbol.Replace("/", "");
             var csvKlines = _delisted.GetKlines(pairNoSlash, priceItem.Symbol);
