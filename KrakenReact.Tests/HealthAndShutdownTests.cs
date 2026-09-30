@@ -145,8 +145,52 @@ public class HealthControllerTests : IDisposable
 
 // ── ShutdownController ──────────────────────────────────────────────────────
 
+// The container tests below change a process-wide environment variable, so every test that touches the controller runs in one
+// collection (xUnit runs a collection's tests one at a time).
+[Collection("ShutdownEnvironment")]
 public class ShutdownControllerTests
 {
+    private const string ContainerVar = "DOTNET_RUNNING_IN_CONTAINER";
+
+    private static ShutdownController NewController()
+    {
+        var hub = new Mock<IHubContext<TradingHub>>();
+        var clients = new Mock<IHubClients>();
+        clients.Setup(c => c.All).Returns(new Mock<IClientProxy>().Object);
+        hub.Setup(h => h.Clients).Returns(clients.Object);
+        return new ShutdownController(new Mock<IHostApplicationLifetime>().Object, hub.Object, new Mock<ILogger<ShutdownController>>().Object);
+    }
+
+    private static T WithContainerVar<T>(string? value, Func<T> action)
+    {
+        var before = Environment.GetEnvironmentVariable(ContainerVar);
+        try { Environment.SetEnvironmentVariable(ContainerVar, value); return action(); }
+        finally { Environment.SetEnvironmentVariable(ContainerVar, before); }
+    }
+
+    [Fact]
+    public void InAContainer_ShutdownIsRefused_BecauseDockerWouldJustRestartIt()
+    {
+        var result = WithContainerVar("true", () => NewController().Shutdown());
+
+        var conflict = Assert.IsType<ConflictObjectResult>(result);
+        Assert.Contains("docker compose stop", System.Text.Json.JsonSerializer.Serialize(conflict.Value));
+    }
+
+    [Fact]
+    public void InAContainer_TheUiIsToldToHideTheButton()
+    {
+        var ok = Assert.IsType<OkObjectResult>(WithContainerVar("true", () => NewController().Availability()));
+        Assert.Contains("\"available\":false", System.Text.Json.JsonSerializer.Serialize(ok.Value));
+    }
+
+    [Fact]
+    public void OutsideAContainer_ShutdownIsAvailable()
+    {
+        var ok = Assert.IsType<OkObjectResult>(WithContainerVar<IActionResult>(null, () => NewController().Availability()));
+        Assert.Contains("\"available\":true", System.Text.Json.JsonSerializer.Serialize(ok.Value));
+    }
+
     [Fact]
     public void Shutdown_ReturnsOkAndDoesNotThrow()
     {
@@ -159,7 +203,7 @@ public class ShutdownControllerTests
         var log = new Mock<ILogger<ShutdownController>>();
 
         var ctrl = new ShutdownController(lifetime.Object, hub.Object, log.Object);
-        var ok = Assert.IsType<OkObjectResult>(ctrl.Shutdown());
+        var ok = Assert.IsType<OkObjectResult>(WithContainerVar<IActionResult>(null, () => ctrl.Shutdown()));
         Assert.NotNull(ok.Value);
     }
 }

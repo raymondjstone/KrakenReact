@@ -77,6 +77,8 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
   const [pinnedSymbols, setPinnedSymbols] = useState([]);
   const [appSettings, setAppSettings] = useState(loadSettings);
   const [serverSettings, setServerSettings] = useState(null);
+  // Shutdown is pointless (Docker would just restart the app), so the server says when to hide the button
+  const [canShutdown, setCanShutdown] = useState(true);
   const { toggleTheme, isDark } = useTheme();
 
   // Load server settings and pinned pairs from database on mount
@@ -87,6 +89,7 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
 
   useEffect(() => {
     loadServerSettings();
+    api.get('/shutdown').then(r => setCanShutdown(r.data?.available !== false)).catch(() => {});
     api.get('/settings/pinned-pairs')
       .then(r => setPinnedSymbols(r.data))
       .catch(() => setPinnedSymbols(['XBT/USD', 'ETH/USD', 'SOL/USD']));
@@ -216,9 +219,9 @@ export default function TabLayout({ totalValue, totalValueGbp }) {
           <button className="settings-btn" onClick={toggleTheme} title="Toggle light/dark mode">
             {isDark ? '\u2600' : '\u263E'}
           </button>
-          <button className="settings-btn" onClick={handleShutdown} title="Shutdown application" style={{ color: '#ef4444' }}>
+          {canShutdown && <button className="settings-btn" onClick={handleShutdown} title="Shutdown application" style={{ color: '#ef4444' }}>
             {'\u23FB'}
-          </button>
+          </button>}
           {activeTab === 'dashboard' && (
             <button className="settings-btn" onClick={() => setShowConfig(true)}>Layout</button>
           )}
