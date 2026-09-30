@@ -194,7 +194,7 @@ export default function MicroTradePage() {
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this micro trade rule? Order history is kept.')) return;
     try { await api.delete(`/microtrade/${id}`); fetchAll(); }
-    catch { flash('Delete failed'); }
+    catch (e) { flash(e?.response?.data?.message || 'Delete failed'); }
   };
 
   const handleTrigger = async (id) => {
@@ -207,7 +207,7 @@ export default function MicroTradePage() {
   const handleCancelOrder = async (id) => {
     if (!window.confirm('Cancel the open leg of this order?')) return;
     try { await api.post(`/microtrade/orders/${id}/cancel`); fetchAll(); }
-    catch { flash('Cancel failed'); }
+    catch (e) { flash(e?.response?.data?.message || 'Cancel failed'); }
   };
 
   const inputStyle = {

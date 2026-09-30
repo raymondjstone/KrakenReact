@@ -132,6 +132,14 @@ public class MicroTradeController : ControllerBase
     {
         var rule = await _db.MicroTradeRules.FindAsync(id);
         if (rule == null) return NotFound();
+
+        // Open positions take their sell target and stop-loss from the rule; deleting it would quietly swap those for
+        // defaults (10% rise, no stop). Make the user finish or cancel the positions first, or just deactivate the rule.
+        var hasOpenPositions = await _db.MicroTradeOrders.AnyAsync(o =>
+            o.RuleId == id && (o.Status == "Placing" || o.Status == "Buying" || o.Status == "Selling"));
+        if (hasOpenPositions)
+            return Conflict(new { message = "This rule still has open orders. Cancel them (or wait for them to finish) before deleting the rule — or untick Active to stop new buys." });
+
         _db.MicroTradeRules.Remove(rule);
         await _db.SaveChangesAsync();
         return NoContent();
@@ -163,7 +171,13 @@ public class MicroTradeController : ControllerBase
 
         var openOrderId = order.Status == "Buying" ? order.BuyOrderId : order.SellOrderId;
         if (!string.IsNullOrEmpty(openOrderId))
-            await _kraken.CancelOrderAsync(openOrderId);
+        {
+            // Only mark it cancelled if Kraken actually cancelled it. Ignoring a failure left a live order that the
+            // monitor no longer tracked — a buy could later fill and never get its sell.
+            var cancelled = await _kraken.CancelOrderAsync(openOrderId);
+            if (!cancelled)
+                return StatusCode(502, new { message = "Kraken did not confirm the cancellation (the order may already have filled or been cancelled). The record was left unchanged — it will update on the next check." });
+        }
 
         order.Status = "Cancelled";
         await _db.SaveChangesAsync();

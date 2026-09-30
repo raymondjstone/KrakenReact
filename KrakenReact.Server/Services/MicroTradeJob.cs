@@ -42,9 +42,27 @@ public class MicroTradeJob
         _sqlDiag = sqlDiag;
     }
 
+    /// <summary>
+    /// One process-wide lock over every entry point that can place orders. Hangfire's DisableConcurrentExecution is
+    /// per method, so the scheduled tick and a manual "trigger" (a different method) could run at once — as could two
+    /// quick clicks on trigger — and each could pass the rate-limit check before either recorded its order.
+    /// </summary>
+    private static readonly SemaphoreSlim RunLock = new(1, 1);
+
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 10)]
     public async Task ExecuteAsync(CancellationToken ct)
+    {
+        if (!await RunLock.WaitAsync(TimeSpan.FromSeconds(60), ct))
+        {
+            _logger.LogWarning("[MicroTrade] Skipping tick — another micro trade run is still in progress");
+            return;
+        }
+        try { await RunTickAsync(ct); }
+        finally { RunLock.Release(); }
+    }
+
+    private async Task RunTickAsync(CancellationToken ct)
     {
         if (_sqlDiag.RecentTimeout(SqlTimeoutDiagnostics.RecentTimeoutBackoff))
         {
@@ -83,6 +101,17 @@ public class MicroTradeJob
 
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteRuleAsync(int ruleId, CancellationToken ct)
+    {
+        if (!await RunLock.WaitAsync(TimeSpan.FromSeconds(60), ct))
+        {
+            _logger.LogWarning("[MicroTrade] Manual trigger for rule {Id} skipped — another run is still in progress", ruleId);
+            return;
+        }
+        try { await RunRuleAsync(ruleId, ct); }
+        finally { RunLock.Release(); }
+    }
+
+    private async Task RunRuleAsync(int ruleId, CancellationToken ct)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         var rule = await db.MicroTradeRules.FindAsync([ruleId], ct);
