@@ -38,6 +38,26 @@ public partial class TradingStateService
         order.OrderValue = order.Price * order.Quantity;
     }
 
+    private sealed record OrderPairEntry(string Symbol, bool SymbolsKnown, string Base, string Quote);
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<OrderDto, OrderPairEntry> _orderPairs = new();
+
+    /// <summary>
+    /// The normalized (base, quote) of an order's pair, remembered per order. Working it out scans every known symbol and
+    /// allocates strings for each, and the price feed asked for it for every open order on every tick - hundreds of ticks a second.
+    /// The answer is recomputed if the order's symbol changes, or if it was worked out before the symbol list had loaded (when only
+    /// a name heuristic was available). Not keyed on the list's size: counting a concurrent dictionary takes every lock.
+    /// </summary>
+    public (string Base, string Quote) OrderPair(OrderDto order)
+    {
+        var known = !Symbols.IsEmpty;
+        if (_orderPairs.TryGetValue(order, out var hit) && hit.Symbol == order.Symbol && (hit.SymbolsKnown || !known))
+            return (hit.Base, hit.Quote);
+
+        var made = new OrderPairEntry(order.Symbol, known, NormalizeOrderSymbolBase(order.Symbol), NormalizeOrderSymbolQuote(order.Symbol));
+        _orderPairs.AddOrUpdate(order, made);
+        return (made.Base, made.Quote);
+    }
+
     /// <summary>Recalculates all calculated fields for all orders in state</summary>
     public void RecalculateAllOrderFields()
     {

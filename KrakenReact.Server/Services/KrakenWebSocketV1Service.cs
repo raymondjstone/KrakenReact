@@ -358,8 +358,7 @@ public class KrakenWebSocketV1Service : BackgroundService
                 if (tickerClose <= 0) return;
                 foreach (var order in _state.Orders.Values.Where(o =>
                     TradingStateService.IsOpenOrderStatus(o.Status) &&
-                    _state.NormalizeOrderSymbolBase(o.Symbol) == tickerBase &&
-                    _state.NormalizeOrderSymbolQuote(o.Symbol) == tickerQuote))
+                    _state.OrderPair(o) is var (orderBase, orderQuote) && orderBase == tickerBase && orderQuote == tickerQuote))
                 {
                     order.LatestPrice = tickerClose;
                     order.Distance = order.Price - tickerClose;
