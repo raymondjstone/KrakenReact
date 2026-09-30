@@ -35,6 +35,36 @@ public class OrdersController : ControllerBase
         return Ok(_state.Orders.Values.OrderByDescending(o => o.CreateTime).ToList());
     }
 
+    /// <summary>The latest price for an order's symbol ("XBTUSD" or "XBT/USD"), or null if none is known.</summary>
+    private decimal? MarketPriceFor(string symbol)
+    {
+        var wsName = symbol.Contains('/')
+            ? symbol
+            : _state.Symbols.Keys.FirstOrDefault(k => k.Replace("/", "") == symbol) ?? symbol;
+        return _state.Prices.TryGetValue(_state.ResolveSymbolKey(wsName), out var item) ? item.BestKline?.Close : null;
+    }
+
+    /// <summary>
+    /// Refuses (422) an order priced far through the market unless the client has confirmed it. The response carries a
+    /// machine-readable code so the dialog can ask the user and resend. Returns null when the order may go ahead.
+    /// </summary>
+    private ActionResult? CheckPriceDeviation(string symbol, string side, decimal price, bool confirmed)
+    {
+        if (confirmed) return null;
+        var market = MarketPriceFor(symbol);
+        if (market == null || !OrderPriceGuard.IsSuspicious(side, price, market.Value)) return null;
+
+        var through = OrderPriceGuard.ThroughMarketPct(side, price, market.Value)!.Value;
+        var verb = side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? "above" : "below";
+        return StatusCode(422, new
+        {
+            code = "PRICE_DEVIATION",
+            error = $"This {side.ToLower()} is priced {through:F1}% {verb} the current market ({market.Value:0.########}), so it would fill immediately at that price.",
+            deviationPct = Math.Round(through, 2),
+            marketPrice = market.Value,
+        });
+    }
+
     [HttpPost]
     public async Task<ActionResult> Create([FromBody] CreateOrderRequest req)
     {
@@ -44,6 +74,9 @@ public class OrdersController : ControllerBase
             return BadRequest(new { error = "Price and quantity must be positive" });
         if (!req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) && !req.Side.Equals("Sell", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = "Side must be Buy or Sell" });
+
+        var deviation = CheckPriceDeviation(req.Symbol, req.Side, req.Price, req.ConfirmPriceDeviation);
+        if (deviation != null) return deviation;
 
         var side = req.Side.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell;
         var clientOrderId = KrakenReact.Server.Utils.ClientOrderId.GenerateWithPrefix("UI");
@@ -125,6 +158,9 @@ public class OrdersController : ControllerBase
         // Find the order to get symbol
         var order = _state.Orders.Values.FirstOrDefault(o => o.Id == id);
         if (order == null) return NotFound();
+
+        var deviation = CheckPriceDeviation(order.Symbol, order.Side, req.Price, req.ConfirmPriceDeviation);
+        if (deviation != null) return deviation;
 
         WebCallResult<KrakenEditOrder> orderResult;
         try

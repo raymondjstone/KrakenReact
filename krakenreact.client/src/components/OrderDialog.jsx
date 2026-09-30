@@ -240,15 +240,33 @@ export default function OrderDialog({ isOpen, onClose, editOrder, symbol: initia
     setError('');
     setSubmitting(true);
     try {
-      if (editOrder) {
-        await api.put('/orders/' + editOrder.id, { price: Number(price), quantity: Number(quantity) });
-      } else {
-        const payload = { symbol: symbol.replace('/', ''), side, price: Number(price), quantity: Number(quantity) };
-        if (bracketEnabled && side === 'Buy') {
-          if (Number(bracketStopPct) > 0) payload.bracketStopPct = Number(bracketStopPct);
-          if (Number(bracketTpPct) > 0) payload.bracketTakeProfitPct = Number(bracketTpPct);
+      const send = async (confirmPriceDeviation) => {
+        if (editOrder) {
+          await api.put('/orders/' + editOrder.id, { price: Number(price), quantity: Number(quantity), confirmPriceDeviation });
+        } else {
+          const payload = { symbol: symbol.replace('/', ''), side, price: Number(price), quantity: Number(quantity), confirmPriceDeviation };
+          if (bracketEnabled && side === 'Buy') {
+            if (Number(bracketStopPct) > 0) payload.bracketStopPct = Number(bracketStopPct);
+            if (Number(bracketTpPct) > 0) payload.bracketTakeProfitPct = Number(bracketTpPct);
+          }
+          await api.post('/orders', payload);
         }
-        await api.post('/orders', payload);
+      };
+
+      try {
+        await send(false);
+      } catch (firstErr) {
+        // The server refuses an order priced far through the market (it would fill at once at that price) until the user
+        // has confirmed it — a slipped decimal or a stale price on screen is exactly how that happens.
+        const data = firstErr.response?.data;
+        if (firstErr.response?.status === 422 && data?.code === 'PRICE_DEVIATION') {
+          if (!window.confirm(`${data.error}
+
+Place it anyway?`)) return; // finally re-enables the button
+          await send(true);
+        } else {
+          throw firstErr;
+        }
       }
       onClose(true);
     } catch (submitErr) {

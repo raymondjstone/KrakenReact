@@ -10,4 +10,6 @@ public class CreateOrderRequest
     public decimal? BracketStopPct { get; set; }
     public decimal? BracketTakeProfitPct { get; set; }
     public string? BracketNote { get; set; }
+    /// <summary>Set by the client after the user has confirmed an order priced well through the market (see OrderPriceGuard).</summary>
+    public bool ConfirmPriceDeviation { get; set; }
 }
