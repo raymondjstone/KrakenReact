@@ -43,3 +43,40 @@ public class SmartRepriceQuantityTests
         Assert.Equal(1.23m, SmartRepriceJob.ComputeRepriceQuantity(false, 1.239m, 5m, 5m, 2));
     }
 }
+
+public class ProtectionSettingsTests
+{
+    [Fact]
+    public void ParseExcludedAssets_NormalizesAndIgnoresCase()
+    {
+        var set = StopLossTakeProfitJob.ParseExcludedAssets(" btc , XXBT,eth.F ,");
+        Assert.Contains("BTC", set);
+        Assert.Contains("ETH", set);
+        Assert.Equal(2, set.Count); // XXBT and btc are the same asset once normalized
+    }
+
+    [Fact]
+    public void ParseExcludedAssets_EmptyOrNull_IsEmpty()
+    {
+        Assert.Empty(StopLossTakeProfitJob.ParseExcludedAssets(null));
+        Assert.Empty(StopLossTakeProfitJob.ParseExcludedAssets("  "));
+    }
+
+    [Fact]
+    public void TrailingHighs_RoundTrip()
+    {
+        var json = StopLossTakeProfitJob.SerializeTrailingHighs(new Dictionary<string, decimal> { ["SOL"] = 152.5m, ["BTC"] = 98000m });
+        var back = StopLossTakeProfitJob.ParseTrailingHighs(json);
+        Assert.Equal(152.5m, back["SOL"]);
+        Assert.Equal(98000m, back["BTC"]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    public void ParseTrailingHighs_BadInput_IsEmptyNotAnException(string? json)
+    {
+        Assert.Empty(StopLossTakeProfitJob.ParseTrailingHighs(json));
+    }
+}
