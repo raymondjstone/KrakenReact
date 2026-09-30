@@ -137,7 +137,7 @@ public class PriceDataItem
         {
             var min = MinKline;
             if (min == null) return "Unknown";
-            var t = DateTime.Now - min.OpenTime;
+            var t = DateTime.UtcNow - min.OpenTime; // OpenTime is UTC everywhere else; DateTime.Now skewed the age by the UTC offset
             if (t.TotalDays > 36500) return "Unknown";
             if (t.TotalDays > 365) return "Old";
             if (t.TotalDays > 180) return "SixMonths";

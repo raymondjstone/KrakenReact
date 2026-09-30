@@ -238,7 +238,7 @@ public class OrdersController : ControllerBase
         _ = Task.Run(async () =>
         {
             try { await _hub.Clients.All.SendAsync("OrderUpdate", _state.Orders.Values.ToList()); }
-            catch { }
+            catch (Exception ex) { Serilog.Log.Warning(ex, "OrderUpdate broadcast failed after closing {Asset}", asset); }
         });
 
         return Ok(new { message = $"Close order placed for {bal.Available} {asset}", orderIds = result.Data.OrderIds });

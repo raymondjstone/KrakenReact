@@ -475,7 +475,7 @@ public class KrakenWebSocketV2Service : BackgroundService
                             _ = Task.Run(async () =>
                             {
                                 try { await _notify.Pushover($"Order Filled — {side} {sym}", $"{qty} @ {price:F4}{plText}"); }
-                                catch { }
+                                catch (Exception ex) { _logger.LogWarning(ex, "[WS V2] Fill notification failed for {Symbol}", sym); }
                             });
                         }
                     }
