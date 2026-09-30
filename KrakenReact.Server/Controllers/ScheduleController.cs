@@ -48,7 +48,7 @@ public class ScheduleController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 
@@ -87,7 +87,7 @@ public class ScheduleController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 }

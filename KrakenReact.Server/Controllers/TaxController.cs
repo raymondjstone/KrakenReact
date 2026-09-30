@@ -1,4 +1,5 @@
-﻿using KrakenReact.Server.Tax;
+﻿using KrakenReact.Server.Services;
+using KrakenReact.Server.Tax;
 using Microsoft.AspNetCore.Mvc;
 
 namespace KrakenReact.Server.Controllers;
@@ -31,7 +32,7 @@ public class TaxController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 
@@ -70,7 +71,7 @@ public class TaxController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 
@@ -136,7 +137,7 @@ public class TaxController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 }

@@ -32,7 +32,7 @@ public class HealthController : ControllerBase
             dbOk = true;
             dbMsg = $"{count} settings rows";
         }
-        catch (Exception ex) { dbMsg = ex.Message; }
+        catch (Exception ex) { Serilog.Log.Warning(ex, "Health check (database) failed"); dbMsg = "Check failed - see the server log"; }
         checks.Add(new { name = "Database", ok = dbOk, detail = dbMsg });
 
         // 2. Symbols loaded
@@ -79,7 +79,7 @@ public class HealthController : ControllerBase
                 predMsg = $"{latestPred.Symbol} {ageH:F1}h ago";
             }
         }
-        catch (Exception ex) { predMsg = ex.Message; }
+        catch (Exception ex) { Serilog.Log.Warning(ex, "Health check (predictions) failed"); predMsg = "Check failed - see the server log"; }
         checks.Add(new { name = "ML Predictions", ok = predOk, detail = predMsg });
 
         // 6. Portfolio snapshots — latest snapshot within 26 hours
@@ -102,7 +102,7 @@ public class HealthController : ControllerBase
                 snapMsg = $"${latest.TotalUsd:N0} on {latest.Date:yyyy-MM-dd} ({ageH:F0}h ago)";
             }
         }
-        catch (Exception ex) { snapMsg = ex.Message; }
+        catch (Exception ex) { Serilog.Log.Warning(ex, "Health check (snapshots) failed"); snapMsg = "Check failed - see the server log"; }
         checks.Add(new { name = "Portfolio Snapshot", ok = snapOk, detail = snapMsg });
 
         // 7. Initial data load complete

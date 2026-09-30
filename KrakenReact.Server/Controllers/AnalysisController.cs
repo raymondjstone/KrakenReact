@@ -59,7 +59,7 @@ public class AnalysisController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 
@@ -95,7 +95,7 @@ public class AnalysisController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 
@@ -109,7 +109,7 @@ public class AnalysisController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 
@@ -161,7 +161,7 @@ public class AnalysisController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return this.ServerError(ex);
         }
     }
 }
