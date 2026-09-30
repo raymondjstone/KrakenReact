@@ -13,6 +13,25 @@ public class NotificationService : INotifier
     private const int PruneEvery = 20;
     private int _insertsSincePrune;
 
+    private readonly NotificationThrottle _throttle = new();
+    private Altairis.Pushover.Client.PushoverClient? _client;
+    private string? _clientToken;
+    private readonly object _clientLock = new();
+
+    /// <summary>One client reused across messages (a new one per message churns sockets in a burst); rebuilt if the token changes.</summary>
+    private Altairis.Pushover.Client.PushoverClient GetClient(string token)
+    {
+        lock (_clientLock)
+        {
+            if (_client == null || _clientToken != token)
+            {
+                _client = new Altairis.Pushover.Client.PushoverClient(token);
+                _clientToken = token;
+            }
+            return _client;
+        }
+    }
+
     public NotificationService(DbMethods db, IDbContextFactory<KrakenDbContext> dbFactory, ILogger<NotificationService> logger)
     {
         _db = db;
@@ -24,12 +43,19 @@ public class NotificationService : INotifier
     {
         await LogAlert(title, text, "info");
 
+        // Everything is kept in the in-app alert log above; only the phone push is throttled
+        if (!_throttle.ShouldSend(title, text))
+        {
+            _logger.LogInformation("Pushover suppressed (duplicate or rate limit): {Title}", title);
+            return false;
+        }
+
         try
         {
             var p = await _db.GetPushoverCredentialsAsync();
             if (p != null)
             {
-                var client = new Altairis.Pushover.Client.PushoverClient(p.appsecret);
+                var client = GetClient(p.appsecret);
                 var message = new Altairis.Pushover.Client.PushoverMessage(p.appkey, text)
                 {
                     Title = title,
