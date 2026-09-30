@@ -93,15 +93,16 @@ public class KrakenRestService : IOrderGateway
                 var appcreds = await _db.GetCredentialsAsync();
                 _creds = new ApiCredentials(appcreds!.appkey, appcreds.appsecret);
             }
-            if (_authClientWhen < DateTime.Now.AddHours(-1))
+            if (_authClientWhen < DateTime.UtcNow.AddHours(-1))
             {
-                _authClient?.Dispose();
+                // A call started on the old client may still be running: retire it after the longest request could have finished
+                _ = DeferredDisposal.DisposeAfter(_authClient, RequestTimeout + TimeSpan.FromSeconds(30));
                 _authClient = new KrakenRestClient(options =>
                 {
                     options.ApiCredentials = _creds;
                     options.RequestTimeout = RequestTimeout;
                 });
-                _authClientWhen = DateTime.Now;
+                _authClientWhen = DateTime.UtcNow;
             }
             return _authClient!;
         }
