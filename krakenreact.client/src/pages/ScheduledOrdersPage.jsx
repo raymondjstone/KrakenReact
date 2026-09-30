@@ -326,7 +326,7 @@ function OrderRow({ order, onEdit, onCancel, onDelete }) {
         <span style={{ fontSize: 12, fontWeight: 600, color: STATUS_COLORS[order.status] || 'var(--text-muted)' }}>{order.status}</span>
         {order.note && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{order.note}</span>}
         {order.errorMessage && <span style={{ fontSize: 11, color: 'var(--red)' }}>{order.errorMessage}</span>}
-        {order.executedAt && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Executed: {new Date(order.executedAt).toLocaleString()}</span>}
+        {order.status === 'Executed' && order.executedAt && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Executed: {new Date(order.executedAt).toLocaleString()}</span>}
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         {order.status === 'Pending' && onEdit && (
