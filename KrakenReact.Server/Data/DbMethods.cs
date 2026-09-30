@@ -226,9 +226,16 @@ public class DbMethods
         }
     }
 
+    // Bumped whenever trades/ledgers/closed orders change. Combined with a per-process id it forms an ETag, so
+    // endpoints returning those lists can answer "304 Not Modified" instead of rebuilding and resending them.
+    private static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
+    private int _transactionVersion;
+    public string TransactionEtag => $"\"{InstanceId}-{Volatile.Read(ref _transactionVersion)}\"";
+
     /// <summary>Drops the cached copies, so the next read reloads from the database.</summary>
     public void InvalidateTransactionCaches()
     {
+        Interlocked.Increment(ref _transactionVersion);
         _tradesCache = null;
         _ledgersCache = null;
         _combinedOrdersCache = null;
@@ -268,12 +275,14 @@ public class DbMethods
     public async Task AddTradesAsync(List<KrakenUserTrade> trades)
     {
         await UpsertListAsync(trades, t => t.Id);
+        Interlocked.Increment(ref _transactionVersion);
         _tradesCache = null;
     }
 
     public async Task AddLedgersAsync(List<KrakenLedgerEntry> list)
     {
         await UpsertListAsync(list, k => k.Id);
+        Interlocked.Increment(ref _transactionVersion);
         _ledgersCache = null;
     }
 

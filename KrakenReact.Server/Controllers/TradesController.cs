@@ -19,9 +19,25 @@ public class TradesController : ControllerBase
         _state = state;
     }
 
+    /// <summary>
+    /// Sets an ETag for the current trade/ledger data and reports whether the caller already has it. When true the
+    /// action can return 304 immediately — skipping both the rebuild and the large response body. Trades only change
+    /// when a fill is synced, but the pages ask for them again on every update notification.
+    /// </summary>
+    private bool NotModified(string variant = "")
+    {
+        var http = HttpContext;
+        if (http == null) return false; // not running inside a request (unit tests)
+        var etag = variant.Length == 0 ? _db.TransactionEtag : _db.TransactionEtag.TrimEnd('"') + "-" + variant + "\"";
+        http.Response.Headers.ETag = etag;
+        http.Response.Headers.CacheControl = "no-cache"; // cacheable, but must revalidate every time
+        return http.Request.Headers.IfNoneMatch.ToString() == etag;
+    }
+
     [HttpGet]
     public async Task<ActionResult<List<TradeDto>>> GetAll()
     {
+        if (NotModified()) return StatusCode(StatusCodes.Status304NotModified);
         var trades = await _db.GetTradesAsync();
         var ledgers = await _db.GetLedgersAsync();
         var ledgersByRef = ledgers.ToLookup(l => l.ReferenceId);
@@ -55,6 +71,7 @@ public class TradesController : ControllerBase
     [HttpGet("grouped")]
     public async Task<ActionResult<List<TradeDto>>> GetGrouped([FromQuery] string? symbol = null)
     {
+        if (NotModified("g" + (symbol ?? "").GetHashCode().ToString("x"))) return StatusCode(StatusCodes.Status304NotModified);
         var trades = await _db.GetTradesAsync();
         var ledgers = await _db.GetLedgersAsync();
         var ledgersByRef = ledgers.ToLookup(l => l.ReferenceId);
