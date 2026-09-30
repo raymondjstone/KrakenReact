@@ -1,7 +1,13 @@
 import axios from 'axios';
 
+// Sent on every request. The server refuses state-changing API calls without it, which is what stops another website
+// from driving the API through this browser (a cross-site page can't add a custom header without a CORS pre-flight,
+// and the server only approves that for this app's own origins).
+export const CLIENT_HEADERS = { 'X-Requested-With': 'KrakenReact' };
+
 const api = axios.create({
   baseURL: '/api',
+  headers: CLIENT_HEADERS,
   // Without a timeout a hung request (server busy, network dropped) leaves the UI waiting forever
   timeout: 30000,
 });

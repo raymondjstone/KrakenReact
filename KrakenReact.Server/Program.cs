@@ -186,8 +186,17 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+// Host allowlist (opt-in) against DNS rebinding; runs first so nothing else sees a request for an unknown host
+var allowedHosts = AllowedHostsMiddleware.Parse(builder.Configuration["Security:AllowedHosts"]);
+if (allowedHosts.Length > 0)
+    app.UseMiddleware<AllowedHostsMiddleware>((IEnumerable<string>)allowedHosts);
+else
+    Log.Warning("[Security] Security:AllowedHosts is not set — any Host name is accepted. Set it (e.g. Security__AllowedHosts=localhost,myserver) to block DNS-rebinding attacks.");
+
 app.UseResponseCompression();
 app.UseCors();
+// State-changing API calls must carry the app's own header (blocks cross-site request forgery; no login needed)
+app.UseMiddleware<RequireClientHeaderMiddleware>();
 
 // Hangfire dashboard — Authorization = [] allows access from Docker/reverse proxy (no localhost restriction)
 app.UseHangfireDashboard("/hangfire", new DashboardOptions

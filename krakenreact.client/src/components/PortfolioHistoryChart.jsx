@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CLIENT_HEADERS } from '../api/apiClient';
 
 export default function PortfolioHistoryChart({ data }) {
   const [mode, setMode] = useState('value'); // 'value' | 'pnl'
@@ -8,7 +9,7 @@ export default function PortfolioHistoryChart({ data }) {
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
         No snapshot history yet — a nightly snapshot runs at 23:55.
         <button
-          onClick={() => fetch('/api/portfolio/snapshot', { method: 'POST' })}
+          onClick={() => fetch('/api/portfolio/snapshot', { method: 'POST', headers: CLIENT_HEADERS })}
           style={{ marginLeft: 12, padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-input)', color: 'var(--text-primary)' }}
         >
           Take snapshot now

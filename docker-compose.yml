@@ -10,6 +10,9 @@ services:
       ConnectionStrings__EFDB: "${EFDB_CONNECTION_STRING:?Set EFDB_CONNECTION_STRING in a .env file next to this compose file (see DOCKER.md)}"
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_HTTP_PORTS: "4567"
+      # Optional but recommended: the host names you reach the app by, comma-separated (e.g. "localhost,myserver").
+      # Blocks DNS-rebinding attacks. Empty = accept any host.
+      Security__AllowedHosts: "${ALLOWED_HOSTS:-}"
     # The trading jobs and websocket feeds must come back after a crash or host reboot
     restart: unless-stopped
     # Give in-flight order placements time to finish and record before the container is killed
