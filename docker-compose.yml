@@ -6,6 +6,18 @@ services:
     ports:
       - "4567:4567"
     environment:
-      ConnectionStrings__EFDB: "${EFDB_CONNECTION_STRING}"
+      # Required: compose refuses to start with a clear message instead of booting an app that can't reach its database
+      ConnectionStrings__EFDB: "${EFDB_CONNECTION_STRING:?Set EFDB_CONNECTION_STRING in a .env file next to this compose file (see DOCKER.md)}"
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_HTTP_PORTS: "4567"
+    # The trading jobs and websocket feeds must come back after a crash or host reboot
+    restart: unless-stopped
+    # Give in-flight order placements time to finish and record before the container is killed
+    stop_grace_period: 30s
+    healthcheck:
+      # The aspnet image has no curl/wget; a TCP connect to the listening port is enough to detect a dead process
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/4567'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s

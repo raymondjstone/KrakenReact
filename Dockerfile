@@ -34,4 +34,8 @@ ENV ASPNETCORE_HTTP_PORTS=4567
 ENV ASPNETCORE_URLS=
 EXPOSE 4567
 
+# Run as the unprivileged 'app' user that the aspnet image provides, not root. The app only needs to read its own
+# files and bind a port above 1024.
+USER $APP_UID
+
 ENTRYPOINT ["dotnet", "KrakenReact.Server.dll"]

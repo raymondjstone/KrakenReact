@@ -1,58 +1,49 @@
 # Docker Support for KrakenReact
 
-You can build and run the KrakenReact stack using Docker for easier deployment and environment consistency.
+One image serves both the API and the built React frontend (a multi-stage build: Node builds the client, the .NET SDK
+builds the server, and the ASP.NET runtime image runs the result). It listens on **port 4567**.
 
 ## Prerequisites
-- [Docker](https://www.docker.com/products/docker-desktop) installed
-- (Optional) [Docker Compose](https://docs.docker.com/compose/) if using a multi-container setup
+- [Docker](https://www.docker.com/products/docker-desktop) with Compose
+- A reachable SQL Server database
 
-## Building and Running
+## Running with Compose
 
-### 1. Build the Docker Images
+1. Create a `.env` file next to `docker-compose.yml`:
 
-From the repository root:
+   ```
+   EFDB_CONNECTION_STRING=Server=YOURHOST;Database=Kraken;User Id=YOURUSER;Password=YOURPASSWORD;TrustServerCertificate=True;Max Pool Size=100;
+   ```
 
-```bash
-docker build -t krakenreact-server -f KrakenReact.Server/Dockerfile .
-docker build -t krakenreact-client -f krakenreact.client/Dockerfile .
-```
+   Compose refuses to start if this is missing.
 
-### 2. Run the Containers
+2. Build and start:
 
-You can run the containers individually:
+   ```bash
+   docker compose up --build -d
+   ```
 
-```bash
-docker run -d --name krakenreact-server -p 7247:7247 krakenreact-server
-# (Optional) If you want to run the client separately:
-docker run -d --name krakenreact-client -p 5173:5173 krakenreact-client
-```
+3. Open <http://localhost:4567>. Kraken and Pushover keys are entered in the app's Settings page.
 
-Or use Docker Compose (if you have a `docker-compose.yml`):
+## What the compose file sets up
+- **Restart policy** `unless-stopped`, so the trading jobs and websocket feeds resume after a crash or reboot.
+- **Health check**: a TCP connect to port 4567 every 30s (the runtime image has no curl).
+- **30s stop grace period**, so an in-flight order placement can finish and be recorded before shutdown.
+- The container runs as the unprivileged `app` user, not root.
 
-```bash
-docker-compose up --build
-```
-
-### 3. Environment Variables & Configuration
-- The backend expects a valid SQL Server connection string. You can provide this via environment variables or by mounting your `appsettings.Local.json`.
-- API keys and other settings can be set via the web UI after first launch.
-
-### 4. .dockerignore
-- The `.dockerignore` file ensures that build context does not include unnecessary files (node_modules, bin/obj, test projects, etc.) for faster and smaller builds.
-
-### 5. Updating Images
-- Rebuild the images after code changes:
+## Running the image directly
 
 ```bash
-docker build -t krakenreact-server -f KrakenReact.Server/Dockerfile .
-docker build -t krakenreact-client -f krakenreact.client/Dockerfile .
+docker build -t krakenreact .
+docker run -d --name krakenreact -p 4567:4567 \
+  -e "ConnectionStrings__EFDB=Server=...;Database=Kraken;..." \
+  --restart unless-stopped krakenreact
 ```
 
 ## Notes
-- Make sure your SQL Server instance is accessible from inside the container (network/firewall).
-- For production, you may want to use Docker secrets or environment variables for sensitive settings.
-- The client and server images can be deployed independently or together depending on your infrastructure.
-
----
-
-For more details, see the Dockerfiles in `KrakenReact.Server/` and `krakenreact.client/`.
+- The database must be reachable from inside the container (network/firewall). The schema is created and migrated
+  automatically on start.
+- **There is no login.** Anyone who can reach port 4567 can place and cancel orders and read settings, and the Hangfire
+  dashboard at `/hangfire` is writable. Keep the port on a trusted network or behind a reverse proxy that authenticates.
+- Prefer Docker secrets or an env file kept out of version control for the connection string.
+- `.dockerignore` keeps `node_modules`, `bin/obj` and test projects out of the build context.
