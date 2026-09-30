@@ -184,7 +184,15 @@ public class StopLossTakeProfitJob
         {
             if (FIAT.Contains(bal.Asset)) continue;
             if (excluded.Contains(TradingStateService.NormalizeAsset(bal.Asset))) continue;
-            if (bal.Available <= 0 || bal.LatestValue < 5m) continue;
+            // A high belongs to one position. Once the asset is no longer held (sold by hand, moved away) forget it, or
+            // a later re-buy at a lower price would look like an instant drop from the old high and be market-sold.
+            // Held is judged on the TOTAL balance: coins resting in a sell order are still the same position.
+            if (!IsPositionHeld(bal.Total, bal.LatestValue))
+            {
+                if (_state.TrailingHighPrices.TryRemove(bal.Asset, out _)) changed = true;
+                continue;
+            }
+            if (bal.Available <= 0) continue;
 
             var currentPrice = bal.LatestPrice;
             if (currentPrice <= 0) continue;
@@ -233,8 +241,16 @@ public class StopLossTakeProfitJob
             catch (Exception ex) { _logger.LogError(ex, "[TrailingStop] Error processing {Asset}", bal.Asset); }
         }
 
+        // Drop highs for assets that no longer have a balance entry at all
+        var heldAssets = _state.Balances.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var asset in _state.TrailingHighPrices.Keys.ToList())
+            if (!heldAssets.Contains(asset) && _state.TrailingHighPrices.TryRemove(asset, out _)) changed = true;
+
         if (changed) await SaveTrailingHighsAsync(ct);
     }
+
+    /// <summary>True while a balance is a real position (worth more than dust).</summary>
+    internal static bool IsPositionHeld(decimal total, decimal latestValueUsd) => total > 0 && latestValueUsd >= 5m;
 
     /// <summary>Restores the trailing-stop highs saved by an earlier run. Without this a restart reset every high to the
     /// current price, silently loosening the stop by however far the price had already fallen.</summary>

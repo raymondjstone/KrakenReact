@@ -80,3 +80,16 @@ public class ProtectionSettingsTests
         Assert.Empty(StopLossTakeProfitJob.ParseTrailingHighs(json));
     }
 }
+
+public class TrailingHighLifecycleTests
+{
+    [Theory]
+    [InlineData(1.5, 100, true)]
+    [InlineData(0, 100, false)]    // sold everything
+    [InlineData(0.001, 2, false)]  // dust
+    [InlineData(1, 5, true)]       // boundary counts as held
+    public void IsPositionHeld(double total, double valueUsd, bool expected)
+    {
+        Assert.Equal(expected, StopLossTakeProfitJob.IsPositionHeld((decimal)total, (decimal)valueUsd));
+    }
+}
