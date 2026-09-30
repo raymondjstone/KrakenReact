@@ -195,7 +195,8 @@ public class DcaJob
             }
 
             var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"dca-{ruleId}-");
-            var result = await _kraken.PlaceOrderAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, price, clientId);
+            // The buy is priced 0.2% above market so it fills promptly — that crosses the book, so it must not be post-only
+            var result = await _kraken.PlaceOrderAsync(rule.Symbol, OrderSide.Buy, OrderType.Limit, qty, price, clientId, postOnly: false);
 
             if (result.Success)
             {

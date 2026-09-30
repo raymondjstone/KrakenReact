@@ -348,7 +348,9 @@ public class KrakenRestService
         var result = await krakenClient.SpotApi.Trading.PlaceOrderAsync(
             symbol, side, orderType, qty, price,
             null, null, null, null, false, userReference, safeClientOrderId,
-            postOnly ? new List<OrderFlags> { OrderFlags.PostOnly } : null,
+            // Post-only is a limit-order flag (Kraken rejects it on market orders) and only makes sense for
+            // orders meant to rest on the book; callers that need an immediate fill pass postOnly: false.
+            postOnly && orderType == OrderType.Limit ? new List<OrderFlags> { OrderFlags.PostOnly } : null,
             null, TimeInForce.GTC);
 
         if (!result.Success)
@@ -449,7 +451,7 @@ public class KrakenRestService
     }
 
     /// <summary>
-    /// Finds an order on Kraken by the userref it was tagged with — used to recover from a placement
+    /// Finds an order on Kraken by the userref it was tagged with ï¿½ used to recover from a placement
     /// whose HTTP response was lost (timeout) but which Kraken may well have accepted.
     /// Returns (checked, order): checked=false means Kraken couldn't be asked at all, so "not found"
     /// must NOT be assumed; checked=true with a null order means it definitely isn't there.

@@ -109,7 +109,7 @@ public class StopLossTakeProfitJob
                 }
 
                 var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix("TP");
-                var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, bal.Available, currentPrice, clientId);
+                var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, bal.Available, currentPrice, clientId, postOnly: false);
                 if (result.Success)
                 {
                     await _notify.Pushover($"Take-Profit Triggered — {bal.Asset}",
@@ -222,7 +222,7 @@ public class StopLossTakeProfitJob
             }
 
             var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"PL{rule.Id}_");
-            var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, sellQty, bal.LatestPrice, clientId);
+            var result = await _kraken.PlaceOrderAsync(sym, OrderSide.Sell, OrderType.Limit, sellQty, bal.LatestPrice, clientId, postOnly: false);
 
             rule.LastTriggeredAt = DateTime.UtcNow;
             rule.LastResult = result.Success

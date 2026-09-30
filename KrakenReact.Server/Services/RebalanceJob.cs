@@ -76,7 +76,7 @@ public class RebalanceJob
                 if (price <= 0) continue;
 
                 var clientId = KrakenReact.Server.Utils.ClientOrderId.GenerateTimestampWithPrefix($"REB{scheduleId}_{row.Asset}_");
-                var result = await _kraken.PlaceOrderAsync(sym, side, OrderType.Limit, qty, price, clientId);
+                var result = await _kraken.PlaceOrderAsync(sym, side, OrderType.Limit, qty, price, clientId, postOnly: false); // rebalancing wants the fill, not a resting order
                 if (!result.Success)
                     errors.Add($"{row.Asset}: {result.Error?.Message}");
             }
