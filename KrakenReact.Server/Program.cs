@@ -76,8 +76,10 @@ builder.Services.AddSingleton<DbMethods>();
 // Services
 builder.Services.AddSingleton<TradingStateService>();
 builder.Services.AddSingleton<KrakenRestService>();
+builder.Services.AddSingleton<IOrderGateway>(sp => sp.GetRequiredService<KrakenRestService>());
 builder.Services.AddSingleton<PriceChangeService>();
 builder.Services.AddSingleton<NotificationService>();
+builder.Services.AddSingleton<INotifier>(sp => sp.GetRequiredService<NotificationService>());
 builder.Services.AddSingleton<AutoOrderService>();
 builder.Services.AddSingleton<DelistedPriceService>();
 builder.Services.AddSingleton<SqlTimeoutDiagnostics>();

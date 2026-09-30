@@ -9,17 +9,17 @@ namespace KrakenReact.Server.Services;
 public class BracketMonitorJob
 {
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
-    private readonly KrakenRestService _kraken;
+    private readonly IOrderGateway _kraken;
     private readonly TradingStateService _state;
-    private readonly NotificationService _notify;
+    private readonly INotifier _notify;
     private readonly ILogger<BracketMonitorJob> _logger;
     private readonly SqlTimeoutDiagnostics _sqlDiag;
 
     public BracketMonitorJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
-        KrakenRestService kraken,
+        IOrderGateway kraken,
         TradingStateService state,
-        NotificationService notify,
+        INotifier notify,
         ILogger<BracketMonitorJob> logger,
         SqlTimeoutDiagnostics sqlDiag)
     {
@@ -128,17 +128,19 @@ public class BracketMonitorJob
 
         if (bracket.TakeProfitPrice > 0)
         {
-            var tp = await _kraken.PlaceOrderAsync(sym, oppSide, OrderType.Limit, bracket.Quantity, bracket.TakeProfitPrice,
+            var tp = await _kraken.PlaceOrderWithRecoveryAsync(sym, oppSide, OrderType.Limit, bracket.Quantity, bracket.TakeProfitPrice,
                 $"brk-tp-{bracket.Id}-{DateTime.UtcNow:HHmm}");
             if (!tp.Success)
             {
                 bracket.Status = "Cancelled";
-                bracket.Note = $"Take-profit could not be placed: {tp.Error?.Message}";
+                bracket.Note = tp.Unknown
+                    ? $"Could not confirm whether the take-profit was placed ({tp.Error}) — check Kraken"
+                    : $"Take-profit could not be placed: {tp.Error}";
                 _logger.LogError("[Bracket] {Id}: {Note}", bracket.Id, bracket.Note);
                 await _notify.Pushover($"Bracket Failed — {bracket.Symbol}", bracket.Note);
                 return;
             }
-            bracket.TakeProfitOrderId = tp.Data?.OrderIds?.FirstOrDefault();
+            bracket.TakeProfitOrderId = tp.OrderId;
         }
 
         bracket.Status = "Active";
@@ -210,7 +212,7 @@ public class BracketMonitorJob
             return;
         }
 
-        var exit = await _kraken.PlaceOrderAsync(bracket.Symbol.Replace("/", ""), oppSide, OrderType.Market, remaining, 0,
+        var exit = await _kraken.PlaceOrderWithRecoveryAsync(bracket.Symbol.Replace("/", ""), oppSide, OrderType.Market, remaining, 0,
             $"brk-sl-{bracket.Id}-{DateTime.UtcNow:HHmm}", postOnly: false);
         if (exit.Success)
         {
@@ -218,10 +220,18 @@ public class BracketMonitorJob
             bracket.Note = $"Stop-loss hit at {price:F4}; closed {remaining} at market";
             await _notify.Pushover($"Bracket SL — {bracket.Symbol}", bracket.Note);
         }
+        else if (exit.Unknown)
+        {
+            // The market order may or may not have gone through. Retrying could sell twice, so stop tracking and ask a human.
+            bracket.Status = "Stopped";
+            bracket.Note = $"Stop-loss hit at {price:F4} but the exit could not be confirmed ({exit.Error}) — check Kraken";
+            _logger.LogError("[Bracket] {Id}: {Note}", bracket.Id, bracket.Note);
+            await _notify.Pushover($"Bracket exit UNCONFIRMED — {bracket.Symbol}", bracket.Note);
+        }
         else
         {
             // Take-profit is already cancelled, so stay Active and retry the exit next tick
-            bracket.Note = $"Stop-loss hit but exit failed: {exit.Error?.Message} — retrying";
+            bracket.Note = $"Stop-loss hit but exit failed: {exit.Error} — retrying";
             _logger.LogError("[Bracket] {Id}: {Note}", bracket.Id, bracket.Note);
             await _notify.Pushover($"Bracket exit FAILED — {bracket.Symbol}", bracket.Note);
         }

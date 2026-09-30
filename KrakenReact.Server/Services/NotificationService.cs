@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace KrakenReact.Server.Services;
 
-public class NotificationService
+public class NotificationService : INotifier
 {
     private readonly DbMethods _db;
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;

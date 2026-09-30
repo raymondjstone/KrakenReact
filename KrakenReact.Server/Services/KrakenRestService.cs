@@ -9,7 +9,7 @@ using KrakenReact.Server.Models;
 
 namespace KrakenReact.Server.Services;
 
-public class KrakenRestService
+public class KrakenRestService : IOrderGateway
 {
     private readonly DbMethods _db;
     private readonly TradingStateService _state;

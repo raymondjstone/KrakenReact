@@ -12,17 +12,17 @@ public class ScheduledOrderJob
     private static readonly TimeSpan StalePlacing = TimeSpan.FromMinutes(5);
 
     private readonly IDbContextFactory<KrakenDbContext> _dbFactory;
-    private readonly KrakenRestService _kraken;
+    private readonly IOrderGateway _kraken;
     private readonly TradingStateService _state;
-    private readonly NotificationService _notify;
+    private readonly INotifier _notify;
     private readonly ILogger<ScheduledOrderJob> _logger;
     private readonly SqlTimeoutDiagnostics _sqlDiag;
 
     public ScheduledOrderJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
-        KrakenRestService kraken,
+        IOrderGateway kraken,
         TradingStateService state,
-        NotificationService notify,
+        INotifier notify,
         ILogger<ScheduledOrderJob> logger,
         SqlTimeoutDiagnostics sqlDiag)
     {
@@ -47,7 +47,8 @@ public class ScheduledOrderJob
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         // Short timeout for the polling read — every-minute job; if it can't get in fast,
         // fail fast and free the pool slot rather than holding it for 120s.
-        db.Database.SetCommandTimeout(TimeSpan.FromSeconds(15));
+        if (db.Database.IsRelational()) // the in-memory test provider has no command timeout
+            db.Database.SetCommandTimeout(TimeSpan.FromSeconds(15));
 
         List<ScheduledOrder> pending;
         try
