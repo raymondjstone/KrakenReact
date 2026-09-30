@@ -104,6 +104,14 @@ builder.Services.AddHostedService<PriceSnapshotService>();
 // Controllers + SignalR
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
+// The trades, orders, ledger and price lists are large JSON payloads that compress very well (SignalR's
+// WebSocket frames are unaffected). Brotli where the browser supports it, gzip otherwise.
+builder.Services.AddResponseCompression(o =>
+{
+    o.EnableForHttps = true;
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+});
 builder.Services.AddHttpClient();
 
 // CORS for React dev server + production origins (configurable via "Cors:AllowedOrigins")
@@ -176,6 +184,7 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+app.UseResponseCompression();
 app.UseCors();
 
 // Hangfire dashboard — Authorization = [] allows access from Docker/reverse proxy (no localhost restriction)

@@ -65,7 +65,14 @@ public class TradesController : ControllerBase
         {
             var filterBase = _state.NormalizeOrderSymbolBase(symbol);
             if (!string.IsNullOrEmpty(filterBase))
-                trades = trades.Where(t => _state.NormalizeOrderSymbolBase(t.Symbol ?? "") == filterBase).ToList();
+            {
+                // Resolve each DISTINCT symbol once — parsing scans the whole symbol table, and thousands of trades
+                // share a few dozen symbols.
+                var matches = trades.Select(t => t.Symbol ?? "").Distinct()
+                    .Where(s => _state.NormalizeOrderSymbolBase(s) == filterBase)
+                    .ToHashSet();
+                trades = trades.Where(t => matches.Contains(t.Symbol ?? "")).ToList();
+            }
         }
 
         var grouped = trades.GroupBy(t => t.OrderId).Select(g =>
@@ -83,7 +90,9 @@ public class TradesController : ControllerBase
                 PositionStatus = first.PositionStatus,
                 ClosedQuantity = g.Sum(x => x.ClosedQuantity),
                 ClosedProfitLoss = g.Sum(x => x.ClosedProfitLoss),
-                ClosedAveragePrice = totalQty == 0 ? 0 : g.Sum(x => x.Price * x.Quantity) / totalQty,
+                // Weighted by the quantity that was closed. This used to repeat the Price formula (weighted by traded
+                // quantity), so the two columns always showed the same number.
+                ClosedAveragePrice = g.Sum(x => x.ClosedQuantity) == 0 ? 0 : g.Sum(x => x.ClosedAveragePrice * x.ClosedQuantity) / g.Sum(x => x.ClosedQuantity),
                 ClosedCost = g.Sum(x => x.ClosedCost),
                 ClosedFee = g.Sum(x => x.ClosedFee),
                 ClosedMargin = g.Sum(x => x.ClosedMargin),
