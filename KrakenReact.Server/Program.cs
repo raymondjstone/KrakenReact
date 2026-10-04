@@ -138,6 +138,10 @@ builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
+Log.Information("[Startup] Listening on {Urls}; allowed CORS/hub origins: {Origins}",
+    builder.Configuration["urls"] ?? builder.Configuration["ASPNETCORE_URLS"] ?? "(default)",
+    string.Join(", ", allowedOrigins));
+
 // Automatically detect schema changes and apply migrations or create missing tables
 try
 {

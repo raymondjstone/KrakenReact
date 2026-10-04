@@ -132,6 +132,25 @@ public class HealthController : ControllerBase
             detail = pushoverKeys ? "Configured" : "Not configured - alerts are kept in the in-app log only"
         });
 
+        // Background jobs: failed Hangfire jobs are otherwise only visible on the dashboard. Newest 50 is one cheap
+        // query, and "50+" is already as alarming as it needs to be. Skipped when Hangfire storage isn't available.
+        try
+        {
+            var failed = Hangfire.JobStorage.Current.GetMonitoringApi().FailedJobs(0, 50);
+            var cutoff = DateTime.UtcNow.AddHours(-24);
+            var recent = failed.Count(j => j.Value?.FailedAt >= cutoff);
+            var last = failed.FirstOrDefault().Value;
+            checks.Add(new
+            {
+                name = "Background Jobs",
+                ok = recent == 0,
+                detail = recent == 0
+                    ? "No failed jobs in the last 24h"
+                    : $"{(recent >= 50 ? "50+" : recent.ToString())} failed in the last 24h - latest: {last?.ExceptionType} {last?.ExceptionMessage}".Trim()
+            });
+        }
+        catch (Exception ex) { Serilog.Log.Debug(ex, "Health check (Hangfire jobs) skipped"); }
+
         // 7. Initial data load complete
         checks.Add(new
         {
