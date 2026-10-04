@@ -224,6 +224,11 @@ public class KrakenWebSocketV1Service : BackgroundService
                 if (elements != null && elements.Count >= 4)
                 {
                     var pair = elements[elements.Count - 1].ToString();
+                    if (string.IsNullOrEmpty(pair))
+                    {
+                        _logger.LogWarning("[WS V1] Book message without a pair name was dropped");
+                        return;
+                    }
                     var bookJson = elements[1].ToString();
                     using var bookDoc = JsonDocument.Parse(bookJson!);
                     var bookRoot = bookDoc.RootElement;

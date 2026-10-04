@@ -12,10 +12,44 @@ public class HealthController : ControllerBase
     private readonly KrakenDbContext _db;
     private readonly TradingStateService _state;
 
-    public HealthController(KrakenDbContext db, TradingStateService state)
+    private readonly Func<Hangfire.Storage.IMonitoringApi> _monitoringApi;
+
+    /// <param name="monitoringApi">Seam for tests; defaults to the live Hangfire storage, which throws when none is configured.</param>
+    public HealthController(KrakenDbContext db, TradingStateService state, Func<Hangfire.Storage.IMonitoringApi>? monitoringApi = null)
     {
         _db = db;
         _state = state;
+        _monitoringApi = monitoringApi ?? (() => Hangfire.JobStorage.Current.GetMonitoringApi());
+    }
+
+    /// <summary>Summarises Hangfire's newest failed jobs (as returned by FailedJobs) for the last 24 hours.</summary>
+    public static (bool Ok, string Detail) SummariseFailedJobs(IEnumerable<KeyValuePair<string, Hangfire.Storage.Monitoring.FailedJobDto>> failed, DateTime nowUtc, int pageSize = 50)
+    {
+        var list = failed.ToList();
+        var cutoff = nowUtc.AddHours(-24);
+        var recent = list.Where(j => j.Value?.FailedAt >= cutoff).ToList();
+        if (recent.Count == 0) return (true, "No failed jobs in the last 24h");
+        var last = recent[0].Value;
+        var count = recent.Count >= pageSize ? $"{pageSize}+" : recent.Count.ToString();
+        return (false, $"{count} failed in the last 24h - latest: {last.ExceptionType} {last.ExceptionMessage}".Trim());
+    }
+
+    /// <summary>
+    /// Minute candles can never be backfilled (Kraken serves ~12 hours), so a stalled collector means permanent holes.
+    /// Judged from the job's own last completed pass; the interval is clamped to at most 4 hours, so 6 hours without a pass is a stall.
+    /// </summary>
+    public static (bool Ok, string Detail) SummariseMinuteCollection(DateTime? lastCompletedUtc, int gapPairs, DateTime nowUtc, TimeSpan uptime)
+    {
+        if (lastCompletedUtc is null)
+            return uptime < TimeSpan.FromMinutes(30)
+                ? (true, "Waiting for the first collection pass since startup")
+                : (false, $"No collection pass has completed in the {uptime.TotalHours:F1}h since startup - candles Kraken no longer serves are being lost");
+        var age = nowUtc - lastCompletedUtc.Value;
+        if (age > TimeSpan.FromHours(6))
+            return (false, $"Last pass finished {age.TotalHours:F1}h ago - Kraken only serves ~12h, so older gaps cannot be recovered");
+        if (gapPairs > 0)
+            return (false, $"Last pass finished {age.TotalMinutes:F0} min ago but {gapPairs} pair(s) have an unrecoverable gap");
+        return (true, $"Last pass finished {age.TotalMinutes:F0} min ago");
     }
 
     [HttpGet]
@@ -136,20 +170,24 @@ public class HealthController : ControllerBase
         // query, and "50+" is already as alarming as it needs to be. Skipped when Hangfire storage isn't available.
         try
         {
-            var failed = Hangfire.JobStorage.Current.GetMonitoringApi().FailedJobs(0, 50);
-            var cutoff = DateTime.UtcNow.AddHours(-24);
-            var recent = failed.Count(j => j.Value?.FailedAt >= cutoff);
-            var last = failed.FirstOrDefault().Value;
-            checks.Add(new
-            {
-                name = "Background Jobs",
-                ok = recent == 0,
-                detail = recent == 0
-                    ? "No failed jobs in the last 24h"
-                    : $"{(recent >= 50 ? "50+" : recent.ToString())} failed in the last 24h - latest: {last?.ExceptionType} {last?.ExceptionMessage}".Trim()
-            });
+            var (jobsOk, jobsDetail) = SummariseFailedJobs(_monitoringApi().FailedJobs(0, 50), DateTime.UtcNow);
+            checks.Add(new { name = "Background Jobs", ok = jobsOk, detail = jobsDetail });
         }
         catch (Exception ex) { Serilog.Log.Debug(ex, "Health check (Hangfire jobs) skipped"); }
+
+        // Minute candles: only when collection is switched on
+        try
+        {
+            var minuteSetting = await _db.AppSettings.AsNoTracking()
+                .Where(s => s.Key == "MinuteCandleCollectionEnabled").Select(s => s.Value).FirstOrDefaultAsync();
+            if (!string.Equals(minuteSetting, "false", StringComparison.OrdinalIgnoreCase))
+            {
+                var uptime = DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime;
+                var (minOk, minDetail) = SummariseMinuteCollection(MinuteCandleJob.LastCompletedUtc, MinuteCandleJob.LastGapPairCount, DateTime.UtcNow, uptime);
+                checks.Add(new { name = "Minute Candles", ok = minOk, detail = minDetail });
+            }
+        }
+        catch (Exception ex) { Serilog.Log.Warning(ex, "Health check (minute candles) failed"); }
 
         // 7. Initial data load complete
         checks.Add(new

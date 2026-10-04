@@ -73,7 +73,7 @@ public class DbMethods
     public async Task UpsertListAsync<TEntity, TKey>(
         IEnumerable<TEntity> items,
         Expression<Func<TEntity, TKey>> keySelector,
-        Action<TEntity, TEntity>? updateValues = null) where TEntity : class
+        Action<TEntity, TEntity>? updateValues = null) where TEntity : class where TKey : notnull
     {
         var list = items.ToList();
         if (list.Count == 0) return;

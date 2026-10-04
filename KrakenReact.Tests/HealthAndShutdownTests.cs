@@ -44,8 +44,9 @@ public class HealthControllerTests : IDisposable
     {
         var ok = Assert.IsType<OkObjectResult>(await NewCtrl().Get());
         var checks = ExtractChecks(ok.Value!);
-        // 9 checks total: Database, Symbols, Live Prices, Balances, ML Predictions, Portfolio Snapshot, Kraken API Keys, Pushover, Initial Load
-        Assert.Equal(9, checks.Count);
+        // 10 checks total: Database, Symbols, Live Prices, Balances, ML Predictions, Portfolio Snapshot, Kraken API Keys, Pushover,
+        // Minute Candles, Initial Load. (Background Jobs is skipped here because no Hangfire storage exists in tests.)
+        Assert.Equal(10, checks.Count);
     }
 
     [Fact]

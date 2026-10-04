@@ -46,6 +46,12 @@ public class MinuteCandleJob
 
     private static readonly TimeSpan PruneEvery = TimeSpan.FromHours(20);
 
+    /// <summary>When a collection pass last ran to the end (in memory, so null until the first pass after a restart).</summary>
+    public static DateTime? LastCompletedUtc { get; private set; }
+
+    /// <summary>Pairs with an unrecoverable gap in the most recent completed pass.</summary>
+    public static int LastGapPairCount { get; private set; }
+
     public MinuteCandleJob(
         IDbContextFactory<KrakenDbContext> dbFactory,
         KrakenRestService kraken,
@@ -96,6 +102,12 @@ public class MinuteCandleJob
                 }
 
                 try { await Task.Delay(PairDelayMs, ct); } catch (OperationCanceledException) { break; }
+            }
+
+            if (!ct.IsCancellationRequested)
+            {
+                LastCompletedUtc = DateTime.UtcNow;
+                LastGapPairCount = pairsWithGaps;
             }
 
             _logger.LogInformation("[Minute] Stored {Stored} new candles across {Pairs} pairs{Gaps}",
