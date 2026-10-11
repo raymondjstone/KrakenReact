@@ -42,9 +42,46 @@ function withAlpha(hex, alpha) {
 }
 
 // Series primitive that fills the price range of each level across the whole pane, behind the candles.
+// The names of the nearest levels are drawn down the LEFT edge of the pane: a price line's title is
+// drawn by the library beside the price scale, which is on the right, so every name sat on the newest
+// candles - the part of the chart being read. Names that would overlap are pushed down so they stay legible.
 class LevelBandsPrimitive {
-  constructor() {
+  constructor(chipColor) {
     this._bands = [];
+    this._chipColor = chipColor;
+    this._labelView = {
+      zOrder: () => 'top',
+      renderer: () => ({
+        draw: (target) => {
+          const series = this._series;
+          if (!series) return;
+          target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+            const fontSize = 11;
+            const lineHeight = fontSize * 1.45;
+            context.font = `${fontSize}px system-ui, sans-serif`;
+            context.textBaseline = 'middle';
+            const placed = [];
+            for (const band of this._bands) {
+              if (!band.label) continue;
+              const y = series.priceToCoordinate(band.price);
+              if (y === null) continue;
+              placed.push({ y, text: band.label, color: band.labelColor });
+            }
+            placed.sort((a, b) => a.y - b.y);
+            for (let i = 1; i < placed.length; i++)
+              if (placed[i].y - placed[i - 1].y < lineHeight) placed[i].y = placed[i - 1].y + lineHeight;
+            for (const label of placed) {
+              if (label.y < -lineHeight || label.y > mediaSize.height + lineHeight) continue;
+              const width = context.measureText(label.text).width;
+              context.fillStyle = this._chipColor;
+              context.fillRect(3, label.y - lineHeight / 2, width + 6, lineHeight);
+              context.fillStyle = label.color;
+              context.fillText(label.text, 6, label.y);
+            }
+          });
+        },
+      }),
+    };
     this._series = null;
     this._requestUpdate = null;
     this._view = {
@@ -68,7 +105,7 @@ class LevelBandsPrimitive {
   }
   attached({ series, requestUpdate }) { this._series = series; this._requestUpdate = requestUpdate; }
   detached() { this._series = null; this._requestUpdate = null; }
-  paneViews() { return [this._view]; }
+  paneViews() { return [this._view, this._labelView]; }
   setBands(bands) { this._bands = bands; if (this._requestUpdate) this._requestUpdate(); }
 }
 
@@ -192,6 +229,9 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
           low: Number(l.lowPrice),
           high: Number(l.highPrice),
           color: withAlpha(l.side === 'Support' ? colors.up : colors.down, l.isNearest ? 0.16 : 0.08),
+          price: Number(l.price),
+          label: l.isNearest ? `${l.side} ${l.touchCount}x` : '',
+          labelColor: l.side === 'Support' ? colors.up : colors.down,
         })));
       }
       visible.forEach(l => {
@@ -203,7 +243,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
             lineWidth: l.isNearest && l.touchCount >= 4 ? 2 : 1,
             lineStyle: l.isNearest ? 3 : 0,
             axisLabelVisible: l.isNearest,
-            title: l.isNearest ? `${l.side} ${l.touchCount}x` : '',
+            title: '',
           }));
         } catch { /* ignore draw error */ }
       });
@@ -294,7 +334,7 @@ export default function ChartPage({ symbol, displaySymbol, chartId }) {
       });
       seriesRef.current = candleSeries;
       markersPluginRef.current = createSeriesMarkers(candleSeries);
-      levelBandsRef.current = new LevelBandsPrimitive();
+      levelBandsRef.current = new LevelBandsPrimitive(withAlpha(colors.bg, 0.78));
       candleSeries.attachPrimitive(levelBandsRef.current);
 
       // Fetch grouped trades (one per order, weighted avg price) in parallel with klines.
