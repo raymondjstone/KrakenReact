@@ -78,6 +78,8 @@ public class MicroTradeController : ControllerBase
         if (string.IsNullOrWhiteSpace(rule.Symbol)) return BadRequest(new { message = "Symbol is required" });
         if (!ValidDropIntervals.Contains(rule.DropIntervalHours)) return BadRequest(new { message = "Drop interval must be one of 1, 4, 6, 12, 24 hours" });
         if (rule.DropPct <= 0) return BadRequest(new { message = "Drop % must be positive" });
+        if (rule.BuyLimitPct <= 0) rule.BuyLimitPct = rule.DropPct + 5;
+        if (rule.BuyLimitPct <= rule.DropPct) return BadRequest(new { message = "Buy limit % must be greater than the buy drop %" });
         if (rule.RisePct <= 0) return BadRequest(new { message = "Rise % must be positive" });
         if (rule.BuyOrderTotal <= 0) return BadRequest(new { message = "Buy order total must be positive" });
         if (rule.MaxOrdersPerWindow < 1) return BadRequest(new { message = "Max orders per window must be at least 1" });
@@ -101,6 +103,8 @@ public class MicroTradeController : ControllerBase
         if (string.IsNullOrWhiteSpace(updated.Symbol)) return BadRequest(new { message = "Symbol is required" });
         if (!ValidDropIntervals.Contains(updated.DropIntervalHours)) return BadRequest(new { message = "Drop interval must be one of 1, 4, 6, 12, 24 hours" });
         if (updated.DropPct <= 0) return BadRequest(new { message = "Drop % must be positive" });
+        if (updated.BuyLimitPct <= 0) updated.BuyLimitPct = updated.DropPct + 5;
+        if (updated.BuyLimitPct <= updated.DropPct) return BadRequest(new { message = "Buy limit % must be greater than the buy drop %" });
         if (updated.RisePct <= 0) return BadRequest(new { message = "Rise % must be positive" });
         if (updated.BuyOrderTotal <= 0) return BadRequest(new { message = "Buy order total must be positive" });
         if (updated.MaxOrdersPerWindow < 1) return BadRequest(new { message = "Max orders per window must be at least 1" });
@@ -112,6 +116,7 @@ public class MicroTradeController : ControllerBase
         if (rule == null) return NotFound();
         rule.Symbol = updated.Symbol;
         rule.DropPct = updated.DropPct;
+        rule.BuyLimitPct = updated.BuyLimitPct;
         rule.DropIntervalHours = updated.DropIntervalHours;
         rule.RisePct = updated.RisePct;
         rule.BuyOrderTotal = updated.BuyOrderTotal;

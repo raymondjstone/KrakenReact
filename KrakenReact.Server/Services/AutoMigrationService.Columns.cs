@@ -39,6 +39,19 @@ public static partial class AutoMigrationService
 
         try
         {
+            // MicroTradeRules.BuyLimitPct - stop buying once the drop passes this; existing rules get DropPct + 5
+            db.Database.ExecuteSqlRaw(@"
+                IF COL_LENGTH('MicroTradeRules', 'BuyLimitPct') IS NULL
+                    ALTER TABLE [MicroTradeRules] ADD [BuyLimitPct] decimal(38,9) NOT NULL CONSTRAINT [DF_MicroTradeRules_BuyLimitPct] DEFAULT 0;
+            ");
+            db.Database.ExecuteSqlRaw("UPDATE [MicroTradeRules] SET [BuyLimitPct] = [DropPct] + 5 WHERE [BuyLimitPct] <= 0");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[AutoMigration] Could not ensure MicroTradeRules.BuyLimitPct column");
+        }
+        try
+        {
             // MicroTradeRules stop-loss columns (added after initial release)
             db.Database.ExecuteSqlRaw(@"
                 IF COL_LENGTH('MicroTradeRules', 'StopLossEnabled') IS NULL

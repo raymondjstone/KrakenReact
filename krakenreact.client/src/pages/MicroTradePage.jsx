@@ -4,7 +4,7 @@ import { getConnection } from '../api/signalRService';
 import { setVisibleInterval } from '../utils/visibleInterval';
 
 const emptyRule = {
-  symbol: '', dropPct: 5, dropIntervalHours: 24, risePct: 10, buyOrderTotal: 100,
+  symbol: '', dropPct: 5, buyLimitPct: 10, dropIntervalHours: 24, risePct: 10, buyOrderTotal: 100,
   maxOrdersPerWindow: 2, windowHours: 2, cooldownHours: 1,
   stopLossEnabled: false, stopLossPct: 95,
   active: true, dryRun: true,
@@ -146,6 +146,7 @@ export default function MicroTradePage() {
   const handleSave = async () => {
     if (!form.symbol.trim()) return flash('Symbol is required');
     if (form.dropPct <= 0) return flash('Drop % must be positive');
+    if (form.buyLimitPct <= form.dropPct) return flash('Buy limit % must be greater than the buy drop %');
     if (form.risePct <= 0) return flash('Rise % must be positive');
     if (form.buyOrderTotal <= 0) return flash('Buy order total must be positive');
     if (form.maxOrdersPerWindow < 1) return flash('Max orders per window must be at least 1');
@@ -170,11 +171,14 @@ export default function MicroTradePage() {
 
   // Nudge a rule's buy margin (dropPct), sell target (risePct), or order size (buyOrderTotal) straight from its card.
   // Optimistic local update so repeated clicks feel instant; the server value replaces it on the next fetch.
-  const ADJUST_LABELS = { dropPct: 'Buy margin', risePct: 'Sell target', buyOrderTotal: 'Order size' };
+  const ADJUST_LABELS = { dropPct: 'Buy margin', buyLimitPct: 'Buy limit', risePct: 'Sell target', buyOrderTotal: 'Order size' };
   const handleAdjust = async (rule, field, delta) => {
     const next = Math.round((rule[field] + delta) * 100) / 100;
     if (next <= 0) return flash(`${ADJUST_LABELS[field]} must stay above 0${field === 'buyOrderTotal' ? '' : '%'}`);
+    // Moving the buy margin carries the buy limit with it so the gap between them is kept
     const updated = { ...rule, [field]: next };
+    if (field === 'dropPct') updated.buyLimitPct = Math.round((rule.buyLimitPct + (next - rule[field])) * 100) / 100;
+    if (field === 'buyLimitPct' && next <= rule.dropPct) return flash('Buy limit must stay above the buy margin');
     setRules(prev => prev.map(r => r.id === rule.id ? updated : r));
     try { await api.put(`/microtrade/${rule.id}`, updated); }
     catch (err) { flash(err.response?.data?.message || 'Update failed'); fetchAll(); }
@@ -263,15 +267,19 @@ export default function MicroTradePage() {
             </div>
             <div />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Buy when drop over &gt;</div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <input type="number" min={0.1} step={0.1} value={form.dropPct} onChange={e => setForm(f => ({ ...f, dropPct: parseFloat(e.target.value) || 0 }))} style={inputStyle} />
+                <input type="number" min={0.1} step={0.1} value={form.dropPct} onChange={e => setForm(f => { const v = parseFloat(e.target.value) || 0; return { ...f, dropPct: v, buyLimitPct: Math.round((f.buyLimitPct + v - f.dropPct) * 100) / 100 }; })} style={inputStyle} />
                 <select value={form.dropIntervalHours} onChange={e => setForm(f => ({ ...f, dropIntervalHours: parseInt(e.target.value) }))} style={{ ...inputStyle, width: 80, flexShrink: 0 }}>
                   {DROP_INTERVALS.map(h => <option key={h} value={h}>{h}h</option>)}
                 </select>
               </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Stop buying when drop &gt;</div>
+              <input type="number" min={0.1} step={0.1} value={form.buyLimitPct} onChange={e => setForm(f => ({ ...f, buyLimitPct: parseFloat(e.target.value) || 0 }))} style={inputStyle} />
             </div>
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Sell target above buy +</div>
@@ -411,6 +419,14 @@ export default function MicroTradePage() {
               </div>
             </div>
             <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>Buy limit</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button onClick={() => handleAdjust(rule, 'buyLimitPct', -1)} title="Decrease buy limit by 1% — no buys below this drop" style={stepBtnStyle}>&minus;</button>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', minWidth: 38, textAlign: 'center' }}>-{rule.buyLimitPct}%</span>
+                <button onClick={() => handleAdjust(rule, 'buyLimitPct', 1)} title="Increase buy limit by 1%" style={stepBtnStyle}>+</button>
+              </div>
+            </div>
+            <div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>Sell target</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button onClick={() => handleAdjust(rule, 'risePct', -1)} title="Decrease sell target by 1%" style={stepBtnStyle}>&minus;</button>
@@ -514,7 +530,7 @@ export default function MicroTradePage() {
 Each rule shows the pair's price change over every window (1h/4h/6h/12h/24h) so you can see the trend at a glance; the 24h figure comes straight from Kraken's live ticker, the shorter windows are approximated from hourly candles. The boxed column is the one the rule actually triggers on — it turns <span style={{ color: AMBER }}>amber</span> within 2 points of the trigger and <span style={{ color: 'var(--red, #ef4444)' }}>red</span> within 0.5. Every 15 minutes each active rule checks that window; if the price has dropped more than the configured <strong>Drop %</strong>,
         a limit buy is placed for the <strong>Buy order total</strong> at 0.1% below the current price.
         When that buy fills, a limit sell is automatically placed at the fill price plus the <strong>Rise %</strong>.
-        The <strong>rate limit</strong> caps how many buy orders a rule can place within its rolling window, so a pair that keeps dropping doesn't get bought over and over.
+        The <strong>buy limit</strong> is a floor on the drop: once the change falls to or past it (default 5 points beyond the buy margin) no more buys are placed, so a crashing pair isn't bought all the way down. The <strong>rate limit</strong> caps how many buy orders a rule can place within its rolling window, so a pair that keeps dropping doesn't get bought over and over.
         The <strong>cooldown</strong> is an additional guard: no order is placed on a pair — from any rule — within that many hours of the last order on the same pair.
         <strong>Stop loss</strong> is optional and off by default: when on, if the price falls to or below the configured % of the buy price while the profit-target sell is still resting, that sell is cancelled and re-placed near the current (lower) price so it can actually fill and cut the loss, instead of sitting forever above a market that kept dropping.
         Turn on <strong>Dry run</strong> to see what a rule would do — via Pushover notifications and the order log — without placing real orders.

@@ -6,6 +6,8 @@ public class MicroTradeRule
     public string Symbol { get; set; } = "";
     /// <summary>Trigger a buy when the change over DropIntervalHours is at or below -DropPct (e.g. 5 = trigger at -5%)</summary>
     public decimal DropPct { get; set; }
+    /// <summary>Buy limit: once the change over DropIntervalHours is at or below -BuyLimitPct (e.g. 10 = -10%) the pair is falling too hard and no more buys are placed. Defaults to DropPct + 5; must be greater than DropPct.</summary>
+    public decimal BuyLimitPct { get; set; }
     /// <summary>Window the drop is measured over, in hours. 24 uses Kraken's own live 24h change_pct (precise); 1/4/6/12 are approximated from hourly klines.</summary>
     public int DropIntervalHours { get; set; } = 24;
     /// <summary>% above the buy fill price at which the automatic sell is placed</summary>

@@ -207,6 +207,14 @@ public class MicroTradeJob
         // Triggered — re-arm the nearing alert so it fires again next time the price approaches from above
         _nearingNotified.TryRemove(rule.Id, out _);
 
+        // Buy limit — the pair has fallen past the point where we stop catching the knife
+        var buyLimitPct = rule.BuyLimitPct > rule.DropPct ? rule.BuyLimitPct : rule.DropPct + 5m;
+        if (changePct <= -buyLimitPct)
+        {
+            rule.LastResult = $"Skip — buy limit reached, {intervalHours}h change {changePct:F2}% is at/below -{buyLimitPct}%";
+            return;
+        }
+
         // Cooldown — no order on this pair (from any rule) within the last CooldownHours,
         // regardless of the window/max-orders limit below.
         if (rule.CooldownHours > 0)
